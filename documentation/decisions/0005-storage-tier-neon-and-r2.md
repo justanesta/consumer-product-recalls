@@ -39,3 +39,21 @@ Headroom rule established in Phase 2: target <50% of free-tier ceiling at launch
 - R2's zero-egress pricing matters because the consumer-facing app will fetch raw artifacts (recall PDFs, CPSC product images) directly without burning bandwidth budget.
 - Both providers require account setup (Cloudflare for R2, Neon for Postgres). Credentials live in environment variables; a secrets-management ADR is forthcoming.
 - Cost trigger: if either layer crosses 50% utilization in production use, that re-opens this ADR rather than triggering an auto-upgrade.
+
+### Capacity sanity check — NHTSA line-level rows
+
+ADR 0009 scopes NHTSA bronze to ~300–500K line-level rows. At ~500 bytes/row (29 tab-delimited fields plus bronze metadata), that's ~150–250 MB before indexes and before content-hash dedup collapses no-change refreshes. Comfortable headroom remains for CPSC, FDA, USDA, and USCG bronze plus all of silver/gold/state under the 3 GB free-tier ceiling. If observed NHTSA row sizes run meaningfully higher than the estimate, the cost-trigger rule above kicks in.
+
+### Neon branch conventions
+
+Neon's branching feature (instant clones via API, same free tier) is used for multiple purposes. To keep operator error from overwriting production, branches follow a fixed naming convention:
+
+| Branch name | Purpose | Lifecycle | Who writes |
+|---|---|---|---|
+| `main` | Production database. All scheduled extractor and transform workflows (per ADR 0010) target this branch. | Permanent | Only via GitHub Actions workflows and controlled manual ops (per `operations.md`) |
+| `dev` | Long-lived development branch. Local `uv run ...` commands and human-driven experiments target this by default. | Permanent; occasionally reset from `main` when schema diverges too far | Developers locally, not CI |
+| `pr-<n>` | Ephemeral CI test branches created per pull request via the Neon API (per ADR 0015). | Created at CI start; deleted at CI teardown | CI only |
+
+`NEON_DATABASE_URL` in local `.env` always points at `dev` (or a personal short-lived branch). `NEON_DATABASE_URL` in GitHub Actions repository secrets always points at `main`. This separation means running an extractor locally never writes to production, and a misconfigured personal `.env` has a narrow blast radius bounded by `dev`.
+
+Developers may create additional named branches freely for experimentation (e.g., rehearsing a schema migration before a PR), provided they delete the branch when done — Neon's compute cost for idle branches is minimal, but the project's convention is that only the three branches above are long-lived.

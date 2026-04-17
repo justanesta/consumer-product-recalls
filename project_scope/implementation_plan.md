@@ -1,6 +1,6 @@
 # Implementation Plan
 
-This plan sequences the implementation of the decisions captured in ADRs 0001–0019. Each phase produces something deployable and testable; later phases build on earlier ones.
+This plan sequences the implementation of the decisions captured in ADRs 0001–0021. Each phase produces something deployable and testable; later phases build on earlier ones.
 
 ## Philosophy
 
@@ -15,11 +15,18 @@ This plan sequences the implementation of the decisions captured in ADRs 0001–
 
 **Goal:** a buildable, testable, deployable skeleton.
 
+**Prerequisites:**
+
+- Neon project provisioned with `main` and `dev` branches per ADR 0005's Neon branch conventions
+- Cloudflare R2 bucket provisioned per ADR 0005
+- GitHub Actions repository secrets populated with `NEON_DATABASE_URL` (pointing at `main`), `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` per ADR 0016 (FDA credentials follow in Phase 5a)
+- Repository is public per ADR 0010 (unlocks unlimited GitHub Actions minutes) and ADR 0018 (branch protection relies on it)
+
 **Deliverables:**
 
 - `pyproject.toml` with uv-managed dependencies (per ADR 0017)
 - `.python-version` pinning Python 3.12
-- `src/` directory structure per ADR 0012 (`extractors/`, `schemas/`, `bronze/`, `landing/`, `config/`)
+- `src/` directory structure per ADR 0012 (`extractors/`, `schemas/`, `bronze/`, `landing/`, `config/`) plus `src/cli/` — Typer-based CLI entrypoint per ADR 0012 Implementation notes
 - `tests/` skeleton per ADR 0015 (`unit/`, `integration/`, `e2e/`, `fixtures/cassettes/`, `conftest.py`)
 - `dbt/` directory initialized with `dbt init` (per ADR 0011)
 - `.pre-commit-config.yaml` per ADR 0018 (six hooks)
@@ -50,17 +57,18 @@ This plan sequences the implementation of the decisions captured in ADRs 0001–
 - Three operation-type subclasses: `RestApiExtractor`, `FlatFileExtractor`, `HtmlScrapingExtractor` (concrete extractors inherit from one of these)
 - `src/landing/r2.py` — R2 client wrapper for raw payload landing (per ADR 0004)
 - `src/bronze/loader.py` — bronze loader with content hashing (ADR 0007) and quarantine routing (ADR 0013)
+- `src/bronze/hashing.py` — canonical serialization + SHA-256 helper per ADR 0007 Implementation notes
 - `src/bronze/retry.py` — retry decorators via `tenacity` scoped to the lifecycle methods per ADR 0013
 - `src/bronze/invariants.py` — the three starter business invariant checks (USDA bilingual, date sanity, null ID) per ADR 0013
-- `src/config/logging.py` — structured JSON logging setup
-- Alembic baseline migration: creates `_rejected` table shape and shared conventions
+- `src/config/logging.py` — `structlog` configuration with `run_id` contextvar binding per ADR 0021, stdlib-logging bridge for third-party libraries (SQLAlchemy, httpx, tenacity, dbt)
+- Alembic baseline migration: `_rejected` table shape, `source_watermarks` and `extraction_runs` per ADR 0020, and shared conventions
 - Unit tests for every infrastructure component (per ADR 0015)
 
 **Quality gates:**
 
 - Unit test coverage of infrastructure: 100% (it's small and critical)
 - `check_pydantic_strict` hook passes on any schemas declared so far
-- Content hash is stable and deterministic across repeated runs
+- Content hash is stable and deterministic across repeated runs — verified by round-trip determinism unit tests per ADR 0007 Implementation notes
 - Retry logic verified with mocked transient failures
 
 ---
@@ -77,11 +85,17 @@ CPSC is chosen first because it has no auth, clean nested JSON, and a stable eve
 - `src/extractors/cpsc.py` — `CpscExtractor(RestApiExtractor)` with CPSC-specific pagination, filter construction, and `LastPublishDate` incremental logic
 - `config/sources/cpsc.yaml` — declarative config per ADR 0012
 - Alembic migration: `cpsc_recalls_bronze` + `cpsc_recalls_rejected` tables
-- VCR cassettes for 9 integration scenarios per ADR 0015 (happy path, multi-page, empty, rate limit, 5xx, etc.)
+- VCR cassettes for 9 integration scenarios per ADR 0015 (happy path, multi-page, empty, rate limit, 5xx, etc.). Recording strategy per scenario:
+  - **Live-recorded** via `pytest --record-mode=rewrite`: happy path single-page, happy path multi-page, empty result, partial last page
+  - **Live-recorded with a deliberately-bad credential**: 401 auth failure (applies to sources with auth; CPSC has none so 401 isn't produced for CPSC)
+  - **Hand-constructed via `respx` (or hand-edited from a 200 cassette)**: 429 rate limit, 500 transient, malformed record in response — the live API won't return these on demand. Per ADR 0015, `respx` is the accepted pattern for explicit hand-constructed mock responses
+  - **Shared with happy-path cassette**: content-hash dedup scenario reuses the happy-path cassette twice and asserts bronze row count does not grow — no separate cassette needed
 - Unit tests for CPSC Pydantic schema and parser logic
 - Integration tests consuming the cassettes
 - `.github/workflows/extract-cpsc.yml` with `workflow_dispatch` trigger (not yet on cron)
+- `.github/workflows/deep-rescan-cpsc.yml` with `workflow_dispatch` trigger per ADR 0010's deep-rescan addendum (not yet on cron; cron turns on in Phase 7)
 - First live extraction run, producing real bronze rows
+- **Empirical verification of `LastPublishDate` update semantics:** identify a recall that has been edited by CPSC since first publication (status change, remedy update, recalled-product count revision) and confirm by extraction whether `LastPublishDate` advanced at the edit. Document findings in a short note in `documentation/cpsc/`. If the timestamp reliably advances, file a follow-up to re-open ADR 0010 and relax the CPSC deep rescan; if not, the deep-rescan workflow stands as designed.
 
 **Quality gates:**
 
@@ -127,17 +141,22 @@ Built in order of increasing complexity so earlier lessons inform later sources:
 
 **5a. FDA iRES** (auth + signature cache-busting)
 
+- `FDA_AUTHORIZATION_USER` and `FDA_AUTHORIZATION_KEY` added to GitHub Actions repository secrets and local `.env` per ADR 0016
 - Pydantic schema, extractor, YAML config, Alembic migration
 - Handle Authorization-User/Key headers per ADR 0012
 - Handle `signature=` cache-busting parameter
 - `eventlmd` incremental logic
 - 9 VCR scenarios + cron workflow
+- **API identity check:** confirm whether `iRES_enforcement_reports_api_usage_documentation.pdf` and `enforcement_report_api_definitions.pdf` describe the same API (the agent audit on update semantics treated them as separate; likely the same). Document the resolution in `documentation/fda/` so future readers aren't confused.
+- **Empirical verification of `eventlmddt` edit semantics:** confirm via the documented `productHistory` / `eventproducthistory` endpoints that edits produce an advanced `eventlmddt` and corresponding history rows. FDA docs claim this explicitly; the check is to trust-but-verify before relying on it in production.
 
 **5b. USDA FSIS** (bilingual dedup)
 
 - Schema, extractor, YAML config, migration
 - Bilingual edge case handled in `check_invariants()` per ADR 0006 + ADR 0013
 - 9 VCR scenarios + cron workflow
+- `.github/workflows/deep-rescan-usda.yml` with `workflow_dispatch` trigger per ADR 0010's deep-rescan addendum
+- **Empirical verification of `field_last_modified_date`:** confirm the field exists in USDA FSIS API responses (the agent audit did not find it documented in the PDF, but ADR 0010 relies on it — this is the priority unknown to resolve). If present, confirm via a known-edited recall that the field advances on edits. Document findings in `documentation/usda/`. If the field does not exist or is unreliable, the USDA deep-rescan workflow becomes the primary extraction mechanism rather than a safety net.
 
 **5c. NHTSA flat-file** (ZIP + tab-delimited + schema evolution)
 
@@ -193,12 +212,13 @@ Built in order of increasing complexity so earlier lessons inform later sources:
 **Deliverables:**
 
 - All five per-source extract workflows on cron per ADR 0010 cadences
+- CPSC and USDA deep-rescan workflows on weekly cron per ADR 0010's deep-rescan addendum (relaxable if Phase 3 / 5b empirical verification shows their timestamps reliably advance on edits)
 - Transform workflow (`dbt build` + `dbt test`) on time-shifted cron per ADR 0018
 - Full PR-check workflow matching ADR 0018 (ruff, pyright, pytest unit + integration, dbt parse, 1–2 e2e smoke)
 - Neon branching via the Neon API for integration-test DBs (per ADR 0015); `test_db_url` fixture in `conftest.py`
 - `dbt docs generate` deploys to Cloudflare Pages on every main push
 - Quarterly secret-rotation reminder workflow per ADR 0016
-- Production secrets populated in GitHub Actions repo secrets
+- Startup-check in every cron workflow that validates all required secrets are present before invoking extraction code (fail fast with a clear message rather than a `KeyError` mid-run)
 
 **Quality gates:**
 
@@ -211,6 +231,13 @@ Built in order of increasing complexity so earlier lessons inform later sources:
 ## Phase 8 — Serving layer (FastAPI)
 
 **Goal:** public API for recall data. Foundation for any frontend.
+
+**Prerequisites:**
+
+- **ADR 0022 — Serving-layer API design** filed and accepted. Covers endpoint shapes, response schemas, pagination, rate-limit posture, auth posture (public read-only per the project vision), OpenAPI generation strategy, and the relationship between API endpoints and dbt gold views.
+- **ADR 0023 — API deployment target** filed and accepted. Evaluates Fly.io vs. Render vs. Cloudflare Workers free tiers against cold-start behavior, Python runtime compatibility, read-only Neon connection patterns (from `main` per ADR 0005), and GitHub Actions CI/CD integration.
+
+Rationale for two ADRs rather than one: API design and deployment target are separable concerns, and deployment constraints sometimes drive design choices (e.g., Cloudflare Workers' Python limitations would reshape endpoint design). Keeping them separate also matches this project's pattern of narrow, single-decision ADRs.
 
 **Deliverables:**
 
@@ -241,7 +268,7 @@ Deferred as a separate decision — depends on framework choice (Observable Fram
 
 **Candidate deliverables (to be scoped at that time):**
 
-- Framework ADR (0020+)
+- Framework ADR (0024+ — 0022 and 0023 reserved for Phase 8's API design and deployment-target ADRs)
 - Dashboard MVP showing recall counts, classifications, firm rollups
 - "Is my product recalled?" search UI
 - Deployment to Cloudflare Pages or Vercel free tier

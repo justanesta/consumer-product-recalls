@@ -57,7 +57,7 @@ class CpscRecallRecord(BaseModel):
 Structural drift requires re-ingestion of rows that were validated under the old schema. Because raw payloads live in R2 T0 (ADR 0004) with content-hashed retention per ADR 0007, re-ingestion is a local operation — no upstream API hits needed.
 
 - A `re-ingest` CLI command (built alongside the extractors) reads a source's R2 landing for a date range and re-runs `validate()` → `check_invariants()` → `load_bronze()` using the current Pydantic model.
-- Content hashing (ADR 0007) makes re-ingestion idempotent — rows whose canonical content is unchanged since original ingestion do not re-insert.
+- Content hashing (ADR 0007) makes re-ingestion idempotent — rows whose canonical content is unchanged since **any** prior bronze insertion do not re-insert. This is not limited to the original successful ingestion: a re-ingest after a partially-failed prior run produces identical hashes for records that were already landed, and the conditional insert treats those as no-ops. Re-ingests can therefore be re-run freely without risk of duplication.
 - Quarantined records in `_rejected` tables (per ADR 0013) are eligible for reprocessing once the schema model is updated — they remain queryable and replayable.
 - Re-ingestion is documented in `documentation/operations.md` as a standard procedure, not a one-off scripting exercise.
 

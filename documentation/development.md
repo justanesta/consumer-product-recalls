@@ -407,6 +407,20 @@ The `bru` CLI runs collections non-interactively, which opens the door to using 
 
 ---
 
+## Pipeline state
+
+Pipeline state lives in two Neon Postgres tables — `source_watermarks` (domain state: last-seen publication timestamps, ETags, cursors per source) and `extraction_runs` (one row per workflow invocation: status, counts, duration, a link back to the GitHub Actions run). No state files on disk, no state committed to the repo, no reliance on runner-local filesystem state — everything is transactional with the bronze load. See [ADR 0020](decisions/0020-pipeline-state-tracking.md) for full rationale.
+
+For day-to-day development this means:
+
+- `git pull` never needs to reconcile state-file changes (there aren't any).
+- A local extractor run against a dev Neon branch reads and writes its own watermark state, so it won't collide with production state unless you point it at the production database.
+- Inspecting state during development is a SQL query — see `operations.md` for the canonical queries.
+
+The state tables are intentionally created in the same migration set as bronze/silver/gold schemas so `uv run <migration-command>` (TBD during implementation) provisions them together on a fresh Neon branch.
+
+---
+
 ## Running dbt locally
 
 **TBD during implementation.**
@@ -424,6 +438,7 @@ The `bru` CLI runs collections non-interactively, which opens the door to using 
 - [Architecture Decision Records](decisions/) — rationale for every major design choice
 - [Operations guide](operations.md) — runbooks for rotation, re-ingestion, monitoring
 - [ADR 0016 — Secrets management](decisions/0016-secrets-management.md)
+- [ADR 0020 — Pipeline state tracking](decisions/0020-pipeline-state-tracking.md)
 - [direnv documentation](https://direnv.net/)
 - [Proton Pass CLI documentation](https://protonpass.github.io/pass-cli/)
 - [Proton Pass CLI GitHub repository](https://github.com/protonpass/pass-cli)

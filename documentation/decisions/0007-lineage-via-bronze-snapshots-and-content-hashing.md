@@ -36,6 +36,38 @@ Bronze tables are snapshot stores, not "current state" stores. A unified `recall
 - For **CPSC, USDA, NHTSA, USCG**: history is derived via `LAG()` window functions over bronze snapshots, restricted to a configurable allowlist of consumer-meaningful fields (`status`, `classification`, `hazard_short`, `remedy`, `units_affected`, `terminated_at`).
 - Both feed a unified `recall_event_history` view that downstream consumers query, so the source-asymmetry is hidden from the API and dashboards.
 
+### Implementation notes — canonical serialization for content hashing
+
+"Deterministically serialized, key-sorted JSON" above pins to a specific implementation so hashes are stable across developer machines, GitHub Actions runners, and re-ingests run months later. Bronze loaders compute:
+
+```python
+import hashlib, json
+
+def content_hash(record: dict) -> str:
+    canonical = {k: v for k, v in record.items() if v is not None}
+    serialized = json.dumps(
+        canonical,
+        sort_keys=True,
+        separators=(',', ':'),   # no whitespace
+        ensure_ascii=False,      # preserve UTF-8 characters literally
+        default=str,             # datetime, Decimal, UUID → canonical str
+    )
+    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+```
+
+Field-level rules:
+
+- **Missing keys vs. explicit `None`** — collapse to absent. The top-level `None`-stripping shown above prevents "Pydantic adds an `Optional[T] = None` field with default `None`" from creating spurious hash churn on otherwise-identical source payloads. Nested `None` values follow the same rule (applied recursively before the final `json.dumps`).
+- **Nested objects** — `sort_keys=True` is recursive in `json.dumps`, so nested dict keys sort deterministically.
+- **Arrays** — preserve source order. Arrays are semantically ordered in every API the pipeline reads (CPSC `Products`, NHTSA affected-vehicle tables, FDA event sequences); re-sorting would corrupt semantics.
+- **Timestamps** — normalize to timezone-aware UTC ISO-8601 with microsecond precision (`dt.astimezone(timezone.utc).isoformat(timespec='microseconds')`) **before** reaching `content_hash`. Naive datetimes are forbidden by the bronze Pydantic contract (ADR 0014) and raise on validation.
+- **Floats** — round to 6 decimal places at validation time to avoid platform-dependent `repr()` drift. Recall payloads rarely contain floats; when they do, the helper lives alongside `content_hash` in `src/bronze/hashing.py`.
+- **`Decimal` and `UUID`** — serialized via `default=str`, which produces canonical string forms.
+
+The helper in `src/bronze/hashing.py` is unit-tested with round-trip determinism assertions: the same input dict, encoded twice (across processes if possible), must produce byte-identical serialized output and identical hashes.
+
+**Consequences of this pin:** any change to this helper — a whitespace difference, a new `default` handler, an added normalization step — invalidates every previously-computed bronze hash and would cause a full re-dedup wave on the next ingest. Such changes are treated as schema migrations: documented in the same PR that makes them, accompanied by a plan for the re-dedup impact.
+
 ## Consequences
 
 - One consistent lineage story across all five sources, exposed via one silver view.

@@ -32,6 +32,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0012 — Extractor pattern: custom ABC + per-source subclasses](0012-extractor-pattern-custom-abc-and-per-source-subclasses.md) — adopts patterns from NYC DCP's `dcpy` without the dependency
 - [0013 — Error handling: retries, idempotency, and quarantine](0013-error-handling-retries-idempotency-and-quarantine.md)
 - [0014 — Schema evolution policy](0014-schema-evolution-policy.md) — `extra='forbid'` + `strict=True` + required-by-default
+- [0020 — Pipeline state tracking](0020-pipeline-state-tracking.md) — Neon watermark + run-metadata tables; Prefect Cloud as future overlay; Dagster deferred
 
 ### Tooling and development
 
@@ -40,6 +41,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0017 — Package management via uv](0017-package-management-via-uv.md)
 - [0018 — CI posture](0018-ci-posture.md) — workflow triggers, dbt orchestration, pre-commit, branch protection
 - [0019 — License: MIT](0019-license-mit.md)
+- [0021 — Structured logging with structlog](0021-structured-logging.md) — correlation-ID propagation via contextvars, stdlib bridge, JSON to stdout
 
 ---
 
@@ -64,6 +66,8 @@ A new ADR is written when someone reading the code six months later would ask "w
 17. [Package management via uv](0017-package-management-via-uv.md)
 18. [CI posture](0018-ci-posture.md)
 19. [License: MIT](0019-license-mit.md)
+20. [Pipeline state tracking](0020-pipeline-state-tracking.md)
+21. [Structured logging with structlog](0021-structured-logging.md)
 
 ---
 
@@ -71,7 +75,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 When adding a new ADR:
 
-1. Pick the next sequential number (0019, 0020, ...).
+1. Pick the next sequential number (0022, 0023, ...).
 2. File name: `NNNN-kebab-case-title.md`.
 3. Use the standard template (see any existing ADR as a model).
 4. Add an entry under the appropriate topic above **and** in the numeric index.

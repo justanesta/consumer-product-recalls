@@ -43,6 +43,26 @@ At v1's scale (5 sources, ~15K records/year ingested, no cross-source DAG depend
 - **Secrets:** Neon connection string, R2 credentials, FDA API key live in GitHub Actions repository secrets.
 - **Silver and gold transformation orchestration is out of scope for this ADR** and will be addressed in Phase 3 — it depends on the choice of transformation framework (dbt-core vs. plain SQL vs. other), which is itself a future ADR.
 
+### Deep rescans — catching silent edits on weak-timestamp sources
+
+Incremental cadence above assumes each source's last-modified timestamp advances when an existing recall is edited in place. This is explicitly documented only for FDA (`eventlmddt` and `productlmd`, with field-level history endpoints as additional evidence). For CPSC (`LastPublishDate`) and USDA (`field_last_modified_date`), agency documentation is silent or ambiguous on whether those timestamps advance on edits. A silent-edit failure mode — fields change but the timestamp does not — would cause the incremental extractor to miss the update entirely.
+
+To guard against this, CPSC and USDA get a **secondary deep-rescan workflow** in addition to their daily incremental cron:
+
+| Source | Primary (daily) | Deep rescan | Rationale |
+|---|---|---|---|
+| CPSC | `LastPublishDate >= yesterday` | Weekly full rescan of last 90 days | Catches silent edits within 7 days |
+| FDA | `eventlmd >= yesterday` | None needed | `eventlmddt` explicitly advances on edits per agency docs |
+| USDA | `field_last_modified_date >= yesterday` | Weekly full rescan of last 90 days | Guards against documented-vs-actual gap until Phase 5b empirical verification; may relax or remove if verified reliable |
+| NHTSA | Weekly full flat file | N/A — the weekly operation is already a full rescan | Content hashing per ADR 0007 handles all dedup |
+| USCG | Weekly full scrape | N/A — the weekly operation is already a full rescan | Same |
+
+Deep rescans exploit the content hashing defined in ADR 0007: the rescan pulls records ignoring the watermark, and every row whose canonical content is unchanged since the prior bronze insert becomes a no-op conditional insert. Cost scales with the number of actually-edited records, not with the rescan window size.
+
+**Rescan workflow files:** one per affected source, `.github/workflows/deep-rescan-<source>.yml`, scheduled for weekends (e.g., Sunday 04:00 UTC) to avoid colliding with daily extraction workflows or the Monday morning transform window.
+
+**Empirical-verification escape hatch:** if Phase 3 (CPSC) or Phase 5b (USDA) empirical verification confirms that the relevant timestamp reliably advances on edits — by observing a known-edited recall across extraction runs, or by modifying a test record where the agency permits — this ADR is re-opened to relax or remove the deep rescan for the verified source. Until then, the rescans stand as a defense-in-depth correctness measure.
+
 ## Consequences
 
 - Zero infrastructure cost at v1 scale. Public repo means unlimited Actions minutes.

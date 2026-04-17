@@ -129,3 +129,13 @@ config/
 - Credit to NYC DCP's `dcpy` for the ABC pattern and YAML-template idea. Not a dependency; a reference.
 - Pydantic `extra='forbid'` + required-by-default stance catches schema additions and renames; value-level semantic drift is left to silver-layer dbt tests.
 - Clean migration seam: if the extractor infrastructure grows complex enough to justify a framework later, the `Extractor` ABC boundary is where that migration happens.
+
+### Implementation notes — CLI framework
+
+The `uv run python -m src.cli ...` entrypoint (extraction dispatch, re-ingest per ADR 0014, one-off debug commands) is built with **Typer**. Rationale:
+
+- Typer's type-hint-driven command definition aligns with the Pydantic-first posture of the rest of the codebase — command arguments are typed Python parameters, not hand-rolled argparse configuration.
+- Typer is a thin layer over Click, so `typer.testing.CliRunner` is the widely-documented Click test pattern; integration tests for the CLI follow existing conventions.
+- `dcpy` uses Typer for the same reasons; the pattern borrowed from dcpy carries through consistently.
+
+The CLI is a thin dispatch layer over the `Extractor` ABC and bronze loader. No business logic lives in CLI modules — each subcommand reads config, instantiates the relevant extractor or re-ingest helper, and delegates. This keeps unit tests focused on the ABC and its subclasses rather than CLI plumbing.
