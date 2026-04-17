@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments (per ADR 0017 — uv manages .venv/ locally; never commit it)
+.venv/
+venv/
+env/
+
+# Environment files (per ADR 0016 — secrets must never be committed)
+.env
+.env.local
+.env.*.local
+.envrc.local
+
+# Bruno (API exploration tool per documentation/development.md)
+# Committed: bruno/ collections + environments/dev.bru (placeholders).
+# Gitignored: environments/local.bru (real credentials).
+bruno/environments/local.bru
+bruno/environments/*.local.bru
+
+# direnv cache
+.direnv/
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+
+# Type checkers / linters
+.mypy_cache/
+.pyright-cache/
+.ruff_cache/
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+
+# Claude Code (per-user, not committed — Claude still reads these from local disk)
+.claude/skills/
+.claude/agents/
+.claude/settings.local.json
+
+# Local-only project notes
+CLAUDE.local.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
