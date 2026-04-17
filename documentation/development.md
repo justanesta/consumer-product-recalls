@@ -31,6 +31,29 @@ High-level shape:
 
 ---
 
+## Git workflow
+
+### Branching convention
+
+The `main` branch is protected per [ADR 0018](decisions/0018-ci-posture.md): all changes merge via pull request, CI checks must pass, no direct pushes. Feature work happens on branches named with a type prefix that signals the nature of the change:
+
+| Prefix | Use for | Example |
+|---|---|---|
+| `feature/` | New features or capabilities | `feature/phase-1-scaffolding`, `feature/cpsc-extractor`, `feature/firm-entity-resolution` |
+| `fix/` | Bug fixes | `fix/cpsc-pagination-termination`, `fix/usda-english-fallback` |
+| `docs/` | Documentation-only changes | `docs/adr-0020-frontend-framework`, `docs/update-operations-runbook` |
+| `chore/` | Tooling, config, maintenance, dependency bumps | `chore/bump-ruff`, `chore/renovate-config` |
+
+When a branch corresponds to a specific implementation phase (see [`project_scope/implementation_plan.md`](../project_scope/implementation_plan.md)) or to a specific ADR, reference that in the branch name. The git log becomes self-documenting and reviewers can jump directly to the relevant context.
+
+### Pull requests
+
+- Link to the relevant ADR(s) and implementation phase in the PR description when applicable.
+- CI status checks must pass before merging (per ADR 0018).
+- Self-review counts as review under the solo-contributor workflow; add formal reviewers if contributors join.
+
+---
+
 ## Environment variables
 
 All credentials and environment-specific configuration live in a `.env` file at the project root. This file is **gitignored** and must never be committed. See [ADR 0016](decisions/0016-secrets-management.md) for the full rationale.
