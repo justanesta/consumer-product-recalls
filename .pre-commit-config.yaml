@@ -1,0 +1,38 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.389
+    hooks:
+      - id: pyright
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.0
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: cassette-secret-scrub
+        name: Verify no auth headers in committed cassettes
+        entry: uv run python scripts/verify_cassette_scrub.py
+        language: system
+        files: ^tests/fixtures/cassettes/.*\.yaml$
+
+      - id: check-pydantic-strict
+        name: Verify Pydantic bronze models declare extra='forbid' + strict=True
+        entry: uv run python scripts/check_pydantic_strict.py
+        language: system
+        files: ^src/schemas/.*\.py$
+
+      - id: uv-lock-check
+        name: Verify uv.lock matches pyproject.toml
+        entry: uv lock --check
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$

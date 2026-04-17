@@ -1,0 +1,26 @@
+name: consumer_product_recalls
+version: '1.0.0'
+config-version: 2
+
+profile: consumer_product_recalls
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  consumer_product_recalls:
+    staging:
+      +materialized: view
+    silver:
+      +materialized: table
+    gold:
+      +materialized: view

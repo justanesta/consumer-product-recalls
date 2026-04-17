@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pr-checks:
+    name: PR Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check src/ tests/ scripts/
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check src/ tests/ scripts/
+
+      - name: Type check (pyright)
+        run: uv run pyright src/
+
+      - name: Run tests
+        run: uv run pytest tests/unit/ tests/integration/ -v
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
+      # Phase 1: dbt parse on empty project — remove continue-on-error in Phase 4.
+      - name: dbt parse
+        run: uv run dbt parse --project-dir dbt/ --profiles-dir dbt/
+        env:
+          NEON_HOST: ${{ secrets.NEON_HOST }}
+          NEON_USER: ${{ secrets.NEON_USER }}
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
+        continue-on-error: true
