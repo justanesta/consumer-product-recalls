@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-import os
-
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 config = context.config
 
-# Inject the database URL from the environment.
-# Phase 1: reads NEON_DATABASE_URL directly to avoid a Settings() dependency on
-# R2 secrets that are not yet provisioned. Phase 2 switches to:
-#   from src.config.settings import Settings
-#   config.set_main_option("sqlalchemy.url", Settings().neon_database_url.get_secret_value())
-neon_url = os.environ.get("NEON_DATABASE_URL")
-if neon_url:
-    config.set_main_option("sqlalchemy.url", neon_url)
+try:
+    from src.config.settings import Settings
 
-# Phase 2 adds SQLAlchemy declarative Base.metadata here.
+    config.set_main_option("sqlalchemy.url", Settings().neon_database_url.get_secret_value())  # type: ignore[call-arg]
+except Exception:
+    import os
+
+    neon_url = os.environ.get("NEON_DATABASE_URL")
+    if neon_url:
+        config.set_main_option("sqlalchemy.url", neon_url)
+
 target_metadata = None
 
 
