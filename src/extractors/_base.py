@@ -3,14 +3,12 @@ from __future__ import annotations
 import abc
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 import structlog
 import structlog.contextvars
 import tenacity
 from pydantic import BaseModel, ConfigDict, Field
-
-T = TypeVar("T", bound=BaseModel)
 
 logger = structlog.get_logger()
 
@@ -106,7 +104,7 @@ _R2_RETRY = tenacity.Retrying(
 # --- Abstract base class ---
 
 
-class Extractor(abc.ABC, BaseModel, Generic[T]):
+class Extractor[T: BaseModel](abc.ABC, BaseModel):
     """
     Abstract base class for all recall data extractors.
 
@@ -254,7 +252,7 @@ class Extractor(abc.ABC, BaseModel, Generic[T]):
 # --- Operation-type subclasses ---
 
 
-class RestApiExtractor(Extractor[T], Generic[T]):
+class RestApiExtractor[T: BaseModel](Extractor[T]):
     """
     Base for extractors that pull from JSON REST APIs (CPSC, FDA, USDA).
     Adds HTTP-specific config shared across all REST sources.
@@ -265,7 +263,7 @@ class RestApiExtractor(Extractor[T], Generic[T]):
     rate_limit_rps: float | None = None  # None = no rate limiting enforced
 
 
-class FlatFileExtractor(Extractor[T], Generic[T]):
+class FlatFileExtractor[T: BaseModel](Extractor[T]):
     """
     Base for extractors that download and parse flat files (NHTSA ZIP + TSV).
     Longer default timeout to accommodate large file downloads.
@@ -275,7 +273,7 @@ class FlatFileExtractor(Extractor[T], Generic[T]):
     timeout_seconds: float = 120.0
 
 
-class HtmlScrapingExtractor(Extractor[T], Generic[T]):
+class HtmlScrapingExtractor[T: BaseModel](Extractor[T]):
     """
     Base for extractors that scrape HTML pages (USCG).
     scrape_delay_seconds enforces polite-scraper behavior between page requests.
