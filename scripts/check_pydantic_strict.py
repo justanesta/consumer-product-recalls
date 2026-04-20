@@ -24,8 +24,42 @@ def _get_basemodel_classes(tree: ast.Module) -> list[ast.ClassDef]:
     ]
 
 
-def _configdict_keywords(classdef: ast.ClassDef) -> dict[str, ast.expr]:
-    """Return keyword args from the first model_config = ConfigDict(...) assignment."""
+def _extract_configdict_call(call: ast.Call) -> dict[str, ast.expr] | None:
+    """Return keyword args if call is ConfigDict(...), else None."""
+    func = call.func
+    func_name = (
+        func.id
+        if isinstance(func, ast.Name)
+        else func.attr
+        if isinstance(func, ast.Attribute)
+        else None
+    )
+    if func_name == "ConfigDict":
+        return {kw.arg: kw.value for kw in call.keywords if kw.arg is not None}
+    return None
+
+
+def _module_configdicts(tree: ast.Module) -> dict[str, dict[str, ast.expr]]:
+    """Scan module-level assignments for shared
+    ConfigDict variables (e.g. _SUB = ConfigDict(...))."""
+    result: dict[str, dict[str, ast.expr]] = {}
+    for node in ast.iter_child_nodes(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+        ):
+            kwargs = _extract_configdict_call(node.value)
+            if kwargs is not None:
+                result[node.targets[0].id] = kwargs
+    return result
+
+
+def _configdict_keywords(
+    classdef: ast.ClassDef, module_configs: dict[str, dict[str, ast.expr]]
+) -> dict[str, ast.expr]:
+    """Return keyword args from model_config — handles both inline and variable-reference forms."""
     for node in ast.walk(classdef):
         if not isinstance(node, ast.Assign):
             continue
@@ -33,19 +67,12 @@ def _configdict_keywords(classdef: ast.ClassDef) -> dict[str, ast.expr]:
             continue
         if node.targets[0].id != "model_config":
             continue
-        if not isinstance(node.value, ast.Call):
-            continue
-        call = node.value
-        func = call.func
-        func_name = (
-            func.id
-            if isinstance(func, ast.Name)
-            else func.attr
-            if isinstance(func, ast.Attribute)
-            else None
-        )
-        if func_name == "ConfigDict":
-            return {kw.arg: kw.value for kw in call.keywords if kw.arg is not None}
+        if isinstance(node.value, ast.Call):
+            kwargs = _extract_configdict_call(node.value)
+            if kwargs is not None:
+                return kwargs
+        if isinstance(node.value, ast.Name):
+            return module_configs.get(node.value.id, {})
     return {}
 
 
@@ -65,8 +92,9 @@ def check_file(path: Path) -> list[str]:
     except SyntaxError as exc:
         return [f"{path}: SyntaxError: {exc}"]
 
+    module_configs = _module_configdicts(tree)
     for cls in _get_basemodel_classes(tree):
-        kwargs = _configdict_keywords(cls)
+        kwargs = _configdict_keywords(cls, module_configs)
         missing: list[str] = []
 
         extra_node = kwargs.get("extra")

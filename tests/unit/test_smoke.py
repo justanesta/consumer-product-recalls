@@ -7,7 +7,7 @@ from src.config.settings import Settings
 
 
 def test_cli_version() -> None:
-    result = CliRunner().invoke(app, [])
+    result = CliRunner().invoke(app, ["version"])
     assert result.exit_code == 0
     assert "0.1.0" in result.output
 

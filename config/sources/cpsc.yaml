@@ -1,0 +1,10 @@
+source_name: cpsc
+source_type: rest_api
+base_url: https://www.saferproducts.gov/RestWebServices/Recall
+timeout_seconds: 30.0
+rate_limit_rps: null        # CPSC docs silent on rate limits; calibrate empirically
+incremental_filter_param: LastPublishDateStart
+incremental_filter_format: "%Y-%m-%d"
+default_lookback_days: 1    # daily: query yesterday when no watermark
+format_param: json
+credentials: null           # no auth required
