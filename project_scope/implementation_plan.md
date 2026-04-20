@@ -139,6 +139,14 @@ CPSC is chosen first because it has no auth, clean nested JSON, and a stable eve
 
 Built in order of increasing complexity so earlier lessons inform later sources:
 
+**Standing requirement for all four sources in Phase 5:**
+
+Phase 3 established a two-part empirical process for CPSC that must be repeated for each source:
+
+1. **Live cassette recording.** After the schema and extractor are written, record the 4 live VCR cassettes (happy path, large result, empty result, small result) against the real source before committing. CPSC cassette recording revealed four schema bugs that hand-crafted respx mocks had hidden: a missing `SoldAtLabel` field, a missing `Caption` sub-field on images, a wrong alias casing (`InConjunctions` vs `Inconjunctions`), and a datetime string format difference. Treat cassette failures as schema bugs to fix, not test failures to skip.
+
+2. **API data exploration.** After the first live extraction run, query the bronze table to surface publication patterns, gap distributions, and any data shape surprises — the same analysis done for CPSC in `documentation/cpsc/last_publish_date_semantics.md`. Key questions to answer for each source: Does the incremental cursor field reliably advance on genuine edits? Are there batch/migration events that flood the watermark? What is the publication cadence and are there historical gaps in the database? Document findings in the corresponding `documentation/<source>/` directory. These findings directly inform whether deep-rescan workflows can be relaxed or must be treated as the primary historical-load mechanism.
+
 **5a. FDA iRES** (auth + signature cache-busting)
 
 - `FDA_AUTHORIZATION_USER` and `FDA_AUTHORIZATION_KEY` added to GitHub Actions repository secrets and local `.env` per ADR 0016
@@ -165,6 +173,7 @@ Built in order of increasing complexity so earlier lessons inform later sources:
 - Schema-drift detection on unexpected fields (NHTSA has added fields before)
 - Weekly cron workflow
 - Large bronze table; test with realistic row counts
+- **Live cassette recording + data exploration** per the standing requirement above. For NHTSA, the exploration should specifically address: how often does NHTSA release a new ZIP vs update an existing one, and does the file change date reliably reflect content changes or just re-packaging? Document in `documentation/nhtsa/`.
 
 **5d. USCG scraping** (brittle source)
 
@@ -172,6 +181,7 @@ Built in order of increasing complexity so earlier lessons inform later sources:
 - Raw HTML archival to R2 (polite-scraper behavior)
 - Schema drift on HTML structure changes raises `ValidationError`
 - Weekly cron workflow
+- **Live cassette recording + data exploration** per the standing requirement above. For USCG, cassette recording means capturing the real scraped HTML structure (not a hand-crafted fixture), since HTML schema drift is the primary failure mode. The exploration should document the observed HTML structure, publication frequency, and whether historical records are accessible via pagination or only the current page. Document in `documentation/uscg/`.
 
 **Quality gates per source:**
 

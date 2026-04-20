@@ -309,3 +309,47 @@ class TestCheckInvariants:
         record = self._make_record(RecallDate=future_dt)
         _, quarantined = extractor.check_invariants([record])
         assert quarantined[0].raw_landing_path == _FAKE_R2_PATH
+
+
+# ---------------------------------------------------------------------------
+# _capture_error_response() — logs warning when R2 raises
+# ---------------------------------------------------------------------------
+
+
+class TestCaptureErrorResponse:
+    def test_warning_logged_when_land_error_response_raises(self, extractor: CpscExtractor) -> None:
+        mock_r2: MagicMock = extractor._r2_client  # type: ignore[assignment]
+        mock_r2.land_error_response.side_effect = RuntimeError("R2 down")
+        response = MagicMock(spec=httpx.Response)
+        response.status_code = 429
+        response.text = "Too Many Requests"
+
+        import structlog.testing
+
+        with structlog.testing.capture_logs() as captured:
+            extractor._capture_error_response("https://api.example.com", response)
+
+        assert any(e.get("event") == "cpsc.error_capture_failed" for e in captured)
+
+    def test_does_not_raise_when_land_error_response_raises(self, extractor: CpscExtractor) -> None:
+        mock_r2: MagicMock = extractor._r2_client  # type: ignore[assignment]
+        mock_r2.land_error_response.side_effect = RuntimeError("R2 down")
+        response = MagicMock(spec=httpx.Response)
+        response.status_code = 500
+        response.text = "Internal Server Error"
+
+        # Must not propagate the exception
+        extractor._capture_error_response("https://api.example.com", response)
+
+
+# ---------------------------------------------------------------------------
+# _update_watermark() — writes new cursor to source_watermarks
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateWatermark:
+    def test_executes_update_statement(self, extractor: CpscExtractor) -> None:
+        mock_conn = MagicMock()
+        new_date = date(2024, 6, 1)
+        extractor._update_watermark(mock_conn, new_date)
+        mock_conn.execute.assert_called_once()

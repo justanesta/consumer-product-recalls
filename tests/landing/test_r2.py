@@ -224,3 +224,70 @@ def test_get_raw_raises_transient_error_on_botocore_error() -> None:
     mock_s3.get_object.side_effect = botocore.exceptions.BotoCoreError()
     with pytest.raises(TransientExtractionError):
         client.get_raw("cpsc/2024-06-01/missing.json.gz")
+
+
+# ---------------------------------------------------------------------------
+# land_error_response — happy path
+# ---------------------------------------------------------------------------
+
+
+def test_land_error_response_returns_key_in_errors_partition() -> None:
+    import gzip
+    import json
+
+    client, mock_s3 = _make_client()
+    key = client.land_error_response(
+        source="cpsc",
+        request_url="https://api.example.com/recalls",
+        status_code=429,
+        response_headers={"retry-after": "60"},
+        response_body="Too Many Requests",
+    )
+
+    assert key.startswith("cpsc/errors/")
+    assert key.endswith("_429.json.gz")
+
+    call_kwargs = mock_s3.put_object.call_args.kwargs
+    assert call_kwargs["Bucket"] == "test-bucket"
+    assert call_kwargs["ContentType"] == "application/json"
+    assert call_kwargs["ContentEncoding"] == "gzip"
+
+    payload = json.loads(gzip.decompress(call_kwargs["Body"]))
+    assert payload["source"] == "cpsc"
+    assert payload["status_code"] == 429
+    assert payload["request_url"] == "https://api.example.com/recalls"
+    assert payload["response_headers"] == {"retry-after": "60"}
+    assert payload["response_body"] == "Too Many Requests"
+    assert "captured_at" in payload
+
+
+def test_land_error_response_raises_transient_error_on_client_error() -> None:
+    import botocore.exceptions
+
+    client, mock_s3 = _make_client()
+    mock_s3.put_object.side_effect = botocore.exceptions.ClientError(
+        {"Error": {"Code": "500", "Message": "internal"}}, "PutObject"
+    )
+    with pytest.raises(TransientExtractionError):
+        client.land_error_response(
+            source="cpsc",
+            request_url="https://api.example.com/recalls",
+            status_code=500,
+            response_headers={},
+            response_body="error",
+        )
+
+
+def test_land_error_response_raises_transient_error_on_botocore_error() -> None:
+    import botocore.exceptions
+
+    client, mock_s3 = _make_client()
+    mock_s3.put_object.side_effect = botocore.exceptions.BotoCoreError()
+    with pytest.raises(TransientExtractionError):
+        client.land_error_response(
+            source="cpsc",
+            request_url="https://api.example.com/recalls",
+            status_code=503,
+            response_headers={},
+            response_body="error",
+        )

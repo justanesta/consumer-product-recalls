@@ -1,6 +1,24 @@
 import os
+from typing import Any
 
 import pytest
+
+
+@pytest.fixture(scope="session")
+def vcr_config() -> dict[str, Any]:
+    return {
+        "record_mode": "none",
+        "decode_compressed_response": True,
+        "before_record_response": _scrub_response_headers,
+    }
+
+
+def _scrub_response_headers(response: dict[str, Any]) -> dict[str, Any]:
+    _SENSITIVE = frozenset({"server", "x-powered-by", "cf-ray", "cf-cache-status", "set-cookie"})
+    response["headers"] = {
+        k: v for k, v in response["headers"].items() if k.lower() not in _SENSITIVE
+    }
+    return response
 
 
 @pytest.fixture(scope="session")

@@ -53,8 +53,9 @@ _FULL_RECORD: dict = {
     "Hazards": [{"Name": "Pinch hazard", "HazardType": "Physical", "HazardTypeID": "42"}],
     "Remedies": [{"Name": "Refund"}],
     "RemedyOptions": [{"Option": "Refund"}],
-    "InConjunctions": [{"URL": "https://other.gov"}],
-    "Images": [{"URL": "https://cdn.cpsc.gov/img.jpg"}],
+    "Inconjunctions": [{"URL": "https://other.gov"}],
+    "SoldAtLabel": None,
+    "Images": [{"URL": "https://cdn.cpsc.gov/img.jpg", "Caption": "Recalled widget"}],
     "Injuries": [{"Name": "Finger laceration"}],
 }
 
@@ -170,6 +171,14 @@ def test_datetime_object_passes_through() -> None:
     dt = datetime(2024, 1, 15, tzinfo=UTC)
     record = CpscRecord.model_validate({**_REQUIRED_FIELDS, "RecallDate": dt})
     assert record.recall_date == dt
+
+
+def test_bare_date_object_coerced_to_utc_datetime() -> None:
+    from datetime import date
+
+    d = date(2024, 3, 10)
+    record = CpscRecord.model_validate({**_REQUIRED_FIELDS, "RecallDate": d})
+    assert record.recall_date == datetime(2024, 3, 10, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

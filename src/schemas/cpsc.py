@@ -77,6 +77,7 @@ class CpscInConjunction(BaseModel):
 class CpscImage(BaseModel):
     model_config = _SUB
     url: str = Field(validation_alias="URL")
+    caption: str | None = Field(None, validation_alias="Caption")
 
 
 class CpscInjury(BaseModel):
@@ -86,12 +87,15 @@ class CpscInjury(BaseModel):
 
 def _parse_cpsc_date(v: object) -> datetime:
     """
-    CPSC returns dates as "YYYY-MM-DD" strings.
-    Convert to a UTC midnight datetime before Pydantic's strict type check runs.
+    CPSC returns dates in two formats depending on the endpoint/vintage:
+      - "YYYY-MM-DD" (older records)
+      - "YYYY-MM-DDTHH:MM:SS" (newer records, no timezone suffix)
+    datetime.fromisoformat() handles both. We always attach UTC so downstream
+    code gets a consistent timezone-aware value.
     """
     if isinstance(v, str):
-        d = date.fromisoformat(v)
-        return datetime(d.year, d.month, d.day, tzinfo=UTC)
+        dt = datetime.fromisoformat(v)
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
     if isinstance(v, date) and not isinstance(v, datetime):
         return datetime(v.year, v.month, v.day, tzinfo=UTC)
     return v  # type: ignore[return-value]
@@ -141,8 +145,9 @@ class CpscRecord(BaseModel):
         default_factory=list, validation_alias="RemedyOptions"
     )
     in_conjunctions: list[CpscInConjunction] = Field(
-        default_factory=list, validation_alias="InConjunctions"
+        default_factory=list, validation_alias="Inconjunctions"
     )
+    sold_at_label: str | None = Field(None, validation_alias="SoldAtLabel")
     images: list[CpscImage] = Field(default_factory=list, validation_alias="Images")
     injuries: list[CpscInjury] = Field(default_factory=list, validation_alias="Injuries")
 

@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 import sqlalchemy as sa
+import structlog
 from pydantic import PrivateAttr, ValidationError
 from sqlalchemy.dialects import postgresql
 
@@ -23,6 +24,8 @@ from src.extractors._base import (
 )
 from src.landing.r2 import R2LandingClient
 from src.schemas.cpsc import CpscRecord
+
+logger = structlog.get_logger()
 
 # --- Module-level SQLAlchemy table metadata ---
 # Column set is the minimum required for BronzeLoader queries (source_recall_id,
@@ -55,6 +58,7 @@ _cpsc_bronze = sa.Table(
     sa.Column("remedies", postgresql.JSONB),
     sa.Column("remedy_options", postgresql.JSONB),
     sa.Column("in_conjunctions", postgresql.JSONB),
+    sa.Column("sold_at_label", sa.Text),
     sa.Column("images", postgresql.JSONB),
     sa.Column("injuries", postgresql.JSONB),
 )
@@ -203,10 +207,29 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
             return data if isinstance(data, list) else []
         if response.status_code == 429:
             retry_after = float(response.headers.get("Retry-After", 60))
+            self._capture_error_response(url, response)
             raise RateLimitError(retry_after=retry_after)
         if response.status_code in (401, 403):
             raise AuthenticationError(f"CPSC API returned {response.status_code}")
+        self._capture_error_response(url, response)
         raise TransientExtractionError(f"CPSC API returned {response.status_code}")
+
+    def _capture_error_response(self, url: str, response: httpx.Response) -> None:
+        """Best-effort: land non-2xx response to R2 for future cassette promotion."""
+        try:
+            self._r2_client.land_error_response(
+                source=_CPSC_SOURCE,
+                request_url=url,
+                status_code=response.status_code,
+                response_headers=dict(response.headers),
+                response_body=response.text,
+            )
+        except Exception:
+            logger.warning(
+                "cpsc.error_capture_failed",
+                status_code=response.status_code,
+                url=url,
+            )
 
     def _get_watermark(self, conn: sa.Connection) -> date:
         row = conn.execute(

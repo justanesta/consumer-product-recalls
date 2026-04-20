@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import json
 import uuid
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
@@ -122,3 +123,56 @@ class R2LandingClient:
         raw = gzip.decompress(compressed)
         log.debug("r2.get_raw.completed", raw_bytes=len(raw))
         return raw
+
+    def land_error_response(
+        self,
+        source: str,
+        request_url: str,
+        status_code: int,
+        response_headers: dict[str, str],
+        response_body: str,
+    ) -> str:
+        """
+        Capture a non-2xx HTTP response to R2 for future cassette promotion.
+
+        Written to {source}/errors/{YYYY-MM-DD}/{uuid}_{status_code}.json.gz,
+        kept separate from successful raw landings for easy discovery.
+
+        The captured JSON includes enough context (URL, headers, body) for
+        scripts/promote_error_to_cassette.py to build a VCR cassette from it.
+
+        Raises:
+            TransientExtractionError: Wraps boto3/R2 errors. Callers should
+                treat this as best-effort and not let it mask the original error.
+        """
+        payload = {
+            "captured_at": datetime.now(UTC).isoformat(),
+            "source": source,
+            "request_url": request_url,
+            "status_code": status_code,
+            "response_headers": response_headers,
+            "response_body": response_body,
+        }
+        content = json.dumps(payload).encode("utf-8")
+        today = datetime.now(UTC).date()
+        key = f"{source}/errors/{today.isoformat()}/{uuid.uuid4()}_{status_code}.json.gz"
+        compressed = gzip.compress(content)
+
+        log = logger.bind(bucket=self._bucket, key=key, status_code=status_code)
+        log.debug("r2.land_error.started")
+
+        try:
+            self._client.put_object(
+                Bucket=self._bucket,
+                Key=key,
+                Body=compressed,
+                ContentType="application/json",
+                ContentEncoding="gzip",
+            )
+        except botocore.exceptions.ClientError as exc:
+            raise TransientExtractionError(f"R2 put_object failed: {exc}") from exc
+        except botocore.exceptions.BotoCoreError as exc:
+            raise TransientExtractionError(f"R2 connection error: {exc}") from exc
+
+        log.debug("r2.land_error.completed")
+        return key
