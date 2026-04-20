@@ -9,5 +9,5 @@ def version() -> None:
     typer.echo("consumer-product-recalls 0.1.0")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     app()
