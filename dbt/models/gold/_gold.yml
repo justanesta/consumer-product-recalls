@@ -1,0 +1,15 @@
+version: 2
+
+models:
+  - name: recalls_by_month
+    description: Monthly recall event count per source, for dashboards.
+    columns:
+      - name: month
+        tests:
+          - not_null
+      - name: source
+        tests:
+          - not_null
+      - name: event_count
+        tests:
+          - not_null

@@ -5,6 +5,14 @@ These 4 tests replay real CPSC API responses captured as cassettes. They verify
 that the Pydantic schema correctly handles actual API response shapes — the key
 value real cassettes provide over hand-crafted respx mocks.
 
+Cassette inventory (the CPSC API returns all matching records in a single
+response — there is no pagination to exercise, so the matrix is just
+{recent, wide window, narrow window, empty}):
+  - test_happy_path_recent.yaml        — 1-day window, recent watermark
+  - test_happy_path_wide_window.yaml   — wide date window, many records
+  - test_happy_path_narrow_window.yaml — narrow window on a different time slice
+  - test_empty_result.yaml             — 0-record response
+
 To record cassettes (requires network access; no auth needed for CPSC):
     uv run pytest --vcr-record=all tests/integration/test_cpsc_live_cassettes.py
 
@@ -85,13 +93,13 @@ def _run(extractor: CpscExtractor, watermark: date) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 1: Happy path — a normal batch of recent recalls
-# Watermark: 2024-03-15 (narrow window, a handful of records expected)
+# Scenario 1: Happy path, recent — 1-day watermark
+# Watermark: 2024-03-15
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.vcr
-def test_happy_path(vcr_extractor: CpscExtractor) -> None:
+def test_happy_path_recent(vcr_extractor: CpscExtractor) -> None:
     result = _run(vcr_extractor, date(2024, 3, 15))
     assert result.records_fetched > 0
     assert result.records_rejected_validate == 0
@@ -100,13 +108,13 @@ def test_happy_path(vcr_extractor: CpscExtractor) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 2: Large result — wider date range, many records
+# Scenario 2: Happy path, wide window — long date range, many records
 # Watermark: 2024-01-01 (all recalls from Jan 2024 onward at record time)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.vcr
-def test_large_result(vcr_extractor: CpscExtractor) -> None:
+def test_happy_path_wide_window(vcr_extractor: CpscExtractor) -> None:
     result = _run(vcr_extractor, date(2024, 1, 1))
     assert result.records_fetched > 10
     assert result.records_rejected_validate == 0
@@ -127,13 +135,13 @@ def test_empty_result(vcr_extractor: CpscExtractor) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 4: Small result — narrow recent window, few records
-# Watermark: 2024-06-15 (spot-checks schema against a different time slice)
+# Scenario 4: Happy path, narrow window — spot-check schema on a different slice
+# Watermark: 2024-06-15
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.vcr
-def test_small_result(vcr_extractor: CpscExtractor) -> None:
+def test_happy_path_narrow_window(vcr_extractor: CpscExtractor) -> None:
     result = _run(vcr_extractor, date(2024, 6, 15))
     assert result.records_rejected_validate == 0
     assert result.records_rejected_invariants == 0

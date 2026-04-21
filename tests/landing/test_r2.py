@@ -48,13 +48,16 @@ def test_init_builds_boto3_client_with_r2_endpoint_and_auto_region() -> None:
     with patch("boto3.client", return_value=mock_boto_client) as mock_factory:
         R2LandingClient(settings)
 
-    mock_factory.assert_called_once_with(
-        "s3",
-        endpoint_url="https://myaccount.r2.cloudflarestorage.com",
-        aws_access_key_id="key-id",
-        aws_secret_access_key="secret",
-        region_name="auto",
-    )
+    assert mock_factory.call_count == 1
+    args, kwargs = mock_factory.call_args
+    assert args == ("s3",)
+    assert kwargs["endpoint_url"] == "https://myaccount.r2.cloudflarestorage.com"
+    assert kwargs["aws_access_key_id"] == "key-id"
+    assert kwargs["aws_secret_access_key"] == "secret"
+    assert kwargs["region_name"] == "auto"
+    # boto3 >=1.36 enforces S3 response-integrity checksums by default and
+    # R2's implementation trips the validator; see r2.py docstring.
+    assert kwargs["config"].response_checksum_validation == "when_required"
 
 
 def test_init_calls_get_secret_value_on_credentials() -> None:
@@ -94,7 +97,8 @@ def test_land_calls_put_object_with_correct_bucket_and_content_type() -> None:
     call_kwargs = mock_s3.put_object.call_args.kwargs
     assert call_kwargs["Bucket"] == "my-bucket"
     assert call_kwargs["ContentType"] == "application/json"
-    assert call_kwargs["ContentEncoding"] == "gzip"
+    # ContentEncoding must NOT be set — see r2.py docstring for rationale.
+    assert "ContentEncoding" not in call_kwargs
 
 
 def test_land_uses_correct_content_type_for_jsonl_suffix() -> None:
@@ -250,7 +254,7 @@ def test_land_error_response_returns_key_in_errors_partition() -> None:
     call_kwargs = mock_s3.put_object.call_args.kwargs
     assert call_kwargs["Bucket"] == "test-bucket"
     assert call_kwargs["ContentType"] == "application/json"
-    assert call_kwargs["ContentEncoding"] == "gzip"
+    assert "ContentEncoding" not in call_kwargs
 
     payload = json.loads(gzip.decompress(call_kwargs["Body"]))
     assert payload["source"] == "cpsc"

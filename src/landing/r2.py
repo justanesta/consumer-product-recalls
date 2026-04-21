@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import boto3
 import botocore.exceptions
 import structlog
+from botocore.config import Config
 
 from src.extractors._base import TransientExtractionError
 
@@ -36,6 +37,19 @@ class R2LandingClient:
     Partitioning matches ADR 0004's "source/extraction_date/" convention.
     The returned object key is stored as raw_landing_path in QuarantineRecord
     and in bronze row metadata so every value can be traced back to its raw file.
+
+    Storage contract: objects are true .gz archives — the Body bytes are the
+    gzip-compressed payload, full stop. We deliberately do NOT set
+    Content-Encoding: gzip on put, because Cloudflare R2 treats that header
+    as a transport directive and transparently decompresses on GET, which
+    would make get_raw()'s gzip.decompress() fail and would give inconsistent
+    behavior across S3-compatible backends (R2 decompresses, AWS S3 and
+    MinIO do not). Keeping the gzip round-trip client-side means the same
+    bytes come back from any backend.
+
+    boto3 >=1.36 defaults to enforcing S3 response-integrity checksums, which
+    R2's checksum implementation trips. We opt into the pre-1.36 behavior via
+    response_checksum_validation="when_required".
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -46,6 +60,7 @@ class R2LandingClient:
             aws_access_key_id=settings.r2_access_key_id.get_secret_value(),
             aws_secret_access_key=settings.r2_secret_access_key.get_secret_value(),
             region_name="auto",
+            config=Config(response_checksum_validation="when_required"),
         )
 
     def land(
@@ -91,7 +106,6 @@ class R2LandingClient:
                 Key=key,
                 Body=compressed,
                 ContentType=content_type,
-                ContentEncoding="gzip",
             )
         except botocore.exceptions.ClientError as exc:
             raise TransientExtractionError(f"R2 put_object failed: {exc}") from exc
@@ -167,7 +181,6 @@ class R2LandingClient:
                 Key=key,
                 Body=compressed,
                 ContentType="application/json",
-                ContentEncoding="gzip",
             )
         except botocore.exceptions.ClientError as exc:
             raise TransientExtractionError(f"R2 put_object failed: {exc}") from exc

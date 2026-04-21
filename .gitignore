@@ -16,6 +16,7 @@ env/
 
 # Environment files (per ADR 0016 — secrets must never be committed)
 .env
+.envrc
 .env.local
 .env.*.local
 .envrc.local

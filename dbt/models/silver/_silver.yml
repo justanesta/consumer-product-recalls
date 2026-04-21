@@ -1,0 +1,92 @@
+version: 2
+
+models:
+  - name: recall_event
+    description: Header-level recall events, one row per (source, source_recall_id) (ADR 0002).
+    columns:
+      - name: recall_event_id
+        description: Surrogate key md5(source || '|' || source_recall_id).
+        tests:
+          - not_null
+          - unique
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC']
+      - name: source_recall_id
+        tests:
+          - not_null
+      - name: announced_at
+        tests:
+          - not_null
+      - name: published_at
+        tests:
+          - not_null
+    # Unique on recall_event_id (md5 of source|source_recall_id) transitively
+    # enforces uniqueness of (source, source_recall_id); when Phase 6 adds
+    # dbt_utils, promote to an explicit combination test.
+
+  - name: recall_product
+    description: Line-level recall products, one row per affected product instance (ADR 0002).
+    columns:
+      - name: recall_product_id
+        tests:
+          - not_null
+          - unique
+      - name: recall_event_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('recall_event')
+                field: recall_event_id
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC']
+
+  - name: firm
+    description: Firm dimension deduped by normalized name (ADR 0002).
+    columns:
+      - name: firm_id
+        tests:
+          - not_null
+          - unique
+      - name: normalized_name
+        tests:
+          - not_null
+          - unique
+      - name: canonical_name
+        tests:
+          - not_null
+
+  - name: recall_event_firm
+    description: Many-to-many between recall events and firms with role.
+    columns:
+      - name: recall_event_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('recall_event')
+                field: recall_event_id
+      - name: firm_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('firm')
+                field: firm_id
+      - name: role
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['manufacturer', 'retailer', 'importer', 'distributor']
+    # recall_event_firm is built with SELECT DISTINCT so composite uniqueness
+    # of (recall_event_id, firm_id, role) is structurally enforced; promote to
+    # dbt_utils.unique_combination_of_columns in Phase 6.

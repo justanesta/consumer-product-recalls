@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: stg_cpsc_recalls
+    description: One row per CPSC recall (latest version from bronze).
+    columns:
+      - name: source_recall_id
+        description: CPSC RecallNumber.
+        tests:
+          - not_null
+          - unique
+      - name: announced_at
+        description: Original recall announcement date (RecallDate).
+        tests:
+          - not_null
+      - name: published_at
+        description: Last publication/reprocessing timestamp (LastPublishDate).
+        tests:
+          - not_null
+      - name: content_hash
+        tests:
+          - not_null

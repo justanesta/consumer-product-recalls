@@ -1,0 +1,29 @@
+version: 2
+
+sources:
+  - name: cpsc
+    description: Bronze layer for CPSC (Consumer Product Safety Commission) recalls, loaded by src.extractors.cpsc.CpscExtractor.
+    schema: public
+    tables:
+      - name: cpsc_recalls_bronze
+        description: One row per (source_recall_id, content_hash) landed from the CPSC Recall Retrieval Web Services API.
+        loaded_at_field: extraction_timestamp
+        freshness:
+          warn_after: {count: 48, period: hour}
+          error_after: {count: 7, period: day}
+        columns:
+          - name: source_recall_id
+            description: CPSC RecallNumber — stable identifier across republications.
+            tests:
+              - not_null
+          - name: content_hash
+            description: SHA-256 of canonicalized record payload (ADR 0007). Dedup key.
+            tests:
+              - not_null
+          - name: extraction_timestamp
+            description: When the extractor wrote this row.
+            tests:
+              - not_null
+      - name: cpsc_recalls_rejected
+        description: Quarantine table for records that failed validation or invariant checks (ADR 0013).
+        loaded_at_field: rejected_at

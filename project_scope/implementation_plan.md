@@ -18,8 +18,8 @@ This plan sequences the implementation of the decisions captured in ADRs 0001–
 **Prerequisites:**
 
 - Neon project provisioned with `main` and `dev` branches per ADR 0005's Neon branch conventions
-- Cloudflare R2 bucket provisioned per ADR 0005
-- GitHub Actions repository secrets populated with `NEON_DATABASE_URL` (pointing at `main`), `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` per ADR 0016 (FDA credentials follow in Phase 5a)
+- Cloudflare R2 buckets provisioned per ADR 0005, **one per environment** (R2 has no native branching, so dev/prod isolation is bucket-level): `consumer-product-recalls-dev` used by local `.env`, `consumer-product-recalls` used by GitHub Actions. Use separate per-bucket API tokens so a leaked dev token cannot reach the prod bucket.
+- GitHub Actions repository secrets populated with `NEON_DATABASE_URL` (pointing at `main`), `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` (set to the prod bucket name) per ADR 0016 (FDA credentials follow in Phase 5a)
 - Repository is public per ADR 0010 (unlocks unlimited GitHub Actions minutes) and ADR 0018 (branch protection relies on it)
 
 **Deliverables:**
@@ -54,7 +54,7 @@ This plan sequences the implementation of the decisions captured in ADRs 0001–
 **Deliverables:**
 
 - `src/extractors/_base.py` — `Extractor` ABC with the 5-step lifecycle from ADR 0013 (extract → land_raw → validate → check_invariants → load_bronze)
-- Three operation-type subclasses: `RestApiExtractor`, `FlatFileExtractor`, `HtmlScrapingExtractor` (concrete extractors inherit from one of these)
+- `src/extractors/_rest_api.py` — `RestApiExtractor` operation-type subclass (concrete extractors for CPSC in Phase 3 and FDA in Phase 5a inherit from this). The other two operation-type subclasses (`FlatFileExtractor`, `HtmlScrapingExtractor`) are **deferred to first use** per the "vertical slice first, then horizontal expansion" philosophy stated above — each is built in the phase that first needs it (Phase 5c and Phase 5d respectively), so its shape is informed by a real source rather than speculative design. Tracked as deliverables of those phases.
 - `src/landing/r2.py` — R2 client wrapper for raw payload landing (per ADR 0004)
 - `src/bronze/loader.py` — bronze loader with content hashing (ADR 0007) and quarantine routing (ADR 0013)
 - `src/bronze/hashing.py` — canonical serialization + SHA-256 helper per ADR 0007 Implementation notes
@@ -82,14 +82,14 @@ CPSC is chosen first because it has no auth, clean nested JSON, and a stable eve
 **Deliverables:**
 
 - `src/schemas/cpsc.py` — Pydantic bronze model with `ConfigDict(extra='forbid', strict=True)` per ADR 0014
-- `src/extractors/cpsc.py` — `CpscExtractor(RestApiExtractor)` with CPSC-specific pagination, filter construction, and `LastPublishDate` incremental logic
+- `src/extractors/cpsc.py` — `CpscExtractor(RestApiExtractor)` with CPSC-specific filter construction and `LastPublishDate` incremental logic. (The CPSC API returns all matching records in one response — no pagination loop, which simplifies the extractor relative to other Phase 5 sources.)
 - `config/sources/cpsc.yaml` — declarative config per ADR 0012
 - Alembic migration: `cpsc_recalls_bronze` + `cpsc_recalls_rejected` tables
-- VCR cassettes for 9 integration scenarios per ADR 0015 (happy path, multi-page, empty, rate limit, 5xx, etc.). Recording strategy per scenario:
-  - **Live-recorded** via `pytest --record-mode=rewrite`: happy path single-page, happy path multi-page, empty result, partial last page
+- VCR cassettes covering ADR 0015's integration matrix, tuned to CPSC's no-pagination shape. Recording strategy per scenario:
+  - **Live-recorded** via `pytest --record-mode=rewrite`: happy path recent, happy path wide window, happy path narrow window, empty result. (Pagination-specific scenarios from ADR 0015 — single-page vs multi-page vs partial-last-page — do not apply to CPSC; those matter for paginated sources like FDA iRES in Phase 5a. See the Phase 5 standing requirement for the per-source shape guidance.)
   - **Live-recorded with a deliberately-bad credential**: 401 auth failure (applies to sources with auth; CPSC has none so 401 isn't produced for CPSC)
   - **Hand-constructed via `respx` (or hand-edited from a 200 cassette)**: 429 rate limit, 500 transient, malformed record in response — the live API won't return these on demand. Per ADR 0015, `respx` is the accepted pattern for explicit hand-constructed mock responses
-  - **Shared with happy-path cassette**: content-hash dedup scenario reuses the happy-path cassette twice and asserts bronze row count does not grow — no separate cassette needed
+  - **Shared with happy-path cassette**: content-hash dedup scenario reuses a happy-path cassette twice and asserts bronze row count does not grow — no separate cassette needed
 - Unit tests for CPSC Pydantic schema and parser logic
 - Integration tests consuming the cassettes
 - `.github/workflows/extract-cpsc.yml` with `workflow_dispatch` trigger (not yet on cron)
@@ -99,7 +99,7 @@ CPSC is chosen first because it has no auth, clean nested JSON, and a stable eve
 
 **Quality gates:**
 
-- All 9 integration scenarios pass
+- All integration scenarios pass (the per-source scenario count is tuned to the source's API shape; for CPSC this is 8 cassettes — 4 live + 4 hand-constructed — because pagination-specific scenarios and 401 auth don't apply)
 - Re-running the extractor produces no duplicate bronze rows (idempotency)
 - Malformed-record scenario routes correctly to `cpsc_recalls_rejected`
 - `workflow_dispatch` produces a successful run end-to-end
@@ -143,7 +143,13 @@ Built in order of increasing complexity so earlier lessons inform later sources:
 
 Phase 3 established a two-part empirical process for CPSC that must be repeated for each source:
 
-1. **Live cassette recording.** After the schema and extractor are written, record the 4 live VCR cassettes (happy path, large result, empty result, small result) against the real source before committing. CPSC cassette recording revealed four schema bugs that hand-crafted respx mocks had hidden: a missing `SoldAtLabel` field, a missing `Caption` sub-field on images, a wrong alias casing (`InConjunctions` vs `Inconjunctions`), and a datetime string format difference. Treat cassette failures as schema bugs to fix, not test failures to skip.
+1. **Live cassette recording.** After the schema and extractor are written, record a set of live VCR cassettes against the real source before committing. **The scenarios recorded must be tuned to the source's actual API shape** — there is no universal 4-cassette matrix. Use whichever combination meaningfully exercises the extractor's code paths:
+   - For paginated APIs (e.g., FDA iRES): single-page, multi-page, partial last page, empty.
+   - For non-paginated APIs (e.g., CPSC — one GET returns everything): recent, wide window, narrow window, empty. (Pagination-specific scenarios don't apply and recording them is busywork.)
+   - For flat-file downloads (e.g., NHTSA ZIP): one representative archive plus an intentionally-malformed variant. The "page" concept doesn't apply.
+   - For HTML scrapes (e.g., USCG): current-page HTML plus a structurally-drifted variant to exercise the scraper's failure mode.
+
+   CPSC cassette recording revealed four schema bugs that hand-crafted respx mocks had hidden: a missing `SoldAtLabel` field, a missing `Caption` sub-field on images, a wrong alias casing (`InConjunctions` vs `Inconjunctions`), and a datetime string format difference. Treat cassette failures as schema bugs to fix, not test failures to skip.
 
 2. **API data exploration.** After the first live extraction run, query the bronze table to surface publication patterns, gap distributions, and any data shape surprises — the same analysis done for CPSC in `documentation/cpsc/last_publish_date_semantics.md`. Key questions to answer for each source: Does the incremental cursor field reliably advance on genuine edits? Are there batch/migration events that flood the watermark? What is the publication cadence and are there historical gaps in the database? Document findings in the corresponding `documentation/<source>/` directory. These findings directly inform whether deep-rescan workflows can be relaxed or must be treated as the primary historical-load mechanism.
 
@@ -168,7 +174,8 @@ Phase 3 established a two-part empirical process for CPSC that must be repeated 
 
 **5c. NHTSA flat-file** (ZIP + tab-delimited + schema evolution)
 
-- Flat-file extractor per ADR 0008
+- `src/extractors/_flat_file.py` — `FlatFileExtractor` operation-type subclass of the `Extractor` ABC (deferred from Phase 2 to its first use here). Shape is informed by NHTSA: ZIP download → stream-decompress → row-by-row parse → bronze load. Unit-tested in isolation before `NhtsaExtractor` lands on top of it.
+- `NhtsaExtractor(FlatFileExtractor)` per ADR 0008
 - Pydantic schema for 29-field tab-delimited row
 - Schema-drift detection on unexpected fields (NHTSA has added fields before)
 - Weekly cron workflow
@@ -177,6 +184,7 @@ Phase 3 established a two-part empirical process for CPSC that must be repeated 
 
 **5d. USCG scraping** (brittle source)
 
+- `src/extractors/_html_scraping.py` — `HtmlScrapingExtractor` operation-type subclass of the `Extractor` ABC (deferred from Phase 2 to its first use here). Shape is informed by USCG: polite-scraper throttling → fetch HTML → archive raw to R2 → BeautifulSoup parse → bronze load. Unit-tested in isolation before `UscgScrapingExtractor` lands on top of it.
 - `UscgScrapingExtractor(HtmlScrapingExtractor)` using BeautifulSoup
 - Raw HTML archival to R2 (polite-scraper behavior)
 - Schema drift on HTML structure changes raises `ValidationError`

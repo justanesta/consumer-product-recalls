@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     r2_secret_access_key: SecretStr
     r2_bucket_name: str
     # Phase 5a: FDA iRES credentials — not required until FDA extractor is implemented
-    # Phase 5a: FDA iRES credentials — not required until FDA extractor is implemented
     fda_authorization_user: SecretStr | None = None
     fda_authorization_key: SecretStr | None = None
 

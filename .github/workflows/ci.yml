@@ -43,7 +43,14 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
 
-      # Phase 1: dbt parse on empty project — remove continue-on-error in Phase 4.
+      - name: dbt deps
+        run: uv run dbt deps --project-dir dbt/ --profiles-dir dbt/
+        env:
+          NEON_HOST: ${{ secrets.NEON_HOST }}
+          NEON_USER: ${{ secrets.NEON_USER }}
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
+
       - name: dbt parse
         run: uv run dbt parse --project-dir dbt/ --profiles-dir dbt/
         env:
@@ -51,4 +58,7 @@ jobs:
           NEON_USER: ${{ secrets.NEON_USER }}
           NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
           NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
-        continue-on-error: true
+
+      # dbt build against live Neon is Phase 7 (production CI per ADR 0018);
+      # PR checks stop at `dbt parse` for now. Models are validated against
+      # the `dev` branch manually before merge.

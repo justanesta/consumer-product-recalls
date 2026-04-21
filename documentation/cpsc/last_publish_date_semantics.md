@@ -72,3 +72,31 @@ Outside of these spikes the cadence is stable and predictable, which supports a 
 ### Recommended next action
 
 Run `deep-rescan-cpsc.yml` via `workflow_dispatch` with a lookback sufficient to cover 2005–present before Phase 7 cron schedules go live. This populates the missing 20 years of recall history. Coordinate timing with the Neon `main` branch migration run to avoid overloading the database during initial setup.
+
+---
+
+## Open items (follow-ups surfaced during the Phase 4 plan review)
+
+These were identified as legitimate gaps in the Phase 3 CPSC exploration. None blocks Phase 4, but each is worth addressing before Phase 8 (serving layer) at the latest.
+
+1. **Direct edited-record experiment.** The conclusion that `LastPublishDate` does not advance on content edits is inferred from the bimodal gap distribution (zero records between 8 days and 5 years). Strong but indirect. A direct observational test — pick one known-edited recall and poll it over a week — would give an unambiguous answer.
+2. **`RecallDateStart` vs `LastPublishDateStart` semantics.** Only the latter was exercised. Document explicitly why `LastPublishDate` is the correct incremental cursor (not `RecallDate`).
+3. **HTTP cache validators.** Inspect the existing cassettes for `ETag` / `Last-Modified` headers. If present, they could short-circuit the archive-migration re-ingest work currently handled by content hashing.
+4. **Rate-limit ceiling.** The 429 integration scenario uses a hand-constructed `respx` mock. Real API rate limits have not been empirically probed.
+5. **Full parameter inventory.** The API supports `RecallNumber`, `RecallTitle`, `ConsumerProduct`, `Hazard`, `Manufacturer`, `Country`, `UPC`, and others. A coverage table will be needed by the Phase 8 `/products/search` endpoint.
+6. **Response format assertion.** The extractor requests `format=json` but does not assert `Content-Type: application/json` on the response. A cheap belt-and-suspenders integration assertion would catch silent XML fallback.
+
+## Cassette inventory
+
+**The CPSC Recall Retrieval Web Services API has no pagination.** A single GET against the `Recall` endpoint returns every record matching the filter in one response body (`src/extractors/cpsc.py:98` documents this, and `_fetch()` makes exactly one HTTP call per extraction). The "single-page vs. multi-page vs. partial-last-page" scenario matrix from the Phase 3 plan spec does not apply to this source; the meaningful matrix for CPSC is just {recent, wide window, narrow window, empty}.
+
+Committed under `tests/fixtures/cassettes/cpsc/`:
+
+| File | Scenario | Watermark |
+|---|---|---|
+| `test_happy_path_recent.yaml` | 1-day window, recent watermark | 2024-03-15 |
+| `test_happy_path_wide_window.yaml` | Wide date range, many records | 2024-01-01 |
+| `test_happy_path_narrow_window.yaml` | Narrow window, different time slice | 2024-06-15 |
+| `test_empty_result.yaml` | 0-record response | 2099-01-01 |
+
+Sources added in Phase 5 will have their own scenario matrices tuned to their API shape — see the updated "standing requirement" in the implementation plan. FDA iRES has pagination and a cache-busting `signature` param; NHTSA is a ZIP-archive download, not a paginated API; USCG is HTML scraping where "last page" isn't a meaningful concept.
