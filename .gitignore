@@ -20,6 +20,8 @@ env/
 .env.local
 .env.*.local
 .envrc.local
+# Override global gitignore's .env.* pattern — .env.example is a committed template
+!.env.example
 
 # Bruno (API exploration tool per documentation/development.md)
 # Committed: bruno/ collections + environments/dev.bru (placeholders).
