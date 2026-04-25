@@ -170,6 +170,24 @@ class TestFetch:
                 extractor.extract()
         assert "format=json" in str(route.calls[0].request.url)
 
+    def test_watermark_wrong_type_raises_transient_error(self, extractor: CpscExtractor) -> None:
+        with (
+            patch.object(extractor, "_get_watermark", return_value="2024-01-14"),
+            pytest.raises(TransientExtractionError, match="unexpected type"),
+        ):
+            extractor.extract()
+
+    def test_oversized_response_raises_transient_error(self, extractor: CpscExtractor) -> None:
+        from src.extractors.cpsc import _MAX_INCREMENTAL_RECORDS
+
+        oversized = [_VALID_RAW] * (_MAX_INCREMENTAL_RECORDS + 1)
+        with (
+            patch.object(extractor, "_get_watermark", return_value=_FAKE_WATERMARK),
+            patch.object(extractor, "_fetch", return_value=oversized),
+            pytest.raises(TransientExtractionError, match="exceeds guard"),
+        ):
+            extractor.extract()
+
 
 # ---------------------------------------------------------------------------
 # _get_watermark() — reads from source_watermarks; falls back to yesterday

@@ -1,0 +1,78 @@
+info:
+  name: Get Recall by RecallID
+  type: http
+  seq: 2
+
+http:
+  method: GET
+  url: "{{cpsc_root_uri}}?format=json&RecallID={{recall_id}}"
+  params:
+    - name: format
+      value: json
+      type: query
+    - name: RecallID
+      value: "{{recall_id}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          console.log("record count: " + res.body.length);
+        });
+
+        test("response is an array with exactly 1 record", function() {
+          expect(res.body).to.be.an('array');
+          expect(res.body.length).to.equal(1);
+        });
+
+        test("record has required top-level fields", function() {
+          const requiredFields = [
+            'RecallID', 'RecallNumber', 'RecallDate', 'LastPublishDate',
+            'Title', 'Description', 'URL', 'ConsumerContact',
+            'Products', 'Images', 'Injuries',
+            'Manufacturers', 'Retailers', 'Importers', 'Distributors',
+            'Inconjunctions',
+            'ManufacturerCountries', 'ProductUPCs',
+            'Hazards', 'Remedies', 'RemedyOptions'
+          ];
+          const record = res.body[0];
+          requiredFields.forEach(function(field) {
+            expect(record, `missing field: ${field}`).to.have.property(field);
+          });
+        });
+
+        test("returned record matches the queried recall ID", function() {
+          const queried = parseInt(bru.getEnvVar('recall_id'), 10);
+          const record = res.body[0];
+          expect(
+            record.RecallID,
+            `expected RecallID ${record.RecallID} to equal ${queried}`
+          ).to.equal(queried);
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Point lookup by RecallID (the server's internal integer identifier).
+
+  Observed behavior (confirmed 2026-04-24):
+  - RecallID uses exact integer matching — not wildcard/contains like RecallNumber.
+    Verified by probe_recall_id_wildcard.yml: querying "107" returned only RecallID=107,
+    not any of the many IDs in the 1070–1079 or 10700–10799 ranges.
+  - Always returns exactly 1 record for a valid RecallID (or an empty array if not found).
+    Prefer RecallID over RecallNumber for deterministic point lookups — RecallNumber is
+    a substring filter and can match multiple records with a short or shared value.
+  - Response is always an array (even for 1 result); test for length, not a bare object.
+  - Response size is small (~1.2 KB / 1 record) — no pagination needed for point lookups.
+  - No server-side caching: pragma=no-cache. Server: Microsoft-IIS/10.0 / ASP.NET 4.0.30319.

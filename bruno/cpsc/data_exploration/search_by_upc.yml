@@ -1,0 +1,53 @@
+info:
+  name: Search by UPC
+  type: http
+  seq: 4
+
+http:
+  method: GET
+  url: "{{cpsc_root_uri}}?format=json&UPC={{product_upc}}"
+  params:
+    - name: format
+      value: json
+      type: query
+    - name: UPC
+      value: "{{product_upc}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          console.log("record count: " + res.body.length);
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  UPC-based filter using the UPC parameter.
+
+  Parameter name correction (confirmed against v1.4 programmer's guide, September 2018):
+  - The correct parameter name is UPC, not UPCCodes. Per v1.4, invalid parameter names
+    cause the API to return ALL records (~9,700+). UPCCodes=000000000000 returned 9,772
+    records precisely because UPCCodes is not a recognized parameter and was silently ignored.
+
+  Observed behavior with correct parameter name (confirmed 2026-04-24, UPC=822843828494):
+  - UPC=822843828494 (Fisher & Paykel gas ranges, RecallNumber 26419 — a record with 13
+    confirmed UPCs visible in the RecallDelimited XML response) returned 0 results.
+  - ProductUPCs is [] (empty) in JSON responses for all sampled records, including records
+    whose UPCs appear in the RecallDelimited endpoint. The UPC search index appears to be
+    unpopulated even when UPC data exists in other response formats.
+  - Do NOT use UPC= for ETL filtering or point lookups. Use RecallID (exact integer match)
+    or RecallNumber (substring) for targeted retrieval instead.
+  - Re-validate once bronze data confirms whether ProductUPCs is ever populated in JSON
+    responses (see TODO.md).

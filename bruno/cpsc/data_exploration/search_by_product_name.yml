@@ -1,0 +1,88 @@
+info:
+  name: Search by ProductName
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{cpsc_root_uri}}?format=json&ProductName={{product_name}}"
+  params:
+    - name: format
+      value: json
+      type: query
+    - name: ProductName
+      value: "{{product_name}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          console.log("record count: " + res.body.length);
+        });
+
+        test("response is a non-empty array", function() {
+          expect(res.body).to.be.an('array');
+          expect(res.body.length).to.be.greaterThan(0);
+        });
+
+        test("all records have required top-level fields", function() {
+          const requiredFields = [
+            'RecallID', 'RecallNumber', 'RecallDate', 'LastPublishDate',
+            'Title', 'Description', 'URL', 'ConsumerContact',
+            'Products', 'Images', 'Injuries',
+            'Manufacturers', 'Retailers', 'Importers', 'Distributors',
+            'Inconjunctions',
+            'ManufacturerCountries', 'ProductUPCs',
+            'Hazards', 'Remedies', 'RemedyOptions'
+          ];
+          res.body.forEach(function(record) {
+            requiredFields.forEach(function(field) {
+              expect(record, `record ${record.RecallNumber} missing field: ${field}`).to.have.property(field);
+            });
+          });
+        });
+
+        test("all records have at least one Products entry with Name containing the query (case-insensitive)", function() {
+          const query = bru.getEnvVar('product_name').toLowerCase();
+          res.body.forEach(function(record) {
+            const hasMatch = record.Products.some(function(p) {
+              return p.Name.toLowerCase().includes(query);
+            });
+            expect(
+              hasMatch,
+              `record ${record.RecallNumber} has no Products[].Name containing "${query}"`
+            ).to.be.true;
+          });
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Filter by product name. Returns all recalls where any entry in the Products array has a
+  Name field containing the query string as a case-insensitive substring.
+
+  Observed behavior (confirmed 2026-04-24, ProductName=chair):
+  - 260 records returned. "Swivel Office Chairs" matched "chair" — substring/contains on
+    Products[].Name, consistent with wildcard behavior of other text filters.
+  - Filter targets Products[].Name specifically. Products[].Type, Model, Description, and
+    CategoryID are frequently empty — do not rely on them for filtering or schema validation.
+  - Entity arrays (Manufacturers, Retailers, Importers, Distributors) can each be empty
+    independently. An importer-only recall will have an empty Manufacturers array.
+  - ProductUPCs was empty on the first observed record — sparsely populated field.
+  - 260 records is a large payload. Narrow with date filters (RecallDateStart/End or
+    LastPublishDateStart/End) when combining ProductName with ETL extraction patterns.
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

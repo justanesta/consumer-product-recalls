@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     r2_access_key_id: SecretStr
     r2_secret_access_key: SecretStr
     r2_bucket_name: str
+    dbt_project_dir: str = "dbt"
+    dbt_profiles_dir: str = "dbt"
     # Phase 5a: FDA iRES credentials — not required until FDA extractor is implemented
     fda_authorization_user: SecretStr | None = None
     fda_authorization_key: SecretStr | None = None

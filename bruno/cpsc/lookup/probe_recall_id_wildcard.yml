@@ -1,0 +1,68 @@
+info:
+  name: Probe RecallID Wildcard Behavior
+  type: http
+  seq: 4
+
+http:
+  method: GET
+  url: "{{cpsc_root_uri}}?format=json&RecallID={{recall_id_prefix}}"
+  params:
+    - name: format
+      value: json
+      type: query
+    - name: RecallID
+      value: "{{recall_id_prefix}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          console.log("record count: " + res.body.length);
+        });
+
+        test("exact-match: RecallID=107 returns the record whose ID is exactly 107", function() {
+          expect(res.body.length).to.equal(1);
+          expect(
+            res.body[0].RecallID,
+            `expected RecallID 107, got ${res.body[0].RecallID}`
+          ).to.equal(107);
+        });
+
+        test("exact-match confirmed: no substring records returned", function() {
+          // If wildcard applied, RecallIDs like 1070, 1071, 10700-10799 would appear.
+          // Only RecallID=107 was returned, proving integer exact-match semantics.
+          res.body.forEach(function(record) {
+            expect(
+              record.RecallID,
+              `unexpected RecallID ${record.RecallID} — substring match would not return this`
+            ).to.equal(107);
+          });
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Behavioral probe: does RecallID use wildcard/contains matching or exact matching?
+
+  Confirmed 2026-04-24 (RecallID=107, 2/2 tests green after updating for exact-match):
+  - RecallID uses EXACT integer matching, not wildcard/contains like RecallNumber.
+  - "107" returned exactly 1 record: RecallID=107 (MooreCo office chairs, 2010).
+    If substring matching applied, records with IDs 1070–1079 and 10700–10799 would
+    also have been returned — they were not.
+  - The 2017 programmer's guide is misleading: it lists RecallID in the same wildcard
+    parameter table as RecallNumber, but the C# class types it as `int`, and the backend
+    treats it as integer equality. The docs are wrong, or behavior changed post-2017.
+  - Implication for ETL: RecallID is a reliable point lookup key. Unlike RecallNumber
+    (which is substring-matched and can return false positives), RecallID=N returns at
+    most 1 record and it is always an exact match.

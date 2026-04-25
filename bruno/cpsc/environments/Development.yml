@@ -1,0 +1,30 @@
+name: Development
+variables:
+  - name: cpsc_root_uri
+    value: https://www.saferproducts.gov/RestWebServices/Recall
+  - name: cpsc_delimited_uri
+    value: https://www.saferproducts.gov/RestWebServices/RecallDelimited
+  - name: last_publish_date_start
+    value: 2026-04-16
+  - name: last_publish_date_end
+    value: 2026-04-24
+  - name: recall_number
+    value: "26435"
+  - name: recall_id
+    value: "10736"
+  - name: recall_number_prefix
+    value: "264"
+  - name: recall_id_prefix
+    value: "107"
+  - name: recall_date_start
+    value: 2026-04-16
+  - name: recall_date_end
+    value: 2026-04-24
+  - name: product_name
+    value: chair
+  - name: manufacturer_name
+    value: IKEA
+  - name: hazard
+    value: pinch
+  - name: product_upc
+    value: "822843828494"

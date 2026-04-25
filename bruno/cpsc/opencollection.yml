@@ -1,0 +1,74 @@
+opencollection: 1.0.0
+
+info:
+  name: cpsc
+config:
+  proxy:
+    inherit: true
+    config:
+      protocol: http
+      hostname: ""
+      port: ""
+      auth:
+        username: ""
+        password: ""
+      bypassProxy: ""
+
+docs:
+  content: |-
+    # CPSC Recall Retrieval Web Service
+
+    REST API providing access to the CPSC Recall Central database.
+    Docs: Programmer's Guide v1.4 (September 17, 2018).
+
+    **Base URL:** `https://www.saferproducts.gov/RestWebServices/Recall`
+    **Auth:** None. **Pagination:** None — all matching records returned in a single response.
+    **Default format:** XML. Append `&format=json` for JSON (preferred for ETL).
+
+    ---
+
+    ## Collection Structure
+
+    | Folder | Purpose |
+    |---|---|
+    | `incremental_extraction/` | Date-windowed queries using `LastPublishDate` — the ETL extraction cursor per ADR 0010 |
+    | `lookup/` | Point lookups by `RecallID` and `RecallNumber`, plus behavioral probes |
+    | `deep_rescan/` | Date-windowed queries using `RecallDate` — for historical backfill only |
+    | `data_exploration/` | Text search filters (`ProductName`, `Manufacturer`, `Hazard`, `UPC`) |
+    | `alternative_format/` | `RecallDelimited` endpoint — returns XML with pipe-delimited fields |
+
+    ---
+
+    ## Key Behavioral Findings
+
+    **Parameter names are strict.** Invalid parameter names are silently ignored and the API returns the full dataset (~9,700+ records as of 2018). All valid parameters are listed in v1.4 p.1.
+
+    **Filter matching:**
+    - Most text parameters use case-insensitive **substring/contains** matching (`RecallNumber`, `ProductName`, `Manufacturer`)
+    - `RecallID` is the exception — uses **exact integer equality** despite v1.4 listing it alongside wildcard parameters. Reliable for point lookups.
+
+    **`LastPublishDate` vs `RecallDate`:**
+    - Use `LastPublishDate` for **incremental loads** — it updates when CPSC amends a recall, so edited old recalls surface in the window.
+    - Use `RecallDate` for **historical backfill only** — it is immutable (original issue date) and never changes.
+
+    **Non-functional filters (confirmed 2026-04-24):**
+    - `Hazard=` — valid parameter name, but searches `Hazards[].HazardType` which is consistently `""` in all sampled records. Returns 0 results.
+    - `UPC=` — valid parameter name, but the search index appears unpopulated. Returns 0 even for records with known UPC values. Both filters should be re-validated once bronze data is collected (see `TODO.md`).
+
+    **Sparse fields:** `ProductUPCs`, `HazardType`, `HazardTypeID`, `SoldAtLabel`, `CompanyID` are consistently empty across all sampled records.
+
+    ---
+
+    ## ETL Notes
+
+    - **Prefer the JSON endpoint** over `RecallDelimited`. The JSON nested structure is unambiguous; the delimited endpoint returns XML with pipe-separated multi-values requiring fragile parsing with no added coverage.
+    - **No rate limiting observed.** No `Retry-After` headers, no 429s. Server: `Microsoft-IIS/10.0 / ASP.NET 4.0.30319`. `pragma: no-cache` — every request hits origin.
+    - **No API versioning exposed** in headers or response bodies. Schema drift will surface through Pydantic validation (`extra='forbid'`) in the extractor.
+    - **Date field format:** `YYYY-MM-DDTHH:MM:SS` with no timezone suffix. String comparison on `substring(0, 10)` is safe for range checks.
+  type: text/markdown
+bundled: false
+extensions:
+  bruno:
+    ignore:
+      - node_modules
+      - .git

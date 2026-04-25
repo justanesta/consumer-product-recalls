@@ -1,0 +1,86 @@
+info:
+  name: Get CPSC Recalls by Recall Date
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{cpsc_root_uri}}?format=json&RecallDateStart={{recall_date_start}}"
+  params:
+    - name: format
+      value: json
+      type: query
+    - name: RecallDateStart
+      value: "{{recall_date_start}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          console.log("record count: " + res.body.length);
+        });
+
+        test("response is a non-empty array", function() {
+          expect(res.body).to.be.an('array');
+          expect(res.body.length).to.be.greaterThan(0);
+        });
+
+        test("all records have required top-level fields", function() {
+          const requiredFields = [
+            'RecallID', 'RecallNumber', 'RecallDate', 'LastPublishDate',
+            'Title', 'Description', 'URL', 'ConsumerContact',
+            'Products', 'Images', 'Injuries',
+            'Manufacturers', 'Retailers', 'Importers', 'Distributors',
+            'Inconjunctions',
+            'ManufacturerCountries', 'ProductUPCs',
+            'Hazards', 'Remedies', 'RemedyOptions'
+          ];
+          res.body.forEach(function(record) {
+            requiredFields.forEach(function(field) {
+              expect(record, `record ${record.RecallNumber} missing field: ${field}`).to.have.property(field);
+            });
+          });
+        });
+
+        test("all records have RecallDate on or after the start date", function() {
+          const start = bru.getEnvVar('recall_date_start');
+          res.body.forEach(function(record) {
+            const recallDate = record.RecallDate.substring(0, 10);
+            expect(
+              recallDate >= start,
+              `RecallNumber ${record.RecallNumber} has RecallDate ${recallDate} before start ${start}`
+            ).to.be.true;
+          });
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Open-ended query returning all recalls with RecallDate on or after RecallDateStart.
+
+  Observed behavior (confirmed 2026-04-24, RecallDateStart=2026-04-16):
+  - Returned only recalls originally issued on or after 2026-04-16. Unlike LastPublishDate,
+    no old recalls (e.g. from 2001) surfaced — RecallDate is immutable and reflects when
+    CPSC originally issued the recall, not when it was last edited or re-published.
+  - Date comparison: RecallDate uses the format YYYY-MM-DDTHH:MM:SS with no timezone
+    suffix. String comparison on substring(0, 10) is safe and avoids timezone edge cases.
+  - No server-side caching: pragma=no-cache. Server: Microsoft-IIS/10.0 / ASP.NET 4.0.30319.
+
+  ETL use cases:
+  - Initial full load: chunk all historical recalls into RecallDate ranges to avoid
+    timeouts (e.g. year-by-year from 1973 onwards).
+  - Backfill / re-process: target a specific historical window without noise from
+    re-published old recalls that would appear in a LastPublishDate query.
+  - Do NOT use for ongoing incremental loads — RecallDate never changes, so an amended
+    recall would only be captured by a LastPublishDate query, not this one.

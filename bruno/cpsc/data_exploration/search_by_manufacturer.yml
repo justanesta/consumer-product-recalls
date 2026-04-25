@@ -1,0 +1,86 @@
+info:
+  name: Search by Manufacturer
+  type: http
+  seq: 2
+
+http:
+  method: GET
+  url: "{{cpsc_root_uri}}?format=json&Manufacturer={{manufacturer_name}}"
+  params:
+    - name: format
+      value: json
+      type: query
+    - name: Manufacturer
+      value: "{{manufacturer_name}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          console.log("record count: " + res.body.length);
+        });
+
+        test("response is a non-empty array", function() {
+          expect(res.body).to.be.an('array');
+          expect(res.body.length).to.be.greaterThan(0);
+        });
+
+        test("all records have required top-level fields", function() {
+          const requiredFields = [
+            'RecallID', 'RecallNumber', 'RecallDate', 'LastPublishDate',
+            'Title', 'Description', 'URL', 'ConsumerContact',
+            'Products', 'Images', 'Injuries',
+            'Manufacturers', 'Retailers', 'Importers', 'Distributors',
+            'Inconjunctions',
+            'ManufacturerCountries', 'ProductUPCs',
+            'Hazards', 'Remedies', 'RemedyOptions'
+          ];
+          res.body.forEach(function(record) {
+            requiredFields.forEach(function(field) {
+              expect(record, `record ${record.RecallNumber} missing field: ${field}`).to.have.property(field);
+            });
+          });
+        });
+
+        test("all records have at least one Manufacturers entry matching the query (case-insensitive substring)", function() {
+          const query = bru.getEnvVar('manufacturer_name').toLowerCase();
+          res.body.forEach(function(record) {
+            const hasMatch = record.Manufacturers.some(function(m) {
+              return m.Name.toLowerCase().includes(query);
+            });
+            expect(
+              hasMatch,
+              `record ${record.RecallNumber} has no Manufacturer name containing "${query}"`
+            ).to.be.true;
+          });
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Filter by manufacturer name. Returns all recalls where any entry in the Manufacturers array
+  contains the query string as a case-insensitive substring.
+
+  Observed behavior (confirmed 2026-04-24, Manufacturer=IKEA):
+  - 13 records returned, spanning 1995–2016.
+  - Substring matching confirmed: "IKEA North America, of Conshohocken, Pa." matched "IKEA".
+  - Multi-manufacturer records: a record is returned if ANY of its Manufacturers[].Name entries
+    match. Record 97173 (halogen torchiere lamps) has 14 manufacturers (Wal-Mart, Target, etc.)
+    and was returned because "IKEA" is one of them.
+  - ProductUPCs is empty ([]) for all 13 records in this result set — the field is sparsely
+    populated across the CPSC database; do not rely on it for UPC-based lookups without
+    first confirming coverage for a given product category.
+  - HazardType, HazardTypeID: always "" — appear to be unpopulated in this API version.
+  - SoldAtLabel: always null. CompanyID in all entity arrays: always "" (unpopulated).
+  - Response size grows with result count; no pagination observed for 13 records (~28KB).

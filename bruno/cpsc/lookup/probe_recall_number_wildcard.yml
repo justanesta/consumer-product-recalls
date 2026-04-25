@@ -1,0 +1,64 @@
+info:
+  name: Probe RecallNumber Wildcard Behavior
+  type: http
+  seq: 3
+
+http:
+  method: GET
+  url: "{{cpsc_root_uri}}?format=json&RecallNumber={{recall_number_prefix}}"
+  params:
+    - name: format
+      value: json
+      type: query
+    - name: RecallNumber
+      value: "{{recall_number_prefix}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          console.log("record count: " + res.body.length);
+        });
+
+        test("wildcard: prefix returns more than 1 record", function() {
+          const prefix = bru.getEnvVar('recall_number_prefix');
+          expect(
+            res.body.length,
+            `expected >1 records for prefix "${prefix}" to confirm wildcard, got ${res.body.length}`
+          ).to.be.greaterThan(1);
+        });
+
+        test("all returned records contain the prefix as a substring of RecallNumber", function() {
+          const prefix = bru.getEnvVar('recall_number_prefix');
+          res.body.forEach(function(record) {
+            expect(
+              record.RecallNumber,
+              `RecallNumber ${record.RecallNumber} does not contain prefix "${prefix}"`
+            ).to.include(prefix);
+          });
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Behavioral probe: does RecallNumber use wildcard/contains matching or exact matching?
+
+  Confirmed 2026-04-24 (RecallNumber=264, 3/3 tests green):
+  - Wildcard/contains is still in effect ~9 years after the 2017 programmer's guide.
+  - "264" returned ~43 records spanning 2005–2026, all with "264" as a substring of
+    their RecallNumber: e.g. "26435" (starts with), "24264", "16264", "07264" (suffix).
+  - Matching is pure substring/contains on the raw RecallNumber string — not prefix-only,
+    not digit-stripped, not anchored. "07264" matched because "264" appears at position 2.
+  - Response size scaled to 42KB vs. ~1.2KB for a single-record lookup — no pagination,
+    all matches returned in one shot.

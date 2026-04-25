@@ -1,0 +1,78 @@
+info:
+  name: Get Recalls Delimited
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{cpsc_delimited_uri}}?LastPublishDateStart={{last_publish_date_start}}&LastPublishDateEnd={{last_publish_date_end}}"
+  params:
+    - name: LastPublishDateStart
+      value: "{{last_publish_date_start}}"
+      type: query
+    - name: LastPublishDateEnd
+      value: "{{last_publish_date_end}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          // res.body is a raw XML string — use regex to count elements, not .length
+          const count = (res.body.match(/<RecallInfo>/g) || []).length;
+          console.log("record count: " + count);
+        });
+
+        test("response is XML with RecallInfo elements", function() {
+          expect(res.body).to.be.a('string');
+          expect(res.body).to.include('<ArrayOfRecallInfo');
+          expect(res.body).to.include('<RecallInfo>');
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  RecallDelimited endpoint — despite the name, returns XML not CSV/TSV.
+
+  Observed behavior (confirmed 2026-04-24, LastPublishDateStart=2026-04-16, LastPublishDateEnd=2026-04-24):
+  - Content-Type: application/xml; charset=utf-8. "Delimited" refers to pipe (|) separators
+    used within XML elements to pack multiple values into a single text node, not a tabular format.
+  - Response is an <ArrayOfRecallInfo> document with one <RecallInfo> per recall.
+  - Schema is denormalized/flattened vs. the JSON endpoint:
+      JSON                      → XML
+      Title                     → RecallTitle
+      URL                       → RecallURL
+      Description               → RecallDescription
+      Images[].URL (array)      → ImageURLs ("url1"|"url2")
+      Images[].Caption (array)  → ImageCaptions ("cap1"|"cap2")
+      Products[].Name (array)   → ProductNames ("name1"|"name2")
+      Hazards[].Name (array)    → Hazards ("text1"|"text2")
+      RemedyOptions[].Option    → RemedyOptions ("Refund"|"Replace")
+      Manufacturers[].Name      → Manufacturers ("name1"|"name2")
+      Inconjunctions[].URL      → InconjunctionCountries
+      ProductUPCs               → UPCs (same pipe-delimited pattern)
+  - Multi-value pipe format: values are double-quoted and pipe-separated within one element,
+    e.g. "url1"|"url2". Empty elements are self-closing (<Manufacturers/>).
+  - ProductTypes and ProductCategoryIDs: populated in older records (pre-2010), empty in
+    newer ones — opposite pattern from the JSON endpoint where CategoryID is always "".
+  - First confirmed non-empty UPCs observed in this response: Fisher & Paykel (RecallNumber
+    26419) has 13 UPC values. Update the UPC re-validation TODO once bronze data confirms
+    whether the JSON endpoint also returns these UPCs for that record.
+  - Bruno test note: res.body is a raw string for XML responses. res.body.length gives
+    character count, not record count — use /<RecallInfo>/g regex match for record count.
+
+  ETL recommendation: prefer the JSON endpoint over RecallDelimited.
+  - JSON nested arrays are unambiguous; pipe-parsing XML text nodes is fragile (values could
+    contain pipes or quotes, requiring escaping logic).
+  - JSON already surfaces all the same data in a more explicit, parse-safe structure.
+  - RecallDelimited adds no fields not present in the JSON response.

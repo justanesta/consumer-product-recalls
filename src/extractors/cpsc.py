@@ -85,6 +85,15 @@ _source_watermarks = sa.Table(
 
 _CPSC_SOURCE = "cpsc"
 _DEFAULT_LOOKBACK_DAYS = 1
+# Guard: if an incremental window returns more records than this, the
+# LastPublishDateStart parameter likely didn't apply (e.g. watermark returned
+# unexpected type or param name drifted). Abort rather than silently load the
+# full ~9,700-record dataset. Not applied on deep-rescan / historical-seed paths.
+# Threshold is set well below the full CPSC dataset (~9,700 records) but above
+# any realistic daily or weekly increment. Wide-window cassette tests return
+# ~2,500 records — a value of 5,000 allows those while still catching a
+# full-dataset return.
+_MAX_INCREMENTAL_RECORDS = 5_000
 
 
 class CpscExtractor(RestApiExtractor[CpscRecord]):
@@ -126,8 +135,23 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
         with self._engine.connect() as conn:
             start_date = self._get_watermark(conn)
 
+        if not isinstance(start_date, date):
+            raise TransientExtractionError(
+                f"CPSC watermark returned unexpected type {type(start_date)!r}; "
+                "aborting to avoid unfiltered full-database pull"
+            )
+
         url = f"{self.base_url}?format=json&LastPublishDateStart={start_date.isoformat()}"
-        return self._fetch(url)
+        records = self._fetch(url)
+
+        if len(records) > _MAX_INCREMENTAL_RECORDS:
+            raise TransientExtractionError(
+                f"CPSC incremental query returned {len(records)} records — "
+                f"exceeds guard of {_MAX_INCREMENTAL_RECORDS}. "
+                "Possible cause: invalid or missing LastPublishDateStart parameter."
+            )
+
+        return records
 
     def land_raw(self, raw_records: list[dict[str, Any]]) -> str:
         content = json.dumps(raw_records, default=str).encode("utf-8")

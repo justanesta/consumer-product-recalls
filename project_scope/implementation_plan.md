@@ -90,10 +90,11 @@ CPSC is chosen first because it has no auth, clean nested JSON, and a stable eve
   - **Live-recorded with a deliberately-bad credential**: 401 auth failure (applies to sources with auth; CPSC has none so 401 isn't produced for CPSC)
   - **Hand-constructed via `respx` (or hand-edited from a 200 cassette)**: 429 rate limit, 500 transient, malformed record in response — the live API won't return these on demand. Per ADR 0015, `respx` is the accepted pattern for explicit hand-constructed mock responses
   - **Shared with happy-path cassette**: content-hash dedup scenario reuses a happy-path cassette twice and asserts bronze row count does not grow — no separate cassette needed
+- `bruno/cpsc/` — Bruno collection covering CPSC API endpoints; `.bru` request files are plain text and git-tracked. Includes an `environments/dev.bru` file that references credentials via `{{variables}}` rather than hardcoding them. Serves as living API documentation alongside the extractor. (Retroactively created at end of Phase 4 before Phase 5 begins.)
 - Unit tests for CPSC Pydantic schema and parser logic
 - Integration tests consuming the cassettes
 - `.github/workflows/extract-cpsc.yml` with `workflow_dispatch` trigger (not yet on cron)
-- `.github/workflows/deep-rescan-cpsc.yml` with `workflow_dispatch` trigger per ADR 0010's deep-rescan addendum (not yet on cron; cron turns on in Phase 7)
+- `.github/workflows/deep-rescan-cpsc.yml` with `workflow_dispatch` trigger per ADR 0010's deep-rescan addendum (not yet on cron; cron turns on in Phase 7). The workflow calls a **separate method or extractor class** — not `CpscExtractor.extract()` — because the historical-seed code path has no incremental count guard and must handle arbitrarily large result sets. `CpscExtractor.extract()` is the incremental path only; it guards against unexpectedly large responses (`_MAX_INCREMENTAL_RECORDS = 500`) which would fire immediately if used for a full historical pull. See the Phase 5 standing requirement for how this split generalizes to all five sources.
 - First live extraction run, producing real bronze rows
 - **Empirical verification of `LastPublishDate` update semantics:** identify a recall that has been edited by CPSC since first publication (status change, remedy update, recalled-product count revision) and confirm by extraction whether `LastPublishDate` advanced at the edit. Document findings in a short note in `documentation/cpsc/`. If the timestamp reliably advances, file a follow-up to re-open ADR 0010 and relax the CPSC deep rescan; if not, the deep-rescan workflow stands as designed.
 
@@ -141,7 +142,16 @@ Built in order of increasing complexity so earlier lessons inform later sources:
 
 **Standing requirement for all four sources in Phase 5:**
 
-Phase 3 established a two-part empirical process for CPSC that must be repeated for each source:
+**Incremental extractor vs. historical load path.** Every source has two distinct code paths that must not be conflated:
+
+- **Incremental path** (`<Source>Extractor.extract()`) — uses the watermark cursor (e.g. `LastPublishDateStart`, `eventlmd`, file modification date) to fetch only records changed since the last run. This path includes a response-count guard that raises `TransientExtractionError` if the result set exceeds a source-specific ceiling (e.g. `_MAX_INCREMENTAL_RECORDS = 500` for CPSC). The guard prevents a silently-ignored cursor parameter from loading the full database undetected.
+- **Historical load path** (`deep-rescan-<source>.yml` workflow) — fetches all records in a date range for initial seeding or gap backfill. This path calls a **separate method or extractor class**, never `<Source>Extractor.extract()`, because it must handle arbitrarily large result sets and the incremental count guard would immediately fire. The historical path has no count guard.
+
+This split was established for CPSC in Phase 3 (CPSC API behavior confirmed: an invalid or missing `LastPublishDateStart` parameter returns the full ~9,700-record dataset silently). Apply the same pattern for each source in Phase 5: FDA iRES, USDA FSIS, NHTSA, and USCG each need both an incremental extractor with a source-appropriate count guard and a separate historical load path without one.
+
+Phase 3 established a three-part empirical process for CPSC that must be repeated for each source:
+
+0. **Bruno API exploration (REST API sources only — FDA, USDA).** Before writing the schema or extractor, use Bruno to interactively explore the source's endpoints. Build the collection in `bruno/<source>/` with an `environments/dev.bru` file referencing credentials via `{{variables}}` — never hardcoded in `.bru` request files. Commit the collection alongside the extractor; `.bru` files are plain text and diff cleanly in git. Use `bru run bruno/<source>/` for quick scripted smoke tests from the terminal. The collection informs which cassette scenarios are worth recording and serves as living API documentation. Not applicable to NHTSA (flat file) or USCG (HTML scrape).
 
 1. **Live cassette recording.** After the schema and extractor are written, record a set of live VCR cassettes against the real source before committing. **The scenarios recorded must be tuned to the source's actual API shape** — there is no universal 4-cassette matrix. Use whichever combination meaningfully exercises the extractor's code paths:
    - For paginated APIs (e.g., FDA iRES): single-page, multi-page, partial last page, empty.
@@ -160,6 +170,7 @@ Phase 3 established a two-part empirical process for CPSC that must be repeated 
 - Handle Authorization-User/Key headers per ADR 0012
 - Handle `signature=` cache-busting parameter
 - `eventlmd` incremental logic
+- `bruno/fda/` — Bruno collection covering iRES endpoints (enforcement report list, single event detail, product history); `environments/dev.bru` stores `FDA_AUTHORIZATION_USER` and `FDA_AUTHORIZATION_KEY` as `{{variables}}`
 - 9 VCR scenarios + cron workflow
 - **API identity check:** confirm whether `iRES_enforcement_reports_api_usage_documentation.pdf` and `enforcement_report_api_definitions.pdf` describe the same API (the agent audit on update semantics treated them as separate; likely the same). Document the resolution in `documentation/fda/` so future readers aren't confused.
 - **Empirical verification of `eventlmddt` edit semantics:** confirm via the documented `productHistory` / `eventproducthistory` endpoints that edits produce an advanced `eventlmddt` and corresponding history rows. FDA docs claim this explicitly; the check is to trust-but-verify before relying on it in production.
@@ -168,6 +179,7 @@ Phase 3 established a two-part empirical process for CPSC that must be repeated 
 
 - Schema, extractor, YAML config, migration
 - Bilingual edge case handled in `check_invariants()` per ADR 0006 + ADR 0013
+- `bruno/usda/` — Bruno collection covering FSIS recall endpoints; `environments/dev.bru` for any auth parameters
 - 9 VCR scenarios + cron workflow
 - `.github/workflows/deep-rescan-usda.yml` with `workflow_dispatch` trigger per ADR 0010's deep-rescan addendum
 - **Empirical verification of `field_last_modified_date`:** confirm the field exists in USDA FSIS API responses (the agent audit did not find it documented in the PDF, but ADR 0010 relies on it — this is the priority unknown to resolve). If present, confirm via a known-edited recall that the field advances on edits. Document findings in `documentation/usda/`. If the field does not exist or is unreliable, the USDA deep-rescan workflow becomes the primary extraction mechanism rather than a safety net.
@@ -213,6 +225,7 @@ Phase 3 established a two-part empirical process for CPSC that must be repeated 
 - `recall_event_history` view per ADR 0007 — FDA from native history tables + snapshot diffs for other four sources
 - `scripts/re_ingest.py` — re-ingest CLI per ADR 0014 for schema-drift recovery
 - Alembic migrations for all silver and gold tables
+- Create final column-level ERD in `documentation/diagrams/` for silver postgres DB.
 
 **Quality gates:**
 
