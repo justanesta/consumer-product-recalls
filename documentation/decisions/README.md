@@ -22,13 +22,15 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 - [0004 — Four-layer medallion pipeline](0004-four-layer-medallion-pipeline.md) — landing → bronze → silver → gold
 - [0005 — Storage tier](0005-storage-tier-neon-and-r2.md) — Neon Postgres free + Cloudflare R2 free
-- [0007 — Lineage via bronze snapshots + content hashing](0007-lineage-via-bronze-snapshots-and-content-hashing.md) — unified history derivable across all sources
+- [0007 — Lineage via bronze snapshots + content hashing](0007-lineage-via-bronze-snapshots-and-content-hashing.md) — unified history derivable across all sources *(partially superseded by 0022)*
 - [0008 — NHTSA: flat file primary, JSON API for live vehicle lookup](0008-nhtsa-flat-file-primary-api-for-vehicle-lookup.md)
+- [0022 — FDA history endpoints empty; snapshot synthesis for all sources](0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) — supersedes ADR 0007's FDA-specific history path
 
 ### Pipeline, extraction, and transformation
 
-- [0010 — Ingestion cadence and orchestration via GitHub Actions cron](0010-ingestion-cadence-and-github-actions-cron.md)
+- [0010 — Ingestion cadence and orchestration via GitHub Actions cron](0010-ingestion-cadence-and-github-actions-cron.md) *(partially superseded by 0023)*
 - [0011 — Transformation framework: dbt-core](0011-transformation-framework-dbt-core.md)
+- [0023 — FDA deep rescan required; archive migration detected](0023-fda-deep-rescan-required-archive-migration-detected.md) — supersedes ADR 0010's FDA no-rescan exemption
 - [0012 — Extractor pattern: custom ABC + per-source subclasses](0012-extractor-pattern-custom-abc-and-per-source-subclasses.md) — adopts patterns from NYC DCP's `dcpy` without the dependency
 - [0013 — Error handling: retries, idempotency, and quarantine](0013-error-handling-retries-idempotency-and-quarantine.md)
 - [0014 — Schema evolution policy](0014-schema-evolution-policy.md) — `extra='forbid'` + `strict=True` + required-by-default
@@ -68,6 +70,8 @@ A new ADR is written when someone reading the code six months later would ask "w
 19. [License: MIT](0019-license-mit.md)
 20. [Pipeline state tracking](0020-pipeline-state-tracking.md)
 21. [Structured logging with structlog](0021-structured-logging.md)
+22. [FDA history endpoints empty; snapshot synthesis for all sources](0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md)
+23. [FDA deep rescan required; archive migration detected](0023-fda-deep-rescan-required-archive-migration-detected.md)
 
 ---
 

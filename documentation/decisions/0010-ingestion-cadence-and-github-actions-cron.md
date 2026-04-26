@@ -1,6 +1,6 @@
 # 0010 — Ingestion cadence and orchestration via GitHub Actions cron
 
-- **Status:** Accepted
+- **Status:** Accepted; partially superseded by [ADR 0023](0023-fda-deep-rescan-required-archive-migration-detected.md)
 - **Date:** 2026-04-16
 
 ## Context
@@ -52,7 +52,7 @@ To guard against this, CPSC and USDA get a **secondary deep-rescan workflow** in
 | Source | Primary (daily) | Deep rescan | Rationale |
 |---|---|---|---|
 | CPSC | `LastPublishDate >= yesterday` | Weekly full rescan of last 90 days | Catches silent edits within 7 days |
-| FDA | `eventlmd >= yesterday` | None needed | `eventlmddt` explicitly advances on edits per agency docs |
+| FDA | `eventlmd >= yesterday` | ~~None needed~~ **Weekly rescan added — see ADR 0023** | Archive migration re-touches old records; daily incremental may miss a batch on flake days |
 | USDA | `field_last_modified_date >= yesterday` | Weekly full rescan of last 90 days | Guards against documented-vs-actual gap until Phase 5b empirical verification; may relax or remove if verified reliable |
 | NHTSA | Weekly full flat file | N/A — the weekly operation is already a full rescan | Content hashing per ADR 0007 handles all dedup |
 | USCG | Weekly full scrape | N/A — the weekly operation is already a full rescan | Same |

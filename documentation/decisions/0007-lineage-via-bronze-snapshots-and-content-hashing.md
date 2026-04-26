@@ -1,7 +1,8 @@
 # 0007 — Lineage tracking via bronze snapshots + content hashing
 
-- **Status:** Accepted
+- **Status:** Accepted; partially superseded by [ADR 0022](0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md)
 - **Date:** 2026-04-16
+- **Revised:** 2026-04-26 — corrected column names: `eventlmddt` → `EVENTLMD`, `productlmddt` → `PRODUCTLMD` (per finding H in `documentation/fda/api_observations.md`; the `dt` suffix appeared in the FDA iRES PDF but is absent from the live API response)
 
 ## Context
 
@@ -9,7 +10,7 @@ Data governance, lineage, and audit are stated project goals (`CLAUDE.md`). The 
 
 The five in-scope sources have asymmetric capabilities for change tracking:
 
-- **FDA** exposes native field-level history endpoints (`/search/productHistory/{productid}` and `/search/eventproducthistory/{eventid}`) returning `(fieldname, oldvalue, newvalue, eventlmd)` rows.
+- **FDA** exposes native field-level history endpoints (`/search/productHistory/{productid}` and `/search/eventproducthistory/{eventid}`) returning `(fieldname, oldvalue, newvalue, eventlmd)` rows. (Note: Phase 5a exploration found these endpoints universally empty — see ADR 0022.)
 - **CPSC, USDA, NHTSA, USCG** expose no history endpoints. Any change tracking must be derived by comparing successive ingestions.
 
 Two architectural options were considered:
@@ -32,7 +33,7 @@ Bronze tables are snapshot stores, not "current state" stores. A unified `recall
 
 **Silver-layer history view:**
 
-- For **FDA**: a dedicated bronze table mirrors `productHistory` and `eventproducthistory` directly (field-level granularity from the source).
+- For **FDA**: a dedicated bronze table mirrors `productHistory` and `eventproducthistory` (field-level granularity from the source). **ADR 0022 supersedes this path**: Phase 5a exploration found these endpoints universally empty. FDA uses snapshot synthesis like the other four sources; the bronze tables are retained (cheap, and the endpoints may eventually populate) but are not the primary lineage mechanism.
 - For **CPSC, USDA, NHTSA, USCG**: history is derived via `LAG()` window functions over bronze snapshots, restricted to a configurable allowlist of consumer-meaningful fields (`status`, `classification`, `hazard_short`, `remedy`, `units_affected`, `terminated_at`).
 - Both feed a unified `recall_event_history` view that downstream consumers query, so the source-asymmetry is hidden from the API and dashboards.
 

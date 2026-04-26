@@ -174,11 +174,10 @@ Phase 3 established a three-part empirical process for CPSC that must be repeate
 - 9 VCR scenarios + cron workflow. **Custom VCR request matcher required for FDA**: cassettes must match on path + method + filtered query params, with `signature` excluded from the match (or stripped before comparison). Without this, every replay attempt fails because the recorded `signature` value will never match the timestamp/UUID generated at replay time. Implement once in `tests/conftest.py` (or wherever the VCR fixture is configured) as a custom matcher that produces a query-string variant with `signature` removed; apply it to FDA cassettes only — CPSC/USDA/NHTSA/USCG cassettes use VCR's default matchers. Reference: signature cache-busting rationale and observed behavior documented in `bruno/fda/lookup/get_product_types.yml`.
 - **API identity check:** confirm whether `iRES_enforcement_reports_api_usage_documentation.pdf` and `enforcement_report_api_definitions.pdf` describe the same API (the agent audit on update semantics treated them as separate; likely the same). Document the resolution in `documentation/fda/` so future readers aren't confused. **UPDATE 2026-04-26: THIS HAS BEEN CONFIRMED, THESE TWO DOCUMENTS REFERENCE THE SAME API.**
 - **Empirical verification of `eventlmddt` edit semantics:** confirm via the documented `productHistory` / `eventproducthistory` endpoints that edits produce an advanced `eventlmddt` and corresponding history rows. FDA docs claim this explicitly; the check is to trust-but-verify before relying on it in production.
-- **Pre-bronze ADR revisions (per `documentation/fda/api_observations.md` findings H, L, M):**
-  - **ADR 0007 textual correction:** drop the `dt` suffix from `eventlmddt` / `productlmddt` references — the actual API columns are `EVENTLMD` and `PRODUCTLMD`. Edit ADR 0007 in place with a brief revision note.
-  - **ADR 0007 architectural revision:** FDA's native field-history endpoints (`/search/producthistory/{productid}`, `/search/eventproducthistory/{eventid}`) are sparsely populated across every event tested — 2026 ongoing (98815), 2026 terminated (98279, 98286), and 2002 archive-migration (25159) all returned `RESULTCOUNT: 0`. The original ADR 0007 split — "FDA gets native field-level history, the other four sources synthesize from bronze snapshots" — is empirically false. FDA must use bronze-snapshot synthesis like the other four sources. File a superseding ADR (or substantial amendment) before the silver `recall_event_history` view is implemented in Phase 6; the schema for `fda_product_history_bronze` and `fda_event_product_history_bronze` should still be created (cheap, mostly empty) since the endpoints may eventually populate, but they cannot be the primary lineage path.
-  - **ADR 0010 architectural revision:** ADR 0010 states FDA needs no deep rescan because `eventlmddt` reliably advances on edits per agency docs. Finding M empirically shows FDA actively re-touches old recall records and bumps `EVENTLMD` wholesale (records from 2002–2019 surfaced in a "90-day window" query), which is functionally the same archive-migration silent-edit pattern that drove the deep-rescan workflows for CPSC and USDA. File a superseding ADR (or amendment) to add a weekly `deep-rescan-fda.yml` workflow matching CPSC's and USDA's deep-rescan posture; content-hash dedup (ADR 0007) handles the volume cost-effectively.
-  - **Numbering note:** ADRs 0022 and 0023 are reserved for Phase 8 (API design + deployment target). New ADRs from these revisions would start at 0024, bumping Phase 9's framework ADR by one. Alternative: amend ADR 0007 and ADR 0010 in place rather than superseding, to avoid the numbering cascade — pick based on how much you value preserving the original-vs-current distinction.
+- **Pre-bronze ADR revisions (per `documentation/fda/api_observations.md` findings H, L, M) — completed 2026-04-26:**
+  - **ADR 0007 textual correction (done):** dropped the `dt` suffix from `eventlmddt` / `productlmddt` references — actual API columns are `EVENTLMD` and `PRODUCTLMD`. Edited ADR 0007 in place with a revision note.
+  - **ADR 0022 (filed):** supersedes ADR 0007's FDA-specific history path. FDA's native field-history endpoints are universally empty; FDA uses bronze-snapshot synthesis like the other four sources. See `documentation/decisions/0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md`.
+  - **ADR 0023 (filed):** supersedes ADR 0010's FDA no-rescan exemption. Archive migration re-touches old records wholesale; FDA needs a weekly `deep-rescan-fda.yml` workflow matching CPSC/USDA posture. See `documentation/decisions/0023-fda-deep-rescan-required-archive-migration-detected.md`.
 
 **5b. USDA FSIS** (bilingual dedup)
 
@@ -270,10 +269,12 @@ Phase 3 established a three-part empirical process for CPSC that must be repeate
 
 **Prerequisites:**
 
-- **ADR 0022 — Serving-layer API design** filed and accepted. Covers endpoint shapes, response schemas, pagination, rate-limit posture, auth posture (public read-only per the project vision), OpenAPI generation strategy, and the relationship between API endpoints and dbt gold views.
-- **ADR 0023 — API deployment target** filed and accepted. Evaluates Fly.io vs. Render vs. Cloudflare Workers free tiers against cold-start behavior, Python runtime compatibility, read-only Neon connection patterns (from `main` per ADR 0005), and GitHub Actions CI/CD integration.
+- **ADR 0024 — Serving-layer API design** filed and accepted. Covers endpoint shapes, response schemas, pagination, rate-limit posture, auth posture (public read-only per the project vision), OpenAPI generation strategy, and the relationship between API endpoints and dbt gold views.
+- **ADR 0025 — API deployment target** filed and accepted. Evaluates Fly.io vs. Render vs. Cloudflare Workers free tiers against cold-start behavior, Python runtime compatibility, read-only Neon connection patterns (from `main` per ADR 0005), and GitHub Actions CI/CD integration.
 
 Rationale for two ADRs rather than one: API design and deployment target are separable concerns, and deployment constraints sometimes drive design choices (e.g., Cloudflare Workers' Python limitations would reshape endpoint design). Keeping them separate also matches this project's pattern of narrow, single-decision ADRs.
+
+*(ADRs 0022 and 0023 were used for FDA revision ADRs filed in Phase 5a.)*
 
 **Deliverables:**
 
@@ -304,7 +305,7 @@ Deferred as a separate decision — depends on framework choice (Observable Fram
 
 **Candidate deliverables (to be scoped at that time):**
 
-- Framework ADR (0024+ — 0022 and 0023 reserved for Phase 8's API design and deployment-target ADRs)
+- Framework ADR (0026+ — 0024 and 0025 reserved for Phase 8's API design and deployment-target ADRs)
 - Dashboard MVP showing recall counts, classifications, firm rollups
 - "Is my product recalled?" search UI
 - Deployment to Cloudflare Pages or Vercel free tier
