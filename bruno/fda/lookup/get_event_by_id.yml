@@ -1,0 +1,205 @@
+info:
+  name: Get Event by ID
+  type: http
+  seq: 2
+
+http:
+  method: GET
+  url: "{{fda_root_uri}}/recalls/event/{{event_id}}?signature={{$timestamp}}"
+  params:
+    - name: signature
+      value: "{{$timestamp}}"
+      type: query
+  headers:
+    - name: Authorization-User
+      value: "{{FDA_AUTHORIZATION_USER}}"
+    - name: Authorization-Key
+      value: "{{FDA_AUTHORIZATION_KEY}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        // Helper: normalize either response shape (columnar vs object-array) into a
+        // uniform array of row objects. The PDF shows columnar for every endpoint, but
+        // we've already confirmed POST /recalls/ returns object-array. This endpoint's
+        // shape is unknown until we hit it; the helper lets every downstream test work
+        // regardless of which shape the API returns.
+        function rowsFromResult(body) {
+          if (Array.isArray(body.RESULT)) {
+            return body.RESULT;  // object-array shape
+          }
+          if (body.RESULT && Array.isArray(body.RESULT.COLUMNS) && Array.isArray(body.RESULT.DATA)) {
+            const cols = body.RESULT.COLUMNS;
+            return body.RESULT.DATA.map(function(row) {
+              const obj = {};
+              cols.forEach(function(col, idx) { obj[col] = row[idx]; });
+              return obj;
+            });
+          }
+          return [];
+        }
+
+        function detectShape(body) {
+          if (Array.isArray(body.RESULT)) return 'object-array';
+          if (body.RESULT && Array.isArray(body.RESULT.COLUMNS)) return 'columnar';
+          return 'unknown';
+        }
+
+        test("HTTP status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("STATUSCODE is 400 (FDA's success code)", function() {
+          expect(res.body).to.have.property('STATUSCODE');
+          expect(res.body.STATUSCODE).to.equal(400);
+        });
+
+        test("MESSAGE is 'success'", function() {
+          expect(res.body.MESSAGE).to.equal('success');
+        });
+
+        test("response has standard envelope shape", function() {
+          expect(res.body).to.have.property('MESSAGE');
+          expect(res.body).to.have.property('STATUSCODE');
+          expect(res.body).to.have.property('RESULTCOUNT');
+          expect(res.body).to.have.property('RESULT');
+        });
+
+        test("response shape detection (columnar vs object-array)", function() {
+          // This test always passes — its purpose is to log which shape this endpoint
+          // returns so we can update the canonical observations doc. Re-check the docs
+          // block below after running and update finding J accordingly.
+          const shape = detectShape(res.body);
+          console.log("Detected response shape: " + shape);
+          if (shape === 'object-array') {
+            console.log("RESULT.length: " + res.body.RESULT.length);
+            if (res.body.RESULT.length > 0) {
+              console.log("First row keys: " + Object.keys(res.body.RESULT[0]).join(', '));
+            }
+          } else if (shape === 'columnar') {
+            console.log("COLUMNS: " + res.body.RESULT.COLUMNS.join(', '));
+            console.log("DATA row count: " + res.body.RESULT.DATA.length);
+          } else {
+            console.log("Unknown RESULT structure: " + JSON.stringify(res.body.RESULT).substring(0, 300));
+          }
+        });
+
+        test("RESULTCOUNT and row count are both 1", function() {
+          // A point lookup by event ID should always return exactly one event.
+          expect(res.body.RESULTCOUNT).to.equal(1);
+          const rows = rowsFromResult(res.body);
+          expect(rows.length, "expected 1 normalized row").to.equal(1);
+        });
+
+        test("returned event matches the queried event_id", function() {
+          const rows = rowsFromResult(res.body);
+          const queriedEventId = bru.getEnvVar('event_id');
+          const row = rows[0];
+          // Field name might be RECALLEVENTID (uppercase) or recalleventid (lowercase)
+          // depending on the response shape. Try uppercase first, fall back to lowercase.
+          const returnedId = row.RECALLEVENTID || row.recalleventid;
+          expect(
+            String(returnedId),
+            `expected RECALLEVENTID '${returnedId}' to match queried event_id '${queriedEventId}'`
+          ).to.equal(String(queriedEventId));
+        });
+
+        test("event has expected detail fields per PDF Implementation Notes", function() {
+          // Per iRES API Usage doc, /recalls/event/{eventid} returns these columns:
+          // recalleventid, firmcitynam, firmcountrynam, firmline1adr, firmline2adr,
+          // firmstatecd, firmpostalcd, phasetxt, recallinitiationdt, firmlegalnam,
+          // voluntarytypetxt, distributionareasummarytxt, centercd, createdt,
+          // firmstateprvncnam, centerclassificationdt, terminationdt,
+          // initialfirmnotificationtxt, distributionpatternindicator,
+          // distributionpatternshort, determinationdt, enforcementreportdt, eventlmd,
+          // firmfeinum, firmsurvivingnam, firmsurvivingfei.
+          // Tests assert presence of a representative subset — full schema validation
+          // is the bronze Pydantic schema's job in Phase 5a.
+          const rows = rowsFromResult(res.body);
+          const row = rows[0];
+          const keys = Object.keys(row).map(function(k) { return k.toLowerCase(); });
+          const requiredSubset = [
+            'recalleventid', 'firmlegalnam', 'phasetxt', 'centercd',
+            'recallinitiationdt', 'eventlmd'
+          ];
+          requiredSubset.forEach(function(field) {
+            expect(keys, `expected field '${field}' missing from event row keys: ${keys.join(', ')}`).to.include(field);
+          });
+        });
+
+        test("log full event payload for inspection", function() {
+          const rows = rowsFromResult(res.body);
+          console.log("=== Event " + bru.getEnvVar('event_id') + " full payload ===");
+          console.log(JSON.stringify(rows[0], null, 2));
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Point lookup of a single recall event by event ID.
+
+  Returns ~26 columns describing the event header (firm contact info, phase, key dates,
+  classification, distribution pattern, etc.) per the iRES API Usage doc Implementation
+  Notes for `/recalls/event/{eventid}`.
+
+  Test value source: `{{event_id}}` is set in `environments/Development.yml` and seeded
+  by running `data_exploration/post_recalls_seed_event_ids.yml` (initial value: 98815,
+  Alcon Research LLC, Ongoing).
+
+  Notable quirks (signature cache-busting, header auth, STATUSCODE-as-success, base URL,
+  uppercase column names) are documented canonically in
+  `bruno/fda/lookup/get_product_types.yml`.
+
+  Notable quirks for the bulk POST endpoint (object-array vs. columnar shape, RESULTCOUNT
+  semantics, RID behavior, filter syntax) are documented in
+  `bruno/fda/data_exploration/post_recalls_seed_event_ids.yml`.
+
+  Open question this request answers (response-shape investigation):
+  ----------------------------------------------------------------
+  We have empirically confirmed two distinct response shapes:
+    - GET /search/producttypes → COLUMNAR (RESULT.COLUMNS + RESULT.DATA)
+    - POST /recalls/           → OBJECT-ARRAY (RESULT is array of objects)
+  This endpoint (GET /recalls/event/{eventid}) returns a single record. Either shape
+  is plausible. The test scripts use a `rowsFromResult()` helper that normalizes both
+  shapes to a uniform `rows[]` array, so field-content tests work either way; the
+  `response shape detection` test logs which shape the API actually returned.
+
+  After running, update finding J in this file to record the empirical shape, and add
+  the same finding to the eventual `documentation/fda/api_observations.md` file.
+
+  J. GET /recalls/event/{eventid} returns COLUMNAR shape (RESULT.COLUMNS + RESULT.DATA),
+     consistent with GET /search/producttypes and inconsistent with POST /recalls/
+     (which returns object-array). Confirmed 2026-04-26 against event_id=98815.
+
+     Working hypothesis given two columnar GETs and one object-array POST: GET lookup
+     endpoints return columnar; the bulk POST endpoint returns object-array. To be
+     confirmed by `get_event_products.yml` and the other lookup endpoints next.
+
+     Additional observations from the empirical response:
+
+     - **All field values returned as strings**, even numeric-looking ones. Example:
+       FIRMFEINUM: "1610287" (string, not number). Pydantic bronze schema must allow
+       string input and coerce to int/Decimal where appropriate.
+     - **Booleans serialize as string "false" / "true"** (e.g. DISTRIBUTIONPATTERNINDICATOR:
+       "false"). Pydantic should treat these as booleans via `BeforeValidator` or
+       `Literal["true", "false"]` with a coercion step.
+     - **Nullable fields use proper JSON `null`** (not "" or "NULL" string sentinels).
+       e.g. TERMINATIONDT: null for ongoing recalls, FIRMLINE2ADR: null for single-line
+       addresses. Bronze schema should make these fields `Optional[T]`.
+     - **Date format is `MM/DD/YYYY`** for all date fields (RECALLINITIATIONDT,
+       CENTERCLASSIFICATIONDT, DETERMINATIONDT, ENFORCEMENTREPORTDT, CREATEDT, and
+       EVENTLMD when present). Confirms finding H from the bulk POST observations.
+     - **COLUMNS ordering appears stable** — matches the order documented in the PDF's
+       Implementation Notes for this endpoint. Bronze loader can rely on positional
+       extraction OR by-name extraction; by-name is more resilient if FDA ever reorders.
+
+  Test value rationale:
+  - 98815 (Alcon Research LLC) chosen because it is the most-recent ongoing event in the
+    iRES dataset as of 2026-04-26 — unlikely to be terminated/archived during development
+    and produces stable, predictable lookup results across re-runs.

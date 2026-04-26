@@ -1,0 +1,129 @@
+info:
+  name: Get Press Release URLs for an Event
+  type: http
+  seq: 6
+
+http:
+  method: GET
+  url: "{{fda_root_uri}}/search/pressreleaseurls/{{event_id}}?signature={{$timestamp}}"
+  params:
+    - name: signature
+      value: "{{$timestamp}}"
+      type: query
+  headers:
+    - name: Authorization-User
+      value: "{{FDA_AUTHORIZATION_USER}}"
+    - name: Authorization-Key
+      value: "{{FDA_AUTHORIZATION_KEY}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        function rowsFromResult(body) {
+          if (Array.isArray(body.RESULT)) return body.RESULT;
+          if (body.RESULT && Array.isArray(body.RESULT.COLUMNS) && Array.isArray(body.RESULT.DATA)) {
+            const cols = body.RESULT.COLUMNS;
+            return body.RESULT.DATA.map(function(row) {
+              const obj = {};
+              cols.forEach(function(col, idx) { obj[col] = row[idx]; });
+              return obj;
+            });
+          }
+          return [];
+        }
+
+        test("HTTP status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("STATUSCODE is 400 (FDA's success code)", function() {
+          expect(res.body.STATUSCODE).to.equal(400);
+        });
+
+        test("MESSAGE is 'success'", function() {
+          expect(res.body.MESSAGE).to.equal('success');
+        });
+
+        test("RESULTCOUNT and row count agree (no pagination on lookup endpoints)", function() {
+          // Could be 0+ rows — not every event has a press release. This test only
+          // validates the no-pagination invariant from finding J.
+          const rows = rowsFromResult(res.body);
+          expect(res.body.RESULTCOUNT).to.equal(rows.length);
+        });
+
+        test("every row's RECALLEVENTID matches the queried event_id (if any rows)", function() {
+          const rows = rowsFromResult(res.body);
+          const queriedEventId = bru.getEnvVar('event_id');
+          rows.forEach(function(row, i) {
+            const returnedId = row.RECALLEVENTID || row.recalleventid;
+            expect(
+              String(returnedId),
+              `row ${i + 1}: expected RECALLEVENTID '${returnedId}' to match queried event_id '${queriedEventId}'`
+            ).to.equal(String(queriedEventId));
+          });
+        });
+
+        test("rows have expected detail fields per PDF Implementation Notes", function() {
+          // Per iRES API Usage doc, /search/pressreleaseurls/{eventid} returns 4 columns:
+          // recalleventid, pressreleasetype, pressreleaseissuedt, pressreleaseurl.
+          // Skip the assertion gracefully if there are no press releases for this event.
+          const rows = rowsFromResult(res.body);
+          if (rows.length === 0) {
+            console.log("Event " + bru.getEnvVar('event_id') + " has no press releases — schema check skipped.");
+            return;
+          }
+          const requiredSubset = [
+            'recalleventid', 'pressreleasetype', 'pressreleaseissuedt', 'pressreleaseurl'
+          ];
+          const keys = Object.keys(rows[0]).map(function(k) { return k.toLowerCase(); });
+          requiredSubset.forEach(function(field) {
+            expect(keys, `expected '${field}' missing from keys: ${keys.join(', ')}`).to.include(field);
+          });
+        });
+
+        test("empty-result behavior (validates RESULT shape when no rows)", function() {
+          // If the queried event has no press releases, this is the first endpoint in
+          // the collection that produces a zero-row response. Important to know what
+          // the "empty" shape looks like — it informs the bronze loader's empty-result
+          // handling (don't blow up on 0 rows; treat as a successful no-op extraction).
+          const rows = rowsFromResult(res.body);
+          if (rows.length === 0) {
+            console.log("Empty-result observation:");
+            console.log("  RESULTCOUNT: " + res.body.RESULTCOUNT);
+            console.log("  RESULT structure: " + JSON.stringify(res.body.RESULT));
+            console.log("  → Append this to api_observations.md as a new finding if the");
+            console.log("    empty shape is non-trivial (e.g., RESULT: null vs RESULT.DATA: []).");
+          } else {
+            console.log("Event has " + rows.length + " press release(s); empty case not exercised.");
+          }
+        });
+
+        test("log full response for inspection", function() {
+          const rows = rowsFromResult(res.body);
+          console.log("=== Press releases for event " + bru.getEnvVar('event_id') + " ===");
+          console.log(JSON.stringify(rows, null, 2));
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Returns all press release URLs for a given event. Four columns per row:
+  `recalleventid`, `pressreleasetype`, `pressreleaseissuedt`, `pressreleaseurl`.
+
+  Test value source: `{{event_id}}` is 98815 (Alcon Research LLC). Note that not every
+  event has a press release — the response may be 0 rows. This is the first endpoint in
+  the collection that exercises the empty-result case, which is itself a finding to
+  document if the empty shape is non-trivial.
+
+  Bronze schema implication: the press-release table is a child of `recall_event` (M:1
+  press releases per event). Consider whether bronze should land press releases as a
+  separate table (e.g., `fda_press_releases_bronze`) or denormalize into the event
+  bronze row as a JSON column. Decision deferred to schema implementation per ADR 0014.
+
+  All cross-cutting findings are consolidated in `documentation/fda/api_observations.md`.

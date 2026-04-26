@@ -1,0 +1,157 @@
+info:
+  name: Deep Rescan / Historical Window
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{fda_root_uri}}/recalls/?signature={{$timestamp}}"
+  params:
+    - name: signature
+      value: "{{$timestamp}}"
+      type: query
+  headers:
+    - name: Authorization-User
+      value: "{{FDA_AUTHORIZATION_USER}}"
+    - name: Authorization-Key
+      value: "{{FDA_AUTHORIZATION_KEY}}"
+  body:
+    type: form-urlencoded
+    data:
+      - name: payLoad
+        value: "{\"displaycolumns\":\"recalleventid,productid,producttypeshort,recallnum,phasetxt,centercd,centerclassificationtypetxt,firmlegalnam,firmfeinum,recallinitiationdt,centerclassificationdt,terminationdt,enforcementreportdt,determinationdt,initialfirmnotificationtxt,distributionareasummarytxt,voluntarytypetxt,productdescriptiontxt,productshortreasontxt,productdistributedquantity,eventlmd\",\"filter\":\"[{'eventlmdfrom':'01/26/2026'},{'eventlmdto':'04/26/2026'}]\",\"start\":1,\"rows\":50,\"sort\":\"recalleventid\",\"sortorder\":\"asc\"}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        function rowsFromResult(body) {
+          if (Array.isArray(body.RESULT)) return body.RESULT;
+          if (body.RESULT && Array.isArray(body.RESULT.COLUMNS) && Array.isArray(body.RESULT.DATA)) {
+            const cols = body.RESULT.COLUMNS;
+            return body.RESULT.DATA.map(function(row) {
+              const obj = {};
+              cols.forEach(function(col, idx) { obj[col] = row[idx]; });
+              return obj;
+            });
+          }
+          return [];
+        }
+
+        test("HTTP status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("STATUSCODE is 400 (FDA's success code)", function() {
+          expect(res.body.STATUSCODE).to.equal(400);
+        });
+
+        test("MESSAGE is 'success'", function() {
+          expect(res.body.MESSAGE).to.equal('success');
+        });
+
+        test("response is bulk-POST object-array shape", function() {
+          expect(res.body.RESULT).to.be.an('array');
+        });
+
+        test("DATA length matches requested rows (50) — full page expected for 90-day window", function() {
+          // A 90-day window in iRES has historically returned ~3,000 records (per the
+          // RESULTCOUNT-semantics investigation: 3,012 for ~4 months of 2026). So
+          // page 1 should be a full page.
+          expect(res.body.RESULT.length).to.equal(50);
+        });
+
+        test("RESULTCOUNT >> page size (multi-page extraction expected)", function() {
+          // For a 90-day window, RESULTCOUNT should be in the low thousands, much
+          // larger than the 50-row page. This validates the assumption that the
+          // historical-load workflow needs pagination (~25-30 page reads at production
+          // rows=5000, or ~60 pages at this test's rows=50).
+          expect(res.body.RESULTCOUNT).to.be.above(res.body.RESULT.length);
+          console.log("=== 90-day window 2026-01-26 to 2026-04-26 ===");
+          console.log("RESULTCOUNT (total matching): " + res.body.RESULTCOUNT);
+          console.log("Pages required at rows=5000: " + Math.ceil(res.body.RESULTCOUNT / 5000));
+          console.log("Pages required at rows=2500 (with codeinfo): " + Math.ceil(res.body.RESULTCOUNT / 2500));
+        });
+
+        test("every row's EVENTLMD is within the requested 90-day window", function() {
+          const rows = rowsFromResult(res.body);
+          const windowStart = '2026-01-26';
+          const windowEnd = '2026-04-26';
+          rows.forEach(function(row, i) {
+            const eventlmd = row.EVENTLMD || row.eventlmd;
+            expect(eventlmd, `row ${i + 1}: EVENTLMD missing`).to.be.a('string');
+            const parts = eventlmd.split('/');
+            const iso = parts[2] + '-' + parts[0] + '-' + parts[1];
+            // String comparison works for ISO YYYY-MM-DD format (lexicographically ordered).
+            expect(iso >= windowStart && iso <= windowEnd, `row ${i + 1}: EVENTLMD ${eventlmd} (${iso}) outside window ${windowStart} to ${windowEnd}`).to.be.true;
+          });
+        });
+
+        test("rows sorted by RECALLEVENTID ascending (deterministic historical pull)", function() {
+          // For deep rescan / historical load, ascending sort on a stable identifier
+          // gives deterministic page boundaries — important for resumable extractions.
+          // recalleventid is monotonically increasing as FDA assigns IDs.
+          const rows = rowsFromResult(res.body);
+          for (let i = 1; i < rows.length; i++) {
+            const prev = parseInt(rows[i - 1].RECALLEVENTID || rows[i - 1].recalleventid, 10);
+            const curr = parseInt(rows[i].RECALLEVENTID || rows[i].recalleventid, 10);
+            expect(curr, `row ${i + 1}: RECALLEVENTID ${curr} should be >= row ${i}'s ${prev}`).to.be.at.least(prev);
+          }
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Canonical example of the **historical-load query pattern** — a date-windowed bulk
+  pull that the production deep-rescan workflow (or initial historical seed) would use.
+
+  Per the Phase 5 standing requirement in `project_scope/implementation_plan.md`, the
+  historical load path must be a **separate method or extractor class** from the
+  incremental extractor. The incremental path has a response-count guard that fires
+  on unexpectedly large result sets; the historical path has no such guard and must
+  handle arbitrarily large date windows.
+
+  Filter pattern (compound `eventlmdfrom` + `eventlmdto`):
+    [{'eventlmdfrom':'<window_start>'},{'eventlmdto':'<window_end>'}]
+
+  Window in this Bruno file: `01/26/2026` to `04/26/2026` (~90 days, mirroring the
+  CPSC/USDA deep-rescan window from ADR 0010).
+
+  Notable design choices vs. the incremental query:
+
+  - **Sort: `recalleventid asc`** instead of `eventlmd desc`. Ascending sort on a
+    monotonic identifier produces deterministic page boundaries. If a historical pull
+    fails midway and resumes from `start = N`, the same records appear at the same
+    positions on retry. Using `eventlmd desc` would not be safely resumable because new
+    edits between attempts would shift records into earlier pages.
+  - **Wider window** (90 days vs. 1 day) deliberately produces a multi-page result so
+    the test validates `len(RESULT) < rows` is a meaningful loop terminator at scale.
+  - Same displaycolumns as the incremental query — bronze schema is identical for both
+    paths.
+
+  Pagination expectation: at production `rows=5000`, ~3,000 records / 5,000 = 1 page.
+  At the test's `rows=50`, ~3,000 records / 50 = ~60 pages. The first-page test
+  (RESULT.length === 50) confirms a full page is returned, validating the multi-page
+  assumption. Subsequent pages can be verified by sending the request with `start: 51`,
+  `start: 101`, etc.
+
+  Initial historical seed (one-time, full-history):
+
+  Replace the filter with `"[]"` (empty filter) to pull the full ~134K-record FDA
+  history. This is the bootstrap operation that lands all historical data into
+  `fda_recalls_bronze` once. After that, daily incremental queries keep it current.
+  The same query pattern applies — only the filter differs. At production `rows=5000`,
+  full-history seed is ~27 pages.
+
+  Per finding L, FDA's native field-level history endpoints are sparsely populated,
+  which means the bronze-snapshot synthesis path (per ADR 0007) is FDA's primary
+  lineage mechanism — same as the other 4 sources. Deep rescans drive snapshot
+  refresh; the conditional-insert content-hashing in the bronze loader (per ADR 0007)
+  ensures unchanged records are deduped automatically.
+
+  All cross-cutting findings are consolidated in `documentation/fda/api_observations.md`.

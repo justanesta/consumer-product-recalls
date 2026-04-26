@@ -1,0 +1,188 @@
+info:
+  name: Incremental Extraction by eventlmd Range
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{fda_root_uri}}/recalls/?signature={{$timestamp}}"
+  headers:
+    - name: Authorization-User
+      value: "{{FDA_AUTHORIZATION_USER}}"
+    - name: Authorization-Key
+      value: "{{FDA_AUTHORIZATION_KEY}}"
+  params:
+    - name: signature
+      value: "{{$timestamp}}"
+      type: query
+  body:
+    type: form-urlencoded
+    data:
+      - name: payLoad
+        value: "{\"displaycolumns\":\"recalleventid,productid,producttypeshort,recallnum,phasetxt,centercd,centerclassificationtypetxt,firmlegalnam,firmfeinum,recallinitiationdt,centerclassificationdt,terminationdt,enforcementreportdt,determinationdt,initialfirmnotificationtxt,distributionareasummarytxt,voluntarytypetxt,productdescriptiontxt,productshortreasontxt,productdistributedquantity,eventlmd\",\"filter\":\"[{'eventlmdfrom':'04/20/2026'},{'eventlmdto':'04/26/2026'}]\",\"start\":1,\"rows\":50,\"sort\":\"eventlmd\",\"sortorder\":\"desc\"}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        function rowsFromResult(body) {
+          if (Array.isArray(body.RESULT)) return body.RESULT;
+          if (body.RESULT && Array.isArray(body.RESULT.COLUMNS) && Array.isArray(body.RESULT.DATA)) {
+            const cols = body.RESULT.COLUMNS;
+            return body.RESULT.DATA.map(function(row) {
+              const obj = {};
+              cols.forEach(function(col, idx) { obj[col] = row[idx]; });
+              return obj;
+            });
+          }
+          return [];
+        }
+
+        test("HTTP status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("STATUSCODE is 400 (success with rows) OR 412 (no results)", function() {
+          // Bulk POST behaves differently from lookup endpoints on empty results:
+          //   - lookups: STATUSCODE 400 + RESULT.DATA = []  (per finding K)
+          //   - bulk POST: STATUSCODE 412 + no RESULT key  (per finding K extension)
+          // Production extractor must treat 412 as a successful no-op, not an error.
+          expect([400, 412], `unexpected STATUSCODE ${res.body.STATUSCODE}`).to.include(res.body.STATUSCODE);
+        });
+
+        test("MESSAGE matches STATUSCODE", function() {
+          if (res.body.STATUSCODE === 400) {
+            expect(res.body.MESSAGE).to.equal('success');
+          } else if (res.body.STATUSCODE === 412) {
+            expect(res.body.MESSAGE).to.equal('No results found');
+          }
+        });
+
+        test("response shape (object-array on success, no RESULT on empty)", function() {
+          // On STATUSCODE 400, response includes RESULT as object-array (finding D).
+          // On STATUSCODE 412, response has NO `RESULT` key at all — only MESSAGE
+          // and STATUSCODE. Asserting the right shape for whichever case applies.
+          if (res.body.STATUSCODE === 400) {
+            expect(res.body.RESULT).to.be.an('array');
+          } else if (res.body.STATUSCODE === 412) {
+            expect(res.body, "412 response should not have RESULT key").to.not.have.property('RESULT');
+          }
+        });
+
+        test("RESULT length <= requested rows (50) — only when populated", function() {
+          if (res.body.STATUSCODE === 412) {
+            console.log("Empty window — skipping row-count assertion.");
+            return;
+          }
+          expect(res.body.RESULT.length).to.be.at.most(50);
+        });
+
+        test("every row's EVENTLMD is within the requested filter window", function() {
+          // Filter: eventlmdfrom '04/20/2026' to eventlmdto '04/26/2026' (7-day window).
+          // Validates that the filter actually constrains the dataset (finding I).
+          if (res.body.STATUSCODE === 412) return;
+          const rows = rowsFromResult(res.body);
+          const windowStart = '2026-04-20';
+          const windowEnd = '2026-04-26';
+          rows.forEach(function(row, i) {
+            const eventlmd = row.EVENTLMD || row.eventlmd;
+            expect(eventlmd, `row ${i + 1}: EVENTLMD missing`).to.be.a('string');
+            const parts = eventlmd.split('/');
+            const iso = parts[2] + '-' + parts[0] + '-' + parts[1];
+            // String comparison works for ISO YYYY-MM-DD format (lexicographically ordered).
+            expect(iso >= windowStart && iso <= windowEnd, `row ${i + 1}: EVENTLMD ${eventlmd} (${iso}) outside window ${windowStart} to ${windowEnd}`).to.be.true;
+          });
+        });
+
+        test("every row has the requested displaycolumns as keys", function() {
+          if (res.body.STATUSCODE === 412) {
+            console.log("Empty window — skipping displaycolumns assertion.");
+            return;
+          }
+          const rows = rowsFromResult(res.body);
+          if (rows.length === 0) {
+            console.log("Empty incremental window — no edits 2026-04-25 to 2026-04-26.");
+            return;
+          }
+          const expected = [
+            'RECALLEVENTID', 'PRODUCTID', 'RECALLNUM', 'PHASETXT',
+            'FIRMLEGALNAM', 'EVENTLMD'
+          ];
+          const keys = Object.keys(rows[0]);
+          expected.forEach(function(field) {
+            expect(keys, `expected '${field}' missing from row keys: ${keys.join(', ')}`).to.include(field);
+          });
+        });
+
+        test("incremental delta sizing", function() {
+          console.log("=== Incremental window 2026-04-20 to 2026-04-26 ===");
+          console.log("STATUSCODE: " + res.body.STATUSCODE);
+          if (res.body.STATUSCODE === 412) {
+            console.log("RESULTCOUNT: 0 (no records in window — bulk POST 412 case)");
+          } else {
+            console.log("RESULTCOUNT (total matching): " + res.body.RESULTCOUNT);
+            console.log("RESULT.length (rows on this page): " + res.body.RESULT.length);
+          }
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Canonical example of the **production daily-incremental query** pattern. This is the
+  shape the `FdaExtractor.extract()` method will use under cron in Phase 5a per ADR 0010.
+
+  Filter pattern (compound `eventlmdfrom` + `eventlmdto`):
+    [{'eventlmdfrom':'<watermark>'},{'eventlmdto':'<today>'}]
+
+  At runtime the extractor will compute:
+    eventlmdfrom = source_watermarks.last_extraction_lmd   (per ADR 0020)
+    eventlmdto   = today (UTC)
+
+  This Bruno request uses fixed dates `04/20/2026` to `04/26/2026` (a 7-day window) so
+  the cassette and tests are reproducible. The 7-day default reliably exercises the
+  populated path (~150 records). To exercise the **empty-result case** (bulk POST 412
+  asymmetry, finding K), narrow the window to a known-empty range like `04/25/2026` to
+  `04/26/2026` (no edits in that window during the original investigation).
+
+  Notable design choices:
+
+  - **Sort: `eventlmd desc`.** Most-recently-edited records come first. Useful for
+    debugging — first row of any response is "the most recent thing FDA touched."
+  - **rows: 50.** Production will use 5000 (the API max when `codeinformation` is NOT
+    in displaycolumns; 2500 if it IS). 50 is a reasonable testing balance.
+  - **displaycolumns: 21 fields.** A representative bronze-landing column set covering
+    event header, firm anchor, classification, key dates, and product summary. Production
+    can expand or contract per the bronze schema.
+  - **`codeinformation` deliberately EXCLUDED** so the 5000-row page limit applies in
+    production. Code information is enriched per-product via `lookup/get_code_info.yml`.
+
+  Pagination at runtime:
+
+    start = 1
+    while True:
+      response = post(payload={..., 'start': start, 'rows': 5000})
+      yield from response['RESULT']
+      if len(response['RESULT']) < 5000:
+        break
+      start += 5000
+
+  Per finding G, `start` is 1-based and inclusive. Per finding E, RESULTCOUNT is total
+  matching dataset (use `len(RESULT) < rows` as the loop terminator, NOT `RESULTCOUNT
+  reached`).
+
+  All cross-cutting findings are consolidated in `documentation/fda/api_observations.md`.
+
+  Important runtime caveat (per finding L):
+
+  ADR 0010 states that FDA does not need a deep-rescan workflow because `eventlmddt`
+  reliably advances on edits per agency docs. Finding L surfaced empirical evidence
+  that the field-level history endpoints are sparsely populated — leaving the broader
+  question of whether `EVENTLMD` itself reliably advances on every edit somewhat open.
+  If Phase 5a empirical verification surfaces silent edits (records change but EVENTLMD
+  doesn't), this incremental query would miss them and a deep-rescan workflow would be
+  warranted for FDA after all. Re-open ADR 0010 if so.

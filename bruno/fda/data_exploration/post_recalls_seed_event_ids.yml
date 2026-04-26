@@ -1,0 +1,232 @@
+info:
+  name: Seed Event IDs (small bulk fetch)
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{fda_root_uri}}/recalls/?signature={{$timestamp}}"
+  headers:
+    - name: Authorization-User
+      value: "{{FDA_AUTHORIZATION_USER}}"
+    - name: Authorization-Key
+      value: "{{FDA_AUTHORIZATION_KEY}}"
+  params:
+    - name: signature
+      value: "{{$timestamp}}"
+      type: query
+  body:
+    type: form-urlencoded
+    data:
+      - name: payLoad
+        value: '{"displaycolumns":"recalleventid,productid,firmlegalnam,phasetxt,eventlmd","filter":"[]","start":1,"rows":5,"sort":"recalleventid","sortorder":"desc"}'
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("HTTP status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("STATUSCODE is 400 (FDA's success code)", function() {
+          expect(res.body).to.have.property('STATUSCODE');
+          expect(res.body.STATUSCODE).to.equal(400);
+        });
+
+        test("MESSAGE is 'success'", function() {
+          expect(res.body.MESSAGE).to.equal('success');
+        });
+
+        test("RESULT is an array of objects (object-array shape, not columnar)", function() {
+          // The bulk POST endpoint returns RESULT as an array of objects with uppercase
+          // field-name keys — different from the lookup endpoints (which use
+          // RESULT.COLUMNS + RESULT.DATA columnar shape). See docs block below.
+          expect(res.body.RESULT).to.be.an('array');
+          expect(res.body.RESULT[0]).to.be.an('object');
+        });
+
+        test("DATA length matches requested rows (5)", function() {
+          expect(res.body.RESULT.length).to.equal(5);
+        });
+
+        test("RESULTCOUNT is the total dataset size, not the rows returned", function() {
+          // RESULTCOUNT reflects the full matching dataset (no filter applied here, so it
+          // approximates the entire iRES history). Pagination uses start+rows; cursor
+          // tracking should drive off RID or start offset, not RESULTCOUNT.
+          expect(res.body.RESULTCOUNT).to.be.above(res.body.RESULT.length);
+          console.log("Total iRES records (no filter): " + res.body.RESULTCOUNT);
+        });
+
+        test("requested displaycolumns are present as uppercase keys on each row", function() {
+          const expected = ['RECALLEVENTID', 'PRODUCTID', 'FIRMLEGALNAM', 'PHASETXT', 'EVENTLMD'];
+          const firstRow = res.body.RESULT[0];
+          expected.forEach(function(key) {
+            expect(firstRow, `expected key '${key}' missing from row keys: ${Object.keys(firstRow).join(', ')}`).to.have.property(key);
+          });
+        });
+
+        test("RID is auto-added on every row but is NOT a per-array sequential index", function() {
+          // RID isn't in our displaycolumns but is always returned. Empirically (rows=50,
+          // sort=recalleventid desc), RID values can be out-of-sequence with array order
+          // when multiple records share the same sort-key value (e.g., 3 products under
+          // the same recalleventid). RID looks like a stable per-row database identifier
+          // assigned from the sorted resultset, while the response array uses a different
+          // tiebreaker for ties. See finding F in the docs block below.
+          // Test guarantees: present on every row, integer, and unique within the page.
+          const rids = new Set();
+          res.body.RESULT.forEach(function(row, i) {
+            expect(row, `RID missing on row ${i + 1}`).to.have.property('RID');
+            expect(row.RID, `RID on row ${i + 1} should be a number`).to.be.a('number');
+            expect(rids.has(row.RID), `RID ${row.RID} duplicated on row ${i + 1}`).to.be.false;
+            rids.add(row.RID);
+          });
+        });
+
+        test("seed values for environments/Development.yml", function() {
+          console.log("=== Seed values for environments/Development.yml ===");
+          res.body.RESULT.forEach(function(row, i) {
+            console.log(
+              `row ${i + 1}: RECALLEVENTID=${row.RECALLEVENTID}, PRODUCTID=${row.PRODUCTID}, ` +
+              `firm=${row.FIRMLEGALNAM}, phase=${row.PHASETXT}, eventlmd=${row.EVENTLMD}`
+            );
+          });
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Small bulk fetch (rows=5) to seed `event_id` and `product_id` environment variables for
+  downstream lookup endpoints (`get_event_by_id.yml`, `get_product_by_id.yml`, etc.).
+
+  Request shape notes:
+
+  - **Body:** `application/x-www-form-urlencoded` with a single form field `payLoad` (note
+    the camelCase L). The Usage doc says "form data or json" — this collection uses form
+    data because the docs explicitly require `Content-Type: application/x-www-form-urlencoded`
+    for POST endpoints.
+
+  - **Payload structure:** `{"displaycolumns":"...","filter":"[]","start":1,"rows":5,"sort":"...","sortorder":"..."}`
+    All five keys are required. `filter` must be present even when empty (use the literal
+    string `[]`).
+
+  - **Sort field:** `recalleventid desc` returns the most recently issued event IDs first,
+    which are likely to be open/ongoing recalls — useful for verifying lookup endpoints
+    against records that won't be terminated/archived in production.
+
+  - **Row limits:** 5000 max normally, 2500 max if `codeinformation` is in `displaycolumns`
+    (per response code 417). This request is intentionally tiny to keep the seed run cheap.
+
+  Signature cache-busting and the four iRES quirks are documented in
+  `bruno/fda/lookup/get_product_types.yml` — see the `docs:` block there for the canonical
+  reference.
+
+  Docs-vs-actual discrepancies surfaced by THIS endpoint (confirmed 2026-04-26):
+
+  D. Response shape for POST /recalls/ is OBJECT-ARRAY, not COLUMNAR.
+     Every "Response Class" example in the iRES Usage PDF — for every endpoint, including
+     this one — shows the same columnar envelope:
+       RESULT: { COLUMNS: [...strings...], DATA: [[...values...]] }
+     The actual POST /recalls/ response is fundamentally different:
+       RESULT: [ {KEY: value, KEY: value, ...}, ... ]
+     i.e. an array of objects keyed by the uppercase column name. The lookup endpoints
+     (e.g. /search/producttypes, confirmed in get_product_types.yml) DO return the
+     columnar shape.
+     **Implication for the extractor:** two distinct response parsers are needed —
+     a columnar parser for lookups and an object-array parser for the bulk POST.
+     The Pydantic bronze schema should target the bulk POST shape since that is
+     what feeds production extraction.
+
+  E. RESULTCOUNT is the total matching dataset size, NOT the number of rows returned.
+     A request with `rows: 5` returns DATA of length 5 but RESULTCOUNT in the tens of
+     thousands (or higher when no filter is applied). The PDF's terse "Response Class"
+     placeholder of `"RESULTCOUNT": 0` doesn't make this clear.
+     **Implication for pagination:** the extractor should not use RESULTCOUNT as a
+     loop terminator. Use `start += rows` until `RESULT.length < rows` (last page) or
+     until RESULTCOUNT records have been fetched in total — but the latter is approximate
+     because RESULTCOUNT can change mid-extraction if the filter window keeps moving.
+
+  F. RID is auto-injected on every row, with deterministic but opaque tiebreaker behavior.
+     The PDF lists RID as a possible value in `displaycolumns` but doesn't flag that it
+     is always returned regardless. Empirically:
+       - First row's RID equals the `start` parameter exactly. With `start: 1000`,
+         the first response row had `RID: 1000`. So RID is the position in the
+         server-side sorted resultset.
+       - Within a single response, RIDs are usually sequential with array order, but
+         multi-product events under the same RECALLEVENTID can produce out-of-order
+         RIDs. Empirically observed pattern (rows=50, sort=recalleventid desc), which
+         reproduced identically across both unfiltered and date-filtered runs:
+           recalleventid 98724 (3 products): RIDs 20, 22, 21 (array order)
+           recalleventid 98670 (3 products): RIDs 46, 48, 47 (array order)
+       - The behavior is deterministic per RECALLEVENTID group — same input order
+         and RIDs across runs. The start=1000 page looked clean only because it
+         contained different multi-product events whose tiebreaker happened to align.
+       - The actual tiebreaker rule is opaque: not productid asc, not RID asc, not
+         RID desc within the group. Some other internal ordering not visible in the
+         response. Not worth reverse-engineering further — the safety conclusion below
+         is the only thing that matters for the extractor.
+     **Implication for the extractor:** do NOT use RID as a pagination cursor. Use
+     the PDF-prescribed `start` offset, which is 1-based, inclusive, and behaves
+     deterministically across runs. RID is still useful as a debugging anchor and
+     as a sanity check that the extractor is consuming the resultset linearly
+     (every page should have RIDs starting near `start`), but is unsafe for
+     "have I processed everything up to RID N?" tracking because out-of-order
+     RIDs can straddle page boundaries.
+
+  G. `start` is 1-based and inclusive (not 0-based, no off-by-one).
+     Confirmed: a request with `start: 1000` returns rows whose first RID is 1000.
+     Pagination math: `start_for_page_N = (N - 1) * rows + 1`. The extractor's
+     pagination loop is `start = 1; while True: fetch; if len(RESULT) < rows: break;
+     start += rows`.
+
+  H. EVENTLMD is returned as `MM/DD/YYYY` string (date only, no time component).
+     The PDF doesn't specify a format. Bronze Pydantic schema should parse this with
+     an explicit format string and normalize to UTC datetime per ADR 0007's canonical
+     serialization rules. ADR 0010 references `eventlmddt` (with `dt` suffix) for edit
+     semantics; the column returned here is `EVENTLMD` (no suffix) — likely the same
+     underlying field with truncated naming. Verify when building the schema.
+
+  I. Filter syntax works as the PDF prescribes — both single and compound filters confirmed.
+     Filter date format is `MM/DD/YYYY` (matches the PDF's example payloads). Single-quoted
+     JSON-ish keys/values inside an array of objects is the correct shape; the production
+     extractor should build this string carefully because of the multi-layer escaping (see
+     TODO.md blog post item).
+     Single-filter form (lower bound only):
+       "filter":"[{'eventlmdfrom':'01/01/2026'}]" — 133,841 → 3,012 records
+     Compound-filter form (lower + upper bound, comma-separated):
+       "filter":"[{'eventlmdfrom':'02/01/2026'},{'eventlmdto':'02/28/2026'}]" — 833 records
+     The compound form correctly intersects bounds (Feb 2026 only). All EVENTLMD values
+     in the filtered response fell within the requested window.
+     **Implication for the extractor:**
+       - Daily incremental: `eventlmdfrom = yesterday` (single filter, 1-2 days of delta)
+       - Historical load / deep rescan: `eventlmdfrom + eventlmdto` for date windows
+       per ADR 0010's deep-rescan addendum
+
+  Cardinality observations from RESULTCOUNT-semantics investigation (2026-04-26):
+    - No filter: 133,841 records (entire iRES history, all phases/centers/dates)
+    - Filter `eventlmdfrom: 01/01/2026`: 3,012 records (~4 months of 2026)
+    - Filter `eventlmdfrom: 02/01/2026, eventlmdto: 02/28/2026`: 833 records (just Feb 2026)
+  Useful for sizing decisions in Phase 5a (e.g., choosing batch sizes, estimating
+  historical-load runtime). Rough rate: ~750–1000 records/month, ~30K/year.
+
+  How to use the output:
+
+  1. Send this request once.
+  2. Inspect the test log lines (last test prints all 5 rows with their recalleventid +
+     productid + firm + phase + eventlmd).
+  3. Pick a row whose `phase` is "ongoing" or "completed" (avoid "terminated" — those may
+     have been archived and produce edge-case lookup behavior).
+  4. Copy that row's `recalleventid` into `environments/Development.yml` as `event_id` and
+     its `productid` as `product_id`.
+  5. The lookup endpoints can then reference `{{event_id}}` and `{{product_id}}` instead
+     of hardcoding values.
+
+  This request can be re-run any time the seed IDs go stale (e.g., a chosen event is
+  later terminated and behaves differently). It is otherwise not part of the production
+  extractor's code path — the extractor uses `eventlmdfrom`/`eventlmdto` filters via the
+  forthcoming `incremental_extraction/` folder.

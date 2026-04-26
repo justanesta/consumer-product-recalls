@@ -1,0 +1,157 @@
+info:
+  name: Get Product Edit History
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{fda_root_uri}}/search/producthistory/{{edited_product_id}}?signature={{$timestamp}}"
+  params:
+    - name: signature
+      value: "{{$timestamp}}"
+      type: query
+  headers:
+    - name: Authorization-User
+      value: "{{FDA_AUTHORIZATION_USER}}"
+    - name: Authorization-Key
+      value: "{{FDA_AUTHORIZATION_KEY}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        function rowsFromResult(body) {
+          if (Array.isArray(body.RESULT)) return body.RESULT;
+          if (body.RESULT && Array.isArray(body.RESULT.COLUMNS) && Array.isArray(body.RESULT.DATA)) {
+            const cols = body.RESULT.COLUMNS;
+            return body.RESULT.DATA.map(function(row) {
+              const obj = {};
+              cols.forEach(function(col, idx) { obj[col] = row[idx]; });
+              return obj;
+            });
+          }
+          return [];
+        }
+
+        test("HTTP status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("STATUSCODE is 400 (FDA's success code)", function() {
+          expect(res.body.STATUSCODE).to.equal(400);
+        });
+
+        test("MESSAGE is 'success'", function() {
+          expect(res.body.MESSAGE).to.equal('success');
+        });
+
+        test("RESULTCOUNT and row count agree (no pagination on lookup endpoints)", function() {
+          const rows = rowsFromResult(res.body);
+          expect(res.body.RESULTCOUNT).to.equal(rows.length);
+        });
+
+        test("history rows have expected schema (eventid, productid, fieldname, productlmd, newvalue, oldvalue)", function() {
+          // Per iRES API Usage doc, /search/producthistory/{productid} returns 6 columns:
+          // eventid, productid, fieldname, productlmd, newvalue, oldvalue.
+          // Skip if empty (un-edited product) — finding K covers the empty shape.
+          const rows = rowsFromResult(res.body);
+          if (rows.length === 0) {
+            console.log("Product " + bru.getEnvVar('edited_product_id') + " has no edit history — heuristic miss.");
+            console.log("If the terminated heuristic doesn't hold, try a different terminated product:");
+            console.log("  - Karison Foods (event 98279) products: 218703, 218103, 218107, 218104, 218106");
+            console.log("  - American Red Cross (event 98286): product 218151");
+            console.log("Schema check skipped on empty result.");
+            return;
+          }
+          const expected = ['eventid', 'productid', 'fieldname', 'productlmd', 'newvalue', 'oldvalue'];
+          const keys = Object.keys(rows[0]).map(function(k) { return k.toLowerCase(); });
+          expected.forEach(function(field) {
+            expect(keys, `expected '${field}' missing from history row keys: ${keys.join(', ')}`).to.include(field);
+          });
+        });
+
+        test("every row's PRODUCTID matches the queried product (if any rows)", function() {
+          const rows = rowsFromResult(res.body);
+          const queriedProductId = bru.getEnvVar('edited_product_id');
+          rows.forEach(function(row, i) {
+            const returnedId = row.PRODUCTID || row.productid;
+            expect(
+              String(returnedId),
+              `row ${i + 1}: expected PRODUCTID '${returnedId}' to match queried product_id '${queriedProductId}'`
+            ).to.equal(String(queriedProductId));
+          });
+        });
+
+        test("FIELDNAME values are consistent (string, non-empty)", function() {
+          // Each history row represents a field-level edit: oldvalue → newvalue for
+          // the named field. FIELDNAME should always be populated and identify a real
+          // column from the bronze schema (e.g., 'phasetxt', 'centerclassificationtypetxt').
+          const rows = rowsFromResult(res.body);
+          rows.forEach(function(row, i) {
+            const fieldname = row.FIELDNAME || row.fieldname;
+            expect(fieldname, `row ${i + 1}: FIELDNAME should be a non-empty string`).to.be.a('string');
+            expect(fieldname.length, `row ${i + 1}: FIELDNAME should be non-empty`).to.be.above(0);
+          });
+        });
+
+        test("log full history payload + edited fields summary", function() {
+          const rows = rowsFromResult(res.body);
+          console.log("=== Product " + bru.getEnvVar('edited_product_id') + " edit history (" + rows.length + " rows) ===");
+          if (rows.length === 0) {
+            console.log("(no edits recorded)");
+            return;
+          }
+          // Summary: distinct fieldnames edited and the most-recent timestamp
+          const fieldnames = new Set();
+          let latestLmd = null;
+          rows.forEach(function(row) {
+            const fn = row.FIELDNAME || row.fieldname;
+            if (fn) fieldnames.add(fn);
+            const lmd = row.PRODUCTLMD || row.productlmd;
+            if (lmd && (!latestLmd || lmd > latestLmd)) latestLmd = lmd;
+          });
+          console.log("Distinct fields edited (" + fieldnames.size + "): " + Array.from(fieldnames).join(', '));
+          console.log("Latest edit timestamp (PRODUCTLMD): " + latestLmd);
+          console.log("Full rows:");
+          console.log(JSON.stringify(rows, null, 2));
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Field-level edit history for a specific product. Six columns per row:
+  `eventid`, `productid`, `fieldname`, `productlmd`, `newvalue`, `oldvalue`. One row
+  per individual field-level edit event since publication.
+
+  This endpoint is critical to **ADR 0007** (lineage tracking). FDA is the only in-scope
+  source that exposes native field-level history; the other four sources (CPSC, USDA,
+  NHTSA, USCG) require synthesis from successive bronze snapshots via `LAG()` window
+  functions. The bronze schema for FDA should land these history rows in a dedicated
+  `fda_product_history_bronze` table that mirrors this 6-column shape, and the silver
+  `recall_event_history` view should union this directly (no synthesis needed for FDA).
+
+  Default test value: `{{edited_product_id}}` (218703, Karison Foods, Terminated). The
+  terminated-heuristic assumption is that this product has gone through enough lifecycle
+  changes to have non-empty history. If the response is empty, we've miss-picked — the
+  test logs a few alternative terminated-product candidates to try next.
+
+  To exercise the **empty (un-edited)** case for cassette-recording purposes, swap the
+  URL path param from `{{edited_product_id}}` to `{{product_id}}` (the ongoing baseline,
+  219875). Per finding J, that product had `PRODUCTLMD: null` and we expect zero
+  history rows back — empty shape behavior covered in finding K.
+
+  All cross-cutting findings are consolidated in `documentation/fda/api_observations.md`.
+
+  Implications for the bronze schema (Phase 5a):
+
+  - Distinct table: `fda_product_history_bronze` keyed by `(productid, productlmd, fieldname)`
+    or by an internal sequence — clarify after seeing real data.
+  - `oldvalue` and `newvalue` are typed as text in the bronze; downstream silver casts
+    based on `fieldname` (e.g., date-typed fieldnames get parsed as MM/DD/YYYY).
+  - `productlmd` is the watermark for incremental refresh of this table.
+  - Per ADR 0007, this table feeds the unified `recall_event_history` view directly.

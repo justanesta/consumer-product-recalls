@@ -1,0 +1,132 @@
+info:
+  name: Get Product Types
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{fda_root_uri}}/search/producttypes?signature={{$timestamp}}"
+  params:
+    - name: signature
+      value: "{{$timestamp}}"
+      type: query
+  headers:
+    - name: Authorization-User
+      value: "{{FDA_AUTHORIZATION_USER}}"
+    - name: Authorization-Key
+      value: "{{FDA_AUTHORIZATION_KEY}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("HTTP status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("STATUSCODE is 400 (FDA's success code)", function() {
+          // Note: PDF docs call this APIRETURNCODE; the live API returns STATUSCODE.
+          // See docs block below for the docs-vs-actual discrepancy details.
+          expect(res.body).to.have.property('STATUSCODE');
+          expect(res.body.STATUSCODE).to.equal(400);
+        });
+
+        test("MESSAGE is 'success'", function() {
+          expect(res.body).to.have.property('MESSAGE');
+          expect(res.body.MESSAGE).to.equal('success');
+        });
+
+        test("response has expected envelope shape", function() {
+          expect(res.body).to.have.property('MESSAGE');
+          expect(res.body).to.have.property('RESULTCOUNT');
+          expect(res.body).to.have.property('STATUSCODE');
+          expect(res.body).to.have.property('RESULT');
+          expect(res.body.RESULT).to.have.property('COLUMNS');
+          expect(res.body.RESULT).to.have.property('DATA');
+        });
+
+        test("RESULT.COLUMNS contains centercd and producttypeshorttxt", function() {
+          const columns = res.body.RESULT.COLUMNS.map(function(c) {
+            return c.toLowerCase();
+          });
+          expect(columns, `columns: ${columns.join(', ')}`).to.include('centercd');
+          expect(columns, `columns: ${columns.join(', ')}`).to.include('producttypeshorttxt');
+        });
+
+        test("RESULTCOUNT matches DATA length", function() {
+          expect(res.body.RESULT.DATA.length).to.equal(res.body.RESULTCOUNT);
+        });
+
+        test("record count", function() {
+          console.log("RESULTCOUNT: " + res.body.RESULTCOUNT);
+          console.log("COLUMNS: " + JSON.stringify(res.body.RESULT.COLUMNS));
+          if (res.body.RESULT.DATA.length > 0) {
+            console.log("first row: " + JSON.stringify(res.body.RESULT.DATA[0]));
+          }
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Lookup of all available Product Types within iRES.
+
+  Returns: centercd, producttypeshorttxt (per the iRES API Usage doc).
+
+  Why this is the first FDA request:
+  - No path parameters, smallest response — fastest signal that auth + signature handling work.
+  - Validates the four iRES quirks captured below before they bite us on a more complex endpoint.
+
+  iRES API quirks (apply to ALL FDA requests in this collection):
+
+  1. Authentication via headers, not query params.
+     `Authorization-User` and `Authorization-Key` are HTTP headers, not query string params.
+     Submitted via the OII Unified Logon application; revoked there too.
+
+  2. STATUSCODE of 400 means SUCCESS, not failure.
+     The HTTP status will be 200, but inspect `STATUSCODE` in the body for the API-level
+     status. 400 = success, 401 = auth denied, 402+ = various payload/parameter errors
+     (per the Response Messages tables in the iRES Usage doc).
+
+  3. Signature cache-busting is mandatory.
+     The iRES server caches responses keyed by request URL including the `signature=`
+     parameter. If a 401 is returned for a bad credential and the request is retried with
+     the SAME signature, the 401 is returned from cache even after credentials are fixed.
+     Bruno's {{$timestamp}} runtime variable provides a fresh value on every send.
+
+  4. Base URL is `/rest/iresapi/` (note: the docs page lives at /scripts/ires/apidocs/).
+     Confirmed via the footer of the iRES API Usage doc:
+       [ base url: /rest/iresapi/ , api version: 2.0.0 ]
+
+  TLS 1.2+ is required by the API server (per Usage doc); httpx and Bruno both default
+  to a modern TLS version, so this is not a concern in practice but worth noting if a
+  connection error surfaces.
+
+  Docs-vs-actual discrepancies surfaced by this endpoint (confirmed 2026-04-26):
+
+  A. Success-code field is `STATUSCODE`, not `APIRETURNCODE`.
+     Every "Response Class" example in the iRES API Usage PDF (every endpoint, all 9)
+     shows `APIRETURNCODE`. The live API returns `STATUSCODE`. Treat the PDF as stale
+     on this point and use `STATUSCODE` everywhere — the bronze Pydantic schema (Phase 5a)
+     and any downstream code must match the actual key, not the documented key.
+
+  B. RESULT.COLUMNS values are UPPERCASE in the response.
+     The Implementation Notes in the PDF describe columns in lowercase (e.g.
+     "centercd, producttypeshorttxt"); the actual response returns "CENTERCD",
+     "PRODUCTTYPESHORTTXT". Tests in this collection lowercase before comparing
+     to stay robust if FDA ever normalizes the casing. Pydantic schemas should
+     plan to lowercase column names at validation time (or use case-insensitive
+     aliases) for stable downstream field names.
+
+  C. MESSAGE is the literal string "success" on a successful response (not a
+     human-readable description as the "string" placeholder in the PDF implies).
+
+  Backend stack observation: server is Microsoft-IIS/10.0 / ASP.NET, fronted by
+  AWS ALB (sticky-session cookies AWSALB / AWSALBCORS / AWSALBTG visible in
+  response headers). HSTS enforced (strict-transport-security: max-age=31536000).
+  No Cache-Control header — caching is API-internal, keyed by request URL +
+  signature, not surfaced in HTTP cache headers.

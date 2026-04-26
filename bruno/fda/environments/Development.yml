@@ -1,0 +1,16 @@
+name: Development
+variables:
+  - secret: true
+    name: FDA_AUTHORIZATION_USER
+  - secret: true
+    name: FDA_AUTHORIZATION_KEY
+  - name: fda_root_uri
+    value: https://www.accessdata.fda.gov/rest/iresapi
+  - name: event_id
+    value: "98815"
+  - name: product_id
+    value: "219875"
+  - name: edited_event_id
+    value: "25159"
+  - name: edited_product_id
+    value: "25314"

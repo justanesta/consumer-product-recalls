@@ -1,0 +1,7 @@
+info:
+  name: Incremental Extraction
+  type: folder
+  seq: 3
+
+request:
+  auth: inherit
