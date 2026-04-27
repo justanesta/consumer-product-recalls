@@ -1,0 +1,13 @@
+source_name: fda
+source_type: rest_api
+base_url: https://www.accessdata.fda.gov/rest/iresapi
+# Longer than CPSC — paginated POST with up to 5000 rows per request
+timeout_seconds: 60.0
+rate_limit_rps: null
+# Incremental watermark is EVENTLMD, filtered as MM/DD/YYYY (finding H/I)
+incremental_filter_param: eventlmdfrom
+incremental_filter_format: "%m/%d/%Y"
+default_lookback_days: 1
+credentials:
+  header_user: fda_authorization_user
+  header_key: fda_authorization_key

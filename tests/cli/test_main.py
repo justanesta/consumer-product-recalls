@@ -98,3 +98,88 @@ def test_extract_unknown_source_exits_with_error() -> None:
     result = runner.invoke(app, ["extract", "unknown_source"])
     assert result.exit_code == 1
     assert "Unknown source" in result.output
+
+
+def test_extract_fda_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result(fetched=3, loaded=3)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.fda.FdaExtractor", return_value=mock_extractor),
+    ):
+        result = runner.invoke(app, ["extract", "fda"])
+
+    assert result.exit_code == 0
+    assert "fda:" in result.output
+    assert "fetched=3" in result.output
+    assert "loaded=3" in result.output
+    assert "rejected=0" in result.output
+
+
+def test_extract_fda_lookback_days_updates_watermark(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result()
+    mock_conn = MagicMock()
+    mock_extractor._engine.begin.return_value.__enter__ = MagicMock(return_value=mock_conn)
+    mock_extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.fda.FdaExtractor", return_value=mock_extractor),
+    ):
+        result = runner.invoke(app, ["extract", "fda", "--lookback-days", "7"])
+
+    assert result.exit_code == 0
+    mock_conn.execute.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# deep-rescan command
+# ---------------------------------------------------------------------------
+
+
+def test_deep_rescan_fda_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_loader = MagicMock()
+    mock_loader.run.return_value = _fake_run_result(fetched=150, loaded=149, rejected_validate=1)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.fda.FdaDeepRescanLoader", return_value=mock_loader),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "deep-rescan",
+                "fda",
+                "--start-date",
+                "2026-01-01",
+                "--end-date",
+                "2026-04-26",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "fda deep-rescan" in result.output
+    assert "fetched=150" in result.output
+    assert "loaded=149" in result.output
+    assert "rejected=1" in result.output
+    mock_loader.set_date_range.assert_called_once()
+
+
+def test_deep_rescan_unknown_source_exits_with_error() -> None:
+    result = runner.invoke(
+        app,
+        ["deep-rescan", "unknown", "--start-date", "2026-01-01", "--end-date", "2026-04-26"],
+    )
+    assert result.exit_code == 1
+    assert "not implemented" in result.output

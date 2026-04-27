@@ -1,0 +1,66 @@
+name: Deep Rescan FDA Recalls
+
+# Required by ADR 0023: FDA archive migration re-touches old records,
+# so a weekly rescan is needed to capture content changes in old records.
+# No cron yet — cron turns on in Phase 7.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Window start date (YYYY-MM-DD)"
+        required: true
+      end_date:
+        description: "Window end date (YYYY-MM-DD, default: today)"
+        required: false
+        default: ""
+
+jobs:
+  deep-rescan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
+          [[ -n "$R2_BUCKET_NAME" ]] || (echo "::error::R2_BUCKET_NAME secret is missing" && exit 1)
+          [[ -n "$R2_ACCOUNT_ID" ]] || (echo "::error::R2_ACCOUNT_ID secret is missing" && exit 1)
+          [[ -n "$R2_ACCESS_KEY_ID" ]] || (echo "::error::R2_ACCESS_KEY_ID secret is missing" && exit 1)
+          [[ -n "$R2_SECRET_ACCESS_KEY" ]] || (echo "::error::R2_SECRET_ACCESS_KEY secret is missing" && exit 1)
+          [[ -n "$FDA_AUTHORIZATION_USER" ]] || (echo "::error::FDA_AUTHORIZATION_USER secret is missing" && exit 1)
+          [[ -n "$FDA_AUTHORIZATION_KEY" ]] || (echo "::error::FDA_AUTHORIZATION_KEY secret is missing" && exit 1)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          FDA_AUTHORIZATION_USER: ${{ secrets.FDA_AUTHORIZATION_USER }}
+          FDA_AUTHORIZATION_KEY: ${{ secrets.FDA_AUTHORIZATION_KEY }}
+
+      - name: Resolve end date
+        id: dates
+        run: |
+          END="${{ github.event.inputs.end_date }}"
+          if [[ -z "$END" ]]; then
+            END=$(date -u +%Y-%m-%d)
+          fi
+          echo "end_date=$END" >> "$GITHUB_OUTPUT"
+
+      - name: Run FDA deep rescan
+        run: >
+          uv run python -m src.cli deep-rescan fda
+          --start-date "${{ github.event.inputs.start_date }}"
+          --end-date "${{ steps.dates.outputs.end_date }}"
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          FDA_AUTHORIZATION_USER: ${{ secrets.FDA_AUTHORIZATION_USER }}
+          FDA_AUTHORIZATION_KEY: ${{ secrets.FDA_AUTHORIZATION_KEY }}
