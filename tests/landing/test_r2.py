@@ -263,6 +263,30 @@ def test_land_error_response_returns_key_in_errors_partition() -> None:
     assert payload["response_headers"] == {"retry-after": "60"}
     assert payload["response_body"] == "Too Many Requests"
     assert "captured_at" in payload
+    # Defaults when caller doesn't pass method/body (GET-only sources)
+    assert payload["request_method"] == "GET"
+    assert payload["request_body"] is None
+
+
+def test_land_error_response_persists_method_and_body_for_post_sources() -> None:
+    import gzip
+    import json
+
+    client, mock_s3 = _make_client()
+    key = client.land_error_response(
+        source="fda",
+        request_method="POST",
+        request_url="https://www.accessdata.fda.gov/rest/iresapi/recalls/",
+        request_body="payLoad=%7B%22displaycolumns%22%3A+%22recalleventid%22%7D",
+        status_code=429,
+        response_headers={"retry-after": "60"},
+        response_body="Too Many Requests",
+    )
+
+    assert key.startswith("fda/errors/")
+    payload = json.loads(gzip.decompress(mock_s3.put_object.call_args.kwargs["Body"]))
+    assert payload["request_method"] == "POST"
+    assert payload["request_body"] == "payLoad=%7B%22displaycolumns%22%3A+%22recalleventid%22%7D"
 
 
 def test_land_error_response_raises_transient_error_on_client_error() -> None:

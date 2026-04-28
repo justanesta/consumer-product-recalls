@@ -73,6 +73,11 @@ def promote(r2_key: _R2KeyArg, output: _OutputArg) -> None:
     except ValueError:
         reason = "Unknown"
 
+    # Defaults preserve backwards compatibility with captures predating the
+    # method/body fields (CPSC artifacts before the FDA work).
+    request_method: str = captured.get("request_method", "GET")
+    request_body: str | None = captured.get("request_body")
+
     # vcrpy cassette format: header values are lists
     response_headers = {k: [v] for k, v in captured["response_headers"].items()}
 
@@ -80,9 +85,9 @@ def promote(r2_key: _R2KeyArg, output: _OutputArg) -> None:
         "interactions": [
             {
                 "request": {
-                    "body": None,
+                    "body": request_body,
                     "headers": {},
-                    "method": "GET",
+                    "method": request_method,
                     "uri": captured["request_url"],
                 },
                 "response": {
@@ -100,6 +105,7 @@ def promote(r2_key: _R2KeyArg, output: _OutputArg) -> None:
     output.write_text(yaml.dump(cassette, default_flow_style=False, sort_keys=False))
 
     typer.echo(f"Cassette written: {output}")
+    typer.echo(f"  Method:      {request_method}")
     typer.echo(f"  URL:         {captured['request_url']}")
     typer.echo(f"  Status:      {status_code} {reason}")
     typer.echo(f"  Captured at: {captured['captured_at']}")

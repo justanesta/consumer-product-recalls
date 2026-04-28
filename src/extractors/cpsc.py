@@ -243,6 +243,7 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
         try:
             self._r2_client.land_error_response(
                 source=_CPSC_SOURCE,
+                request_method=response.request.method,
                 request_url=url,
                 status_code=response.status_code,
                 response_headers=dict(response.headers),

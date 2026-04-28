@@ -145,6 +145,8 @@ class R2LandingClient:
         status_code: int,
         response_headers: dict[str, str],
         response_body: str,
+        request_method: str = "GET",
+        request_body: str | None = None,
     ) -> str:
         """
         Capture a non-2xx HTTP response to R2 for future cassette promotion.
@@ -152,8 +154,14 @@ class R2LandingClient:
         Written to {source}/errors/{YYYY-MM-DD}/{uuid}_{status_code}.json.gz,
         kept separate from successful raw landings for easy discovery.
 
-        The captured JSON includes enough context (URL, headers, body) for
-        scripts/promote_error_to_cassette.py to build a VCR cassette from it.
+        The captured JSON includes enough context (method, URL, request body,
+        response headers, response body) for scripts/promote_error_to_cassette.py
+        to build a VCR cassette that VCR will match against on replay.
+
+        request_method/request_body default to GET/None for backwards
+        compatibility with GET-only sources (e.g., CPSC). POST-based sources
+        like FDA must pass both so the generated cassette matches the live
+        request signature.
 
         Raises:
             TransientExtractionError: Wraps boto3/R2 errors. Callers should
@@ -162,7 +170,9 @@ class R2LandingClient:
         payload = {
             "captured_at": datetime.now(UTC).isoformat(),
             "source": source,
+            "request_method": request_method,
             "request_url": request_url,
+            "request_body": request_body,
             "status_code": status_code,
             "response_headers": response_headers,
             "response_body": response_body,

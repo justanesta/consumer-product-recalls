@@ -107,6 +107,11 @@ _MAX_INCREMENTAL_RECORDS = 5_000
 
 _RECALLS_ENDPOINT = "/recalls/"
 
+# FDA's own iRES API documentation (Python sample code) sets this exact User-Agent.
+# Sending the default `python-httpx/X.Y.Z` value is suspected to trigger FDA's
+# anti-abuse throttle on the very first request — finding N in api_observations.md.
+_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
 # FDA STATUSCODE semantics (finding A / finding K / finding K extension):
 _STATUS_SUCCESS = 400  # bulk POST success with records
 _STATUS_EMPTY = 412  # bulk POST empty result — no RESULT key present
@@ -276,7 +281,16 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
         }
         url = f"{self.base_url}{_RECALLS_ENDPOINT}?signature={int(time.time())}"
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
+            # follow_redirects=True: FDA iRES returns 302 redirects on the bulk POST
+            # endpoint; Bruno's working request sets followRedirects: true (max 5).
+            # User-Agent override: the default `python-httpx/...` string is a likely
+            # bot-fingerprint signal for FDA's anti-abuse layer — the value below
+            # matches FDA's own Python sample code.
+            with httpx.Client(
+                timeout=self.timeout_seconds,
+                follow_redirects=True,
+                headers={"User-Agent": _USER_AGENT},
+            ) as client:
                 response = client.post(
                     url,
                     data={"payLoad": json.dumps(payload)},
@@ -289,6 +303,21 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
             retry_after = float(response.headers.get("Retry-After", 60))
             self._capture_error_response(url, response)
             raise RateLimitError(retry_after=retry_after)
+
+        # FDA anti-abuse detection: the iRES server signals throttling by redirecting
+        # bulk POST requests (302) to /apology_objects/abuse-detection-apology.html
+        # instead of returning a JSON response. Detected by Content-Type=text/html
+        # (the API normally returns application/json). Raise ExtractionError so
+        # tenacity does NOT retry — retries deepen the throttle and extend the block.
+        content_type = response.headers.get("Content-Type", "")
+        if "text/html" in content_type:
+            self._capture_error_response(url, response)
+            raise ExtractionError(
+                f"FDA anti-abuse throttle detected (HTTP {response.status_code}, "
+                "HTML response in place of JSON). Wait at least 30 minutes before "
+                "retrying. Caused by too many rapid requests."
+            )
+
         if response.status_code != 200:
             self._capture_error_response(url, response)
             raise TransientExtractionError(f"FDA HTTP {response.status_code}")
@@ -336,10 +365,20 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
         }
 
     def _capture_error_response(self, url: str, response: httpx.Response) -> None:
+        # FDA POSTs a form-encoded payLoad= body — capture it so promote_error_to_
+        # cassette.py can emit a cassette VCR will match against on replay.
+        request_body: str | None = None
+        if response.request.content:
+            try:
+                request_body = response.request.content.decode("utf-8")
+            except UnicodeDecodeError:
+                request_body = None
         try:
             self._r2_client.land_error_response(
                 source=_FDA_SOURCE,
+                request_method=response.request.method,
                 request_url=url,
+                request_body=request_body,
                 status_code=response.status_code,
                 response_headers=dict(response.headers),
                 response_body=response.text,
@@ -369,7 +408,7 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
         )
 
 
-class FdaDeepRescanLoader(RestApiExtractor[FdaRecord]):
+class FdaDeepRescanLoader(FdaExtractor):
     """
     Historical / deep-rescan loader for FDA iRES records.
 
@@ -383,24 +422,12 @@ class FdaDeepRescanLoader(RestApiExtractor[FdaRecord]):
     Used by the deep-rescan-fda.yml GitHub Actions workflow (ADR 0023).
     """
 
-    source_name: str = _FDA_SOURCE
-    settings: Settings
-
-    _engine: sa.Engine = PrivateAttr()
-    _r2_client: R2LandingClient = PrivateAttr()
-    _current_landing_path: str = PrivateAttr(default="")
-
     # Date range set by caller before run()
     _start_date: date = PrivateAttr()
     _end_date: date = PrivateAttr()
 
     def model_post_init(self, __context: Any) -> None:
-        self._engine = sa.create_engine(
-            self.settings.neon_database_url.get_secret_value(),
-            pool_pre_ping=True,
-        )
-        self._r2_client = R2LandingClient(self.settings)
-        # Default to today if not set by caller
+        super().model_post_init(__context)
         self._start_date = datetime.now(UTC).date() - timedelta(days=90)
         self._end_date = datetime.now(UTC).date()
 
@@ -413,62 +440,8 @@ class FdaDeepRescanLoader(RestApiExtractor[FdaRecord]):
         start_str = self._start_date.strftime("%m/%d/%Y")
         end_str = self._end_date.strftime("%m/%d/%Y")
         filter_str = f"[{{'eventlmdfrom':'{start_str}'}},{{'eventlmdto':'{end_str}'}}]"
-        logger.info(
-            "fda.deep_rescan.extract",
-            start_date=start_str,
-            end_date=end_str,
-        )
-        # sort=recalleventid asc for deterministic, resumable page boundaries
+        logger.info("fda.deep_rescan.extract", start_date=start_str, end_date=end_str)
         return self._paginate(filter_str, sort="recalleventid", sortorder="asc")
-
-    def land_raw(self, raw_records: list[dict[str, Any]]) -> str:
-        content = json.dumps(raw_records, default=str).encode("utf-8")
-        path = self._r2_client.land(source=_FDA_SOURCE, content=content, suffix="json")
-        self._current_landing_path = path
-        return path
-
-    def validate_records(
-        self, raw_records: list[dict[str, Any]]
-    ) -> tuple[list[FdaRecord], list[QuarantineRecord]]:
-        valid: list[FdaRecord] = []
-        quarantined: list[QuarantineRecord] = []
-        for record in raw_records:
-            try:
-                valid.append(FdaRecord.model_validate(record))
-            except ValidationError as exc:
-                quarantined.append(
-                    QuarantineRecord(
-                        source_recall_id=str(record.get("PRODUCTID")) or None,
-                        raw_record=record,
-                        failure_reason=str(exc),
-                        failure_stage="validate_records",
-                        raw_landing_path=self._current_landing_path,
-                    )
-                )
-        return valid, quarantined
-
-    def check_invariants(
-        self, records: list[FdaRecord]
-    ) -> tuple[list[FdaRecord], list[QuarantineRecord]]:
-        passing: list[FdaRecord] = []
-        quarantined: list[QuarantineRecord] = []
-        for record in records:
-            failure = check_null_source_id(record.source_recall_id)
-            if not failure and record.recall_initiation_dt is not None:
-                failure = check_date_sanity(record.recall_initiation_dt, "recall_initiation_dt")
-            if failure:
-                quarantined.append(
-                    QuarantineRecord(
-                        source_recall_id=record.source_recall_id,
-                        raw_record=record.model_dump(mode="json"),
-                        failure_reason=failure,
-                        failure_stage="invariants",
-                        raw_landing_path=self._current_landing_path,
-                    )
-                )
-            else:
-                passing.append(record)
-        return passing, quarantined
 
     def load_bronze(
         self,
@@ -478,110 +451,6 @@ class FdaDeepRescanLoader(RestApiExtractor[FdaRecord]):
     ) -> int:
         loader = BronzeLoader(bronze_table=_fda_bronze, rejected_table=_fda_rejected)
         with self._engine.begin() as conn:
-            # Deep rescan does NOT update the source_watermarks cursor — the
-            # incremental extractor owns the watermark exclusively.
+            # Does NOT update source_watermarks — the incremental extractor owns the
+            # watermark exclusively.
             return loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
-
-    # --- Shared helpers (same as FdaExtractor) ---
-
-    def _paginate(
-        self,
-        filter_str: str,
-        sort: str = "recalleventid",
-        sortorder: str = "asc",
-    ) -> list[dict[str, Any]]:
-        all_records: list[dict[str, Any]] = []
-        start = 1
-        while True:
-            page = self._fetch_page(
-                filter_str=filter_str, start=start, sort=sort, sortorder=sortorder
-            )
-            all_records.extend(page)
-            if len(page) < _PAGE_SIZE:
-                break
-            start += _PAGE_SIZE
-        return all_records
-
-    def _fetch_page(
-        self,
-        filter_str: str,
-        start: int = 1,
-        sort: str = "recalleventid",
-        sortorder: str = "asc",
-    ) -> list[dict[str, Any]]:
-        payload = {
-            "displaycolumns": _DISPLAY_COLUMNS,
-            "filter": filter_str,
-            "start": start,
-            "rows": _PAGE_SIZE,
-            "sort": sort,
-            "sortorder": sortorder,
-        }
-        url = f"{self.base_url}{_RECALLS_ENDPOINT}?signature={int(time.time())}"
-        try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                response = client.post(
-                    url,
-                    data={"payLoad": json.dumps(payload)},
-                    headers=self._auth_headers(),
-                )
-        except httpx.TransportError as exc:
-            raise TransientExtractionError(f"FDA network error: {exc}") from exc
-
-        if response.status_code == 429:
-            retry_after = float(response.headers.get("Retry-After", 60))
-            self._capture_error_response(url, response)
-            raise RateLimitError(retry_after=retry_after)
-        if response.status_code != 200:
-            self._capture_error_response(url, response)
-            raise TransientExtractionError(f"FDA HTTP {response.status_code}")
-
-        return self._parse_bulk_post_response(response.json(), url)
-
-    def _parse_bulk_post_response(self, body: dict[str, Any], url: str) -> list[dict[str, Any]]:
-        status = body.get("STATUSCODE")
-        if status == _STATUS_SUCCESS:
-            result = body.get("RESULT", [])
-            if not isinstance(result, list):
-                raise TransientExtractionError(
-                    f"FDA bulk POST: expected RESULT to be a list, got {type(result)!r}"
-                )
-            return result
-        if status == _STATUS_EMPTY:
-            return []
-        if status == _STATUS_AUTH_DENIED:
-            raise AuthenticationError(
-                f"FDA iRES authorization denied (STATUSCODE {status}): {body.get('MESSAGE')}"
-            )
-        raise ExtractionError(
-            f"FDA iRES non-retryable error (STATUSCODE {status}): {body.get('MESSAGE')} — "
-            f"request URL: {url}"
-        )
-
-    def _auth_headers(self) -> dict[str, str]:
-        user = self.settings.fda_authorization_user
-        key = self.settings.fda_authorization_key
-        if user is None or key is None:
-            raise AuthenticationError(
-                "FDA_AUTHORIZATION_USER and FDA_AUTHORIZATION_KEY must be set in environment"
-            )
-        return {
-            "Authorization-User": user.get_secret_value(),
-            "Authorization-Key": key.get_secret_value(),
-        }
-
-    def _capture_error_response(self, url: str, response: httpx.Response) -> None:
-        try:
-            self._r2_client.land_error_response(
-                source=_FDA_SOURCE,
-                request_url=url,
-                status_code=response.status_code,
-                response_headers=dict(response.headers),
-                response_body=response.text,
-            )
-        except Exception:
-            logger.warning(
-                "fda.error_capture_failed",
-                status_code=response.status_code,
-                url=url,
-            )

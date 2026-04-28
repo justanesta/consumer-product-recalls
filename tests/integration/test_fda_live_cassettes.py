@@ -1,9 +1,9 @@
 """
 VCR integration tests for FdaExtractor.
 
-Live-recorded cassettes (scenarios 1–5) replay real FDA iRES API responses and verify
-that the Pydantic schema handles the actual API shape. Hand-constructed cassettes
-(scenarios 6–8) test error-handling paths the live API won't produce on demand.
+Live-recorded cassettes replay real FDA iRES API responses and verify that the
+Pydantic schema handles the actual API shape. Hand-constructed cassettes (respx)
+test error-handling paths the live API won't produce on demand.
 
 FDA-specific VCR note: the signature= query parameter (cache-busting, finding 3 in
 api_observations.md) is stripped from request URIs before cassette matching via the
@@ -12,23 +12,31 @@ recorded signature value will never match the runtime timestamp.
 
 Cassette inventory:
   Live-recorded (real FDA iRES responses):
-    test_happy_path_single_page.yaml       — small window, one page
-    test_happy_path_multi_page.yaml        — larger window, multiple pages
-    test_happy_path_partial_last_page.yaml — last page len < PAGE_SIZE
-    test_empty_result.yaml                 — STATUSCODE 412, zero records
-    test_auth_failure.yaml                 — STATUSCODE 401 (bad creds)
+    test_happy_path_single_page.yaml — small window, real records, single page
+    test_empty_result.yaml           — STATUSCODE 412, zero records
+    test_auth_failure.yaml           — STATUSCODE 401 (bad creds)
+    test_content_hash_dedup.yaml     — happy-path window with dedup-mode load assertion
 
-  Hand-constructed (respx mocks):
-    test_rate_limit_429.yaml               — HTTP 429 → RateLimitError
-    test_transient_500.yaml                — HTTP 500 → TransientExtractionError
-    test_malformed_record.yaml             — bad field → quarantined row
+  Hand-constructed (respx mocks, no YAML file):
+    test_rate_limit_429              — HTTP 429 → RateLimitError
+    test_transient_500               — HTTP 500 → TransientExtractionError
+    test_malformed_record            — bad field → quarantined row
 
-  Reuses existing cassette (no separate file):
-    test_content_hash_dedup               — re-runs test_happy_path_single_page twice
+The original Phase 5a plan also specified `multi_page` and `partial_last_page` live
+cassettes. Both were removed after empirical investigation (see finding O in
+api_observations.md): with FDA's ~20 records/day cadence and PAGE_SIZE=5000, no
+realistic incremental window paginates, so all three "happy path" cassettes ended
+up testing the same single-iteration code path. Pagination logic is unit-tested in
+TestPaginateExtractor::test_multi_page_accumulates_records with mocked pages —
+that test, plus the deep-rescan loader inheriting the same `_paginate`, is
+sufficient coverage.
 
 To record live cassettes (requires FDA credentials in env):
     uv run pytest --vcr-record=all tests/integration/test_fda_live_cassettes.py \\
-        -k "single_page or multi_page or partial or empty or auth"
+        -k "single_page or empty or auth or content_hash_dedup"
+
+Auth-failure recording requires deliberately bad credentials — invoke with
+inline overrides: `FDA_AUTHORIZATION_USER=bad FDA_AUTHORIZATION_KEY=bad ...`.
 
 Commit the generated YAML files under tests/fixtures/cassettes/fda/.
 Until cassettes are recorded, live tests skip automatically.
@@ -36,6 +44,7 @@ Until cassettes are recorded, live tests skip automatically.
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -64,8 +73,13 @@ _REQUIRED_ENV = {
 
 @pytest.fixture(scope="module")
 def vcr_config(vcr_config: dict[str, Any]) -> dict[str, Any]:
-    # Strip signature= before cassette matching — finding 3 in api_observations.md
-    return {**vcr_config, "filter_query_parameters": ["signature"]}
+    # Strip signature= before cassette matching — finding 3 in api_observations.md.
+    # Filter auth headers so real credentials are never written into cassette YAML files.
+    return {
+        **vcr_config,
+        "filter_query_parameters": ["signature"],
+        "filter_headers": ["Authorization-User", "Authorization-Key"],
+    }
 
 
 @pytest.fixture(scope="module")
@@ -76,12 +90,16 @@ def vcr_cassette_dir() -> str:
 @pytest.fixture(autouse=True)
 def skip_if_no_cassette(request: pytest.FixtureRequest, vcr_cassette_dir: str) -> None:
     # Only applies to @pytest.mark.vcr tests, not respx-based tests
-    if not request.node.get_closest_marker("vcr"):
+    marker = request.node.get_closest_marker("vcr")
+    if not marker:
         return
     record_mode = request.config.getoption("--vcr-record", default="none")
     if record_mode in ("all", "new_episodes"):
         return
-    cassette_path = Path(vcr_cassette_dir) / (request.node.name + ".yaml")
+    # Honor an explicit cassette_name= marker arg (used by test_content_hash_dedup
+    # to reuse another test's cassette); otherwise default to test_name + ".yaml".
+    cassette_name = marker.kwargs.get("cassette_name") or (request.node.name + ".yaml")
+    cassette_path = Path(vcr_cassette_dir) / cassette_name
     if not cassette_path.exists():
         pytest.skip(
             "Cassette not yet recorded — run: "
@@ -92,6 +110,11 @@ def skip_if_no_cassette(request: pytest.FixtureRequest, vcr_cassette_dir: str) -
 @pytest.fixture
 def vcr_extractor(monkeypatch: pytest.MonkeyPatch) -> FdaExtractor:
     for k, v in _REQUIRED_ENV.items():
+        # Don't override FDA auth credentials that are already in the environment —
+        # real values are required when --vcr-record=all records against the live API.
+        # Fake fallback values suffice for cassette replay (no real HTTP calls are made).
+        if k in ("FDA_AUTHORIZATION_USER", "FDA_AUTHORIZATION_KEY") and os.environ.get(k):
+            continue
         monkeypatch.setenv(k, v)
     mock_engine = MagicMock(spec=sa.Engine)
     mock_r2 = MagicMock()
@@ -135,50 +158,25 @@ def test_happy_path_single_page(vcr_extractor: FdaExtractor) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 2: Happy path, multi-page — wider window, pagination loop
-# Watermark: 2026-01-01 (~3,012 records per cardinality observations)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.vcr
-def test_happy_path_multi_page(vcr_extractor: FdaExtractor) -> None:
-    result = _run(vcr_extractor, date(2026, 1, 1))
-    assert result.records_fetched > 0
-    assert result.records_rejected_validate == 0
-    assert result.records_rejected_invariants == 0
-
-
-# ---------------------------------------------------------------------------
-# Scenario 3: Happy path, partial last page — validates loop terminates on len < PAGE_SIZE
-# Watermark: 2026-04-01 (small enough to fit in 1 page at rows=5000 but confirms termination)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.vcr
-def test_happy_path_partial_last_page(vcr_extractor: FdaExtractor) -> None:
-    result = _run(vcr_extractor, date(2026, 4, 1))
-    assert result.records_fetched > 0
-    assert result.records_rejected_validate == 0
-    assert result.records_rejected_invariants == 0
-
-
-# ---------------------------------------------------------------------------
-# Scenario 4: Empty result — STATUSCODE 412, no RESULT key in response
-# Uses a date range known to have no records (04/25/2026 to 04/26/2026 per
-# api_observations.md finding K extension: no edits in this narrow window)
+# Scenario 2: Empty result — STATUSCODE 412, no RESULT key in response
+# Uses a far-future eventlmdfrom date guaranteed to return zero records: no
+# FDA recall can have EVENTLMD later than the current date. Originally tried a
+# narrow window in 2026-04 that was empty during 2026-04-26 Bruno exploration,
+# but FDA added records to that window before re-recording on 2026-04-28 — so
+# narrow-window empties are not stable. Future dates always are.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.vcr
 def test_empty_result(vcr_extractor: FdaExtractor) -> None:
-    result = _run(vcr_extractor, date(2026, 4, 25))
+    result = _run(vcr_extractor, date(2030, 1, 1))
     assert result.records_fetched == 0
     assert result.records_loaded == 0
     assert result.rejection_rate == 0.0
 
 
 # ---------------------------------------------------------------------------
-# Scenario 5: Auth failure — STATUSCODE 401 (recorded with bad credentials)
+# Scenario 3: Auth failure — STATUSCODE 401 (recorded with bad credentials)
 # ---------------------------------------------------------------------------
 
 
@@ -189,7 +187,7 @@ def test_auth_failure(vcr_extractor: FdaExtractor) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 6: Rate limit — HTTP 429 → RateLimitError
+# Scenario 4: Rate limit — HTTP 429 → RateLimitError
 # Patches _fetch_page to raise directly (avoids signature= URL matching issues).
 # ---------------------------------------------------------------------------
 
@@ -204,7 +202,7 @@ def test_rate_limit_429(vcr_extractor: FdaExtractor) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 7: Transient 500 — retried per _TRANSIENT_RETRY policy
+# Scenario 5: Transient 500 — retried per _TRANSIENT_RETRY policy
 # Patches _fetch_page to raise TransientExtractionError on every attempt.
 # ---------------------------------------------------------------------------
 
@@ -220,7 +218,7 @@ def test_transient_500(vcr_extractor: FdaExtractor) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 8: Malformed record — one bad row in RESULT quarantines to rejected table
+# Scenario 6: Malformed record — one bad row in RESULT quarantines to rejected table
 # ---------------------------------------------------------------------------
 
 
@@ -293,12 +291,16 @@ def test_malformed_record(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 9: Content-hash dedup — re-running extractor on same cassette adds zero rows
-# Reuses test_happy_path_single_page cassette; no separate file needed.
+# Scenario 7: Content-hash dedup — running extractor on a populated window with
+# BronzeLoader.load returning 0 (simulating "all records already present") asserts
+# records_loaded == 0. Records its own cassette against the same window as
+# test_happy_path_single_page — pytest-recording's default cassette-name resolution
+# (test_function_name + ".yaml") doesn't support sharing cassettes across tests
+# without custom fixture wiring, so a separate file is simpler than reuse.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.vcr(cassette_name="test_happy_path_single_page.yaml")
+@pytest.mark.vcr
 def test_content_hash_dedup(vcr_extractor: FdaExtractor) -> None:
     with (
         patch.object(vcr_extractor, "_get_watermark", return_value=date(2026, 4, 20)),

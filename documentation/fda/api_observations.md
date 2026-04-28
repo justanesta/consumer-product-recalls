@@ -327,6 +327,79 @@ Possible explanations (none confirmed):
 
 **Resolved 2026-04-26:** Tested against `RECALLEVENTID 25159` (Sutton Place Gourmet, 2002) — also returned zero history. The "test against an older event" follow-up confirmed the general-sparseness conclusion across time. **The history endpoints are not a viable lineage signal at any age of record, on any phase, on any product type.** The architectural revision to ADR 0007 stands as written: FDA gets bronze-snapshot synthesis like the other four sources.
 
+### N. Anti-abuse throttling: rapid request bursts trigger an HTML "Apology" redirect, not a 429
+
+Surfaced 2026-04-28 while attempting to record live VCR cassettes for the Phase 5a integration tests. Five rapid pytest invocations (5 test scenarios × ~5 tenacity retries × 2 hops per attempt = ~50 requests in ~90 seconds) triggered an FDA-side IP throttle. Threshold and recovery time are not yet known.
+
+**Observed throttle response shape:**
+
+The bulk POST endpoint stops returning JSON. Instead, it returns:
+
+```
+HTTP/1.1 302 Moved Temporarily
+Location: /apology_objects/abuse-detection-apology.html
+Content-Type: text/html
+```
+
+with an HTML body whose `<title>` is `FDA Apology` and whose JS body redirects to `/apology_objects/excessive-requests-apology.html`. Following the 302 lands on `/apology_objects/abuse-detection-apology.html`, which itself returns **HTTP 404** (also `text/html`, also "FDA Apology" body). So a typical client experiences:
+
+```
+POST /rest/iresapi/recalls/ → 302 → GET /apology_objects/abuse-detection-apology.html → 404
+```
+
+Notable properties of the throttle response:
+
+- **No `Retry-After` header.** Standard RFC 6585 / RFC 7231 throttle signaling is absent. Clients cannot back off based on a server hint.
+- **No `429 Too Many Requests`.** The status code is 302 (then 404 after the redirect), not 429. Code paths that key off 429 to detect rate-limiting will miss this entirely.
+- **Cache-busting via the response query string.** The redirect destination URL contains a unique random suffix (e.g., `?0.6f0c2e17.1777379833.d552bfcd`), suggesting per-request server-side state.
+- **Persists across cache-busted POSTs.** Adding `signature=` (per finding 3) does not bypass the throttle — it's tied to client identity (IP, possibly auth user), not URL.
+- **Affects production credentials with valid auth.** The 401 auth-failure path is distinct; this throttle fires before any auth check.
+
+**Why this didn't surface during Bruno exploration (2026-04-26):** Bruno is interactive. Click → response → think → click again. Natural cadence is 5–10 requests/minute over a session. The pytest+tenacity recording attempt produced ~33 requests/minute sustained for 90 seconds — at least 3× the Bruno rate. The threshold sits between those two rates.
+
+**Implications for the extractor and production extraction:**
+
+1. **Detect by Content-Type, not status code.** `_fetch_page` checks `response.headers["Content-Type"]` for `text/html` and raises `ExtractionError` (not `TransientExtractionError`) so tenacity does **not** retry. Retrying makes the throttle worse and extends the block.
+2. **Production daily extraction will not trigger this** at the documented ~20 records/day cadence — one POST per cron run, well under any reasonable abuse threshold. The deep-rescan workflow (ADR 0023) is the higher-risk surface: paginating ~134K records at 5,000 rows/page = ~27 sequential POSTs. That should still be safe, but worth verifying empirically the first time it runs.
+3. **Cassette recording requires sequential, paced runs** rather than `-k "scenario1 or scenario2 or ..."` batching. One cassette at a time, with a delay between, is the safe pattern until the threshold is characterized.
+4. **Recovery is time-based, not request-based.** Retrying immediately after a throttle persists the block. Empirically: at least 30 minutes; characterizing this precisely is a follow-up.
+
+**Open questions (to be resolved as the API is exercised more, or via direct contact with FDA):**
+
+- What is the actual request-rate threshold? (e.g., requests per minute, per hour, per credential)
+- What is the recovery time? Fixed (e.g., 1 hour) or escalating with repeat offenses?
+- Is the throttle keyed on IP, on `Authorization-User`, or both?
+- Is there an FDA-supported way to request a higher rate limit for production extractors?
+
+These will be filled in when surfaced in normal use, or via email back from FDA's iRES support contact (if pursued). Until then, treat any HTML response from `/recalls/` as a hard "stop and wait" signal.
+
+### O. The cassette suite was trimmed: `multi_page` and `partial_last_page` removed as redundant
+
+Surfaced 2026-04-28 immediately after live cassette recording. The original Phase 5a plan specified four happy-path live cassettes — `single_page`, `multi_page`, `partial_last_page`, plus `empty_result` — assuming the matrix would meaningfully exercise different code paths in `_paginate`. Empirical recording showed otherwise.
+
+**Recorded reality at FDA's actual data volume:**
+
+| Test | Filter window | Records returned | HTTP calls in cassette | `_paginate` iterations |
+|---|---|---|---|---|
+| `test_happy_path_single_page` | 7 days | 168 | 1 | 1 |
+| `test_happy_path_partial_last_page` (deleted) | 27 days | ~700 | 1 | 1 |
+| `test_happy_path_multi_page` (deleted) | 4 months | 3,036 | 1 | 1 |
+
+All three terminated on the first iteration (`len(page) < PAGE_SIZE` immediately true). With `_PAGE_SIZE = 5000` and a daily delta of ~20 records per finding M's cardinality observations (~750/month, ~30K/year including archive-migration noise), a window has to be roughly **18+ months wide** before the loop iterates more than once. No realistic incremental-extraction window comes close.
+
+**Why the original matrix made sense in the plan but failed in practice:**
+
+The plan was authored before the empirical investigation that produced this document. It assumed FDA was a "paginated API" whose test matrix should mirror that — single / partial / multi pages. Once the cardinality numbers were measured, the only path that genuinely paginates against the live API is the deep-rescan loader (134K records → ~27 pages), which inherits the same `_paginate` from `FdaExtractor` and is therefore covered transitively when the incremental path is.
+
+**What replaces the deleted cassettes:**
+
+- Pagination loop logic is unit-tested via `tests/extractors/test_fda_extractor.py::TestPaginateExtractor::test_multi_page_accumulates_records`, which patches `_fetch_page` to return a 5,000-row page followed by a 1-row page and asserts the accumulator sums to 5,001. That is the actual loop logic, exercised deterministically.
+- The retained `test_happy_path_single_page` cassette catches schema-shape drift against the real API (the original purpose of cassette tests per ADR 0015) just as well as three near-identical cassettes would have, with one-third the bytes committed and zero misleading scenario names.
+
+**Implication for other Phase 5 sources (USDA, NHTSA, USCG):**
+
+Per-source cassette suites should be designed *after* Bruno exploration and an initial empirical extraction, not from a projected matrix. The plan's per-source-shape table (paginated vs flat-file vs HTML) is a good starting heuristic, but the precise scenario count and naming should be informed by what the API actually does at the source's data volume. See the corresponding update to the Phase 5 standing requirement in `project_scope/implementation_plan.md`.
+
 ---
 
 ## Cardinality observations
@@ -425,3 +498,4 @@ These will be filled in as more endpoints are exercised and as Phase 5a empirica
 - **`firmfeinum` cross-source firm anchor** — confirm `FIRMFEINUM` is consistently populated and stable across recalls for the same firm (ADR 0002 designates it the firm-resolution anchor).
 - **`displaycolumns` exhaustiveness** — empirically map which columns return what types when included in the `displaycolumns` parameter, especially for fields not yet exercised (e.g., `productdistributedquantity`, `codeinformation` text BLOB).
 - **ADR cleanup** — drop the `dt` suffix from `eventlmddt` and `productlmddt` references in ADR 0007 and ADR 0010 (the actual API columns are `EVENTLMD` and `PRODUCTLMD`).
+- **Anti-abuse throttle threshold and recovery time (finding N)** — observed 2026-04-28 during cassette recording. Need to characterize: actual requests-per-minute threshold, recovery duration, whether it keys on IP / `Authorization-User` / both, and whether FDA offers a higher-rate-limit tier for credentialed production extractors. Resolve via continued use of the API or direct email to FDA iRES support.

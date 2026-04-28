@@ -304,6 +304,22 @@ class TestCaptureErrorResponse:
             extractor._capture_error_response("https://example.com", response)
         assert any(e.get("event") == "fda.error_capture_failed" for e in captured)
 
+    def test_undecodable_request_body_falls_back_to_none(self, extractor: FdaExtractor) -> None:
+        # FDA POSTs form-encoded UTF-8, but the safety net handles arbitrary bytes
+        # (e.g., a corrupted body or a future binary content-type) without crashing.
+        # Real httpx.Request/Response so response.request.content is real bytes.
+        mock_r2: MagicMock = extractor._r2_client  # type: ignore[assignment]
+        invalid_utf8 = b"\xff\xfe\xfd"  # 0xff is never a valid UTF-8 lead byte
+        request = httpx.Request("POST", "https://example.com", content=invalid_utf8)
+        response = httpx.Response(500, request=request, content=b"error")
+
+        extractor._capture_error_response("https://example.com", response)
+
+        mock_r2.land_error_response.assert_called_once()
+        kwargs = mock_r2.land_error_response.call_args.kwargs
+        assert kwargs["request_body"] is None
+        assert kwargs["request_method"] == "POST"
+
 
 # ---------------------------------------------------------------------------
 # load_bronze — watermark update
@@ -562,6 +578,25 @@ class TestFetchPageExtractor:
         with respx.mock:
             respx.post(self._RECALLS_URL).mock(side_effect=httpx.ConnectError("network down"))
             with pytest.raises(TransientExtractionError, match="FDA network error"):
+                extractor._fetch_page(filter_str="[{}]")
+
+    def test_html_response_raises_extraction_error_for_abuse_detection(
+        self, extractor: FdaExtractor
+    ) -> None:
+        # FDA's anti-abuse layer responds with HTML "Apology" pages instead of JSON
+        # when an IP is throttled (finding N). The extractor must detect by
+        # Content-Type and raise ExtractionError so tenacity does NOT retry —
+        # retries deepen the throttle.
+        apology_html = "<html><title>FDA Apology</title><body>Excessive requests</body></html>"
+        with respx.mock:
+            respx.post(self._RECALLS_URL).mock(
+                return_value=httpx.Response(
+                    404,
+                    text=apology_html,
+                    headers={"Content-Type": "text/html"},
+                )
+            )
+            with pytest.raises(ExtractionError, match="anti-abuse throttle"):
                 extractor._fetch_page(filter_str="[{}]")
 
 
