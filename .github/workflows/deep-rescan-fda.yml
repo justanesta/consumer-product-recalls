@@ -53,7 +53,7 @@ jobs:
 
       - name: Run FDA deep rescan
         run: >
-          uv run python -m src.cli deep-rescan fda
+          uv run recalls deep-rescan fda
           --start-date "${{ github.event.inputs.start_date }}"
           --end-date "${{ steps.dates.outputs.end_date }}"
         env:

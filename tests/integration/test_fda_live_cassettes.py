@@ -194,6 +194,7 @@ def test_auth_failure(vcr_extractor: FdaExtractor) -> None:
 
 def test_rate_limit_429(vcr_extractor: FdaExtractor) -> None:
     with (
+        patch("time.sleep"),
         patch.object(vcr_extractor, "_fetch_page", side_effect=RateLimitError(retry_after=30.0)),
         pytest.raises(RateLimitError) as exc_info,
     ):
@@ -209,6 +210,7 @@ def test_rate_limit_429(vcr_extractor: FdaExtractor) -> None:
 
 def test_transient_500(vcr_extractor: FdaExtractor) -> None:
     with (
+        patch("time.sleep"),
         patch.object(
             vcr_extractor, "_fetch_page", side_effect=TransientExtractionError("HTTP 500")
         ),

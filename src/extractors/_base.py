@@ -3,6 +3,7 @@ from __future__ import annotations
 import abc
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -171,6 +172,16 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
         Returns count of rows actually inserted (dedup excluded).
         """
 
+    def _record_run(
+        self,
+        run_id: str,
+        started_at: datetime,
+        status: str,
+        result: ExtractionResult | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        """Write a row to extraction_runs. Override in concrete extractors that have a DB engine."""
+
     # --- Template orchestration ---
 
     def run(self) -> ExtractionResult:
@@ -182,9 +193,11 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
         Raises ExtractionAbortedError if batch rejection rate exceeds threshold.
         """
         run_id = str(uuid.uuid4())
+        started_at = datetime.now(UTC)
         structlog.contextvars.bind_contextvars(source=self.source_name, run_id=run_id)
         log = logger.bind(source=self.source_name, run_id=run_id)
 
+        result: ExtractionResult | None = None
         try:
             log.info("extraction.started")
 
@@ -238,13 +251,20 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
                     rate=result.rejection_rate,
                     threshold=self.rejection_threshold,
                 )
+                self._record_run(run_id, started_at, "aborted", result)
                 raise ExtractionAbortedError(
                     self.source_name, result.rejection_rate, self.rejection_threshold
                 )
 
             log.info("extraction.completed", **vars(result))
+            self._record_run(run_id, started_at, "success", result)
             return result
 
+        except ExtractionAbortedError:
+            raise
+        except Exception as exc:
+            self._record_run(run_id, started_at, "failed", error_message=str(exc))
+            raise
         finally:
             structlog.contextvars.unbind_contextvars("source", "run_id")
 

@@ -14,6 +14,7 @@ from src.config.settings import Settings
 from src.extractors._base import (
     AuthenticationError,
     ExtractionError,
+    ExtractionResult,
     RateLimitError,
     TransientExtractionError,
 )
@@ -612,3 +613,62 @@ class TestPaginateExtractor:
         with patch.object(extractor, "_fetch_page", side_effect=[page1, page2]):
             result = extractor._paginate("[{}]")
         assert len(result) == 5_001
+
+
+# ---------------------------------------------------------------------------
+# _record_run() — writes to extraction_runs
+# ---------------------------------------------------------------------------
+
+
+class TestRecordRun:
+    def _make_result(self, extractor: FdaExtractor) -> ExtractionResult:
+        from src.extractors._base import ExtractionResult
+
+        return ExtractionResult(
+            source="fda",
+            run_id="test-run-id",
+            records_fetched=10,
+            records_landed=10,
+            records_valid=9,
+            records_rejected_validate=1,
+            records_rejected_invariants=0,
+            records_loaded=9,
+            raw_landing_path=_FAKE_R2_PATH,
+        )
+
+    def test_success_inserts_row_with_counts(self, extractor: FdaExtractor) -> None:
+        from datetime import UTC, datetime
+
+        result = self._make_result(extractor)
+        started_at = datetime.now(UTC)
+
+        mock_conn = MagicMock()
+        extractor._engine.begin.return_value.__enter__ = lambda _: mock_conn  # type: ignore[attr-defined]
+        extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
+
+        extractor._record_run("test-run-id", started_at, "success", result)
+
+        mock_conn.execute.assert_called_once()
+        insert_call = mock_conn.execute.call_args[0][0]
+        assert str(insert_call.table) == "extraction_runs"
+
+    def test_failed_run_inserts_without_counts(self, extractor: FdaExtractor) -> None:
+        from datetime import UTC, datetime
+
+        started_at = datetime.now(UTC)
+        mock_conn = MagicMock()
+        extractor._engine.begin.return_value.__enter__ = lambda _: mock_conn  # type: ignore[attr-defined]
+        extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
+
+        extractor._record_run("test-run-id", started_at, "failed", error_message="boom")
+
+        mock_conn.execute.assert_called_once()
+
+    def test_db_error_does_not_propagate(self, extractor: FdaExtractor) -> None:
+        from datetime import UTC, datetime
+
+        started_at = datetime.now(UTC)
+        extractor._engine.begin.side_effect = RuntimeError("db down")  # type: ignore[attr-defined]
+
+        # Must not raise
+        extractor._record_run("test-run-id", started_at, "failed", error_message="original error")

@@ -38,9 +38,9 @@ jobs:
       - name: Run FDA extractor
         run: |
           if [[ -n "${{ github.event.inputs.lookback_days }}" ]]; then
-            uv run python -m src.cli extract fda --lookback-days "${{ github.event.inputs.lookback_days }}"
+            uv run recalls extract fda --lookback-days "${{ github.event.inputs.lookback_days }}"
           else
-            uv run python -m src.cli extract fda
+            uv run recalls extract fda
           fi
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}

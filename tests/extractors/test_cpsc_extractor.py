@@ -12,6 +12,7 @@ import sqlalchemy as sa
 from src.config.settings import Settings
 from src.extractors._base import (
     AuthenticationError,
+    ExtractionResult,
     RateLimitError,
     TransientExtractionError,
 )
@@ -371,3 +372,58 @@ class TestUpdateWatermark:
         new_date = date(2024, 6, 1)
         extractor._update_watermark(mock_conn, new_date)
         mock_conn.execute.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _record_run() — writes to extraction_runs
+# ---------------------------------------------------------------------------
+
+
+class TestRecordRun:
+    def _make_result(self) -> ExtractionResult:
+        return ExtractionResult(
+            source="cpsc",
+            run_id="test-run-id",
+            records_fetched=10,
+            records_landed=10,
+            records_valid=9,
+            records_rejected_validate=1,
+            records_rejected_invariants=0,
+            records_loaded=9,
+            raw_landing_path="cpsc/2024-01-01/test.json",
+        )
+
+    def test_success_inserts_row(self, extractor: CpscExtractor) -> None:
+        from datetime import UTC, datetime
+
+        result = self._make_result()
+        started_at = datetime.now(UTC)
+        mock_conn = MagicMock()
+        extractor._engine.begin.return_value.__enter__ = lambda _: mock_conn  # type: ignore[attr-defined]
+        extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
+
+        extractor._record_run("test-run-id", started_at, "success", result)
+
+        mock_conn.execute.assert_called_once()
+        insert_call = mock_conn.execute.call_args[0][0]
+        assert str(insert_call.table) == "extraction_runs"
+
+    def test_failed_run_inserts_without_counts(self, extractor: CpscExtractor) -> None:
+        from datetime import UTC, datetime
+
+        started_at = datetime.now(UTC)
+        mock_conn = MagicMock()
+        extractor._engine.begin.return_value.__enter__ = lambda _: mock_conn  # type: ignore[attr-defined]
+        extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
+
+        extractor._record_run("test-run-id", started_at, "failed", error_message="network timeout")
+
+        mock_conn.execute.assert_called_once()
+
+    def test_db_error_does_not_propagate(self, extractor: CpscExtractor) -> None:
+        from datetime import UTC, datetime
+
+        started_at = datetime.now(UTC)
+        extractor._engine.begin.side_effect = RuntimeError("db down")  # type: ignore[attr-defined]
+
+        extractor._record_run("test-run-id", started_at, "failed", error_message="original error")

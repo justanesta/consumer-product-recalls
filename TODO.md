@@ -25,3 +25,4 @@ Non-ADR-captured action items for this project. ADRs handle design decisions; th
   api_observations.md with a "Live extraction findings" section).
     - Any schema/extractor adjustments revealed by the live run go in this branch.                                           
   - That second PR is the "Phase 5a complete" milestone.
+- [ ] Create a development cheat sheet doc that outlines the most important commands, their associated tools, how they work, what they do and when to use them. Includes the uv in general, `uv run recalls` that wires into `src/cli/` via `[projects.scripts]` in `pyproject.toml`, `uv run alembic`, ruff check, ruff format, pyright, pytest, VCR test recording, dbt, Cloudflare R2 CLI, Bruno collections via CLI, Neon CLI and psql.

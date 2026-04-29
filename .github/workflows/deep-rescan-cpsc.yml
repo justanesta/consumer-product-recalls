@@ -33,7 +33,7 @@ jobs:
 
       - name: Run CPSC deep rescan
         run: >
-          uv run python -m src.cli extract cpsc
+          uv run recalls extract cpsc
           --lookback-days "${{ github.event.inputs.lookback_days }}"
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}

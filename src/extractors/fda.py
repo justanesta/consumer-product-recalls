@@ -19,6 +19,7 @@ from src.config.settings import (
 from src.extractors._base import (
     AuthenticationError,
     ExtractionError,
+    ExtractionResult,
     QuarantineRecord,
     RateLimitError,
     RestApiExtractor,
@@ -81,6 +82,22 @@ _source_watermarks = sa.Table(
     sa.Column("source", sa.Text, primary_key=True),
     sa.Column("last_cursor", sa.Text),
     sa.Column("updated_at", sa.TIMESTAMP(timezone=True)),
+)
+
+_extraction_runs = sa.Table(
+    "extraction_runs",
+    _metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("source", sa.Text),
+    sa.Column("started_at", sa.TIMESTAMP(timezone=True)),
+    sa.Column("finished_at", sa.TIMESTAMP(timezone=True)),
+    sa.Column("status", sa.Text),
+    sa.Column("records_extracted", sa.Integer),
+    sa.Column("records_inserted", sa.Integer),
+    sa.Column("records_rejected", sa.Integer),
+    sa.Column("run_id", sa.Text),
+    sa.Column("error_message", sa.Text),
+    sa.Column("raw_landing_path", sa.Text),
 )
 
 _FDA_SOURCE = "fda"
@@ -406,6 +423,35 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
             .where(_source_watermarks.c.source == _FDA_SOURCE)
             .values(last_cursor=new_date.isoformat(), updated_at=datetime.now(UTC))
         )
+
+    def _record_run(
+        self,
+        run_id: str,
+        started_at: datetime,
+        status: str,
+        result: ExtractionResult | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        row: dict[str, Any] = {
+            "source": _FDA_SOURCE,
+            "started_at": started_at,
+            "finished_at": datetime.now(UTC),
+            "status": status,
+            "run_id": run_id,
+            "error_message": error_message,
+        }
+        if result is not None:
+            row["records_extracted"] = result.records_fetched
+            row["records_inserted"] = result.records_loaded
+            row["records_rejected"] = (
+                result.records_rejected_validate + result.records_rejected_invariants
+            )
+            row["raw_landing_path"] = result.raw_landing_path
+        try:
+            with self._engine.begin() as conn:
+                conn.execute(_extraction_runs.insert().values(**row))
+        except Exception:
+            logger.warning("extraction_run.record_failed", run_id=run_id, status=status)
 
 
 class FdaDeepRescanLoader(FdaExtractor):
