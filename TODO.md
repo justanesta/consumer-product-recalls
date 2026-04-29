@@ -14,7 +14,7 @@ Non-ADR-captured action items for this project. ADRs handle design decisions; th
 - [x] **CPSC API filter re-validation.** Once bronze CPSC data collection surfaces records with populated `Hazards[].HazardType`/`HazardTypeID` or `ProductUPCs` fields, re-run `bruno/cpsc/data_exploration/search_by_hazard.yml` and `bruno/cpsc/data_exploration/search_by_upc.yml` to validate those filters. Current finding (2026-04-24): `Hazard=` targets `HazardType` which is consistently `""` across all sampled records; `UPCCodes=` appears non-functional (bogus input returns ~9,772 records — the apparent full dataset). Both request files document this in their `docs:` blocks. **UPC lead**: RecallNumber 26419 (Fisher & Paykel gas ranges) has 13 confirmed UPCs visible in the RecallDelimited XML response — verify whether the JSON endpoint also returns them in `ProductUPCs` for that record, then use one as a real test value for `search_by_upc.yml`.
 - [x] `docs/fda-prebronze-revision`: ADR 0007 + ADR 0010 revisions (small, focused, substantive)
 - [x] `feature/fda-cassettes-schema-extractor`: Phase 5a code work (schema, extractor, cassettes, migration, workflow)
-- [ ] `feature/fda-first-extraction`: 
+- [x] `feature/fda-first-extraction`: 
   - [ ] Run the Alembic migration against Neon main locally (uv run alembic upgrade head).                                     
     - Trigger the extract-fda.yml workflow via workflow_dispatch (workflow runs against repo secrets — NEON_DATABASE_URL     
   pointing at main, prod R2 bucket).                                                                                         
