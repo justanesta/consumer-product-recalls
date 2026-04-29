@@ -55,9 +55,15 @@ class BronzeLoader:
     BronzeLoader raises ValueError on the first record that violates this convention.
     """
 
-    def __init__(self, bronze_table: Table, rejected_table: Table) -> None:
+    def __init__(
+        self,
+        bronze_table: Table,
+        rejected_table: Table,
+        hash_exclude_fields: frozenset[str] = frozenset(),
+    ) -> None:
         self._bronze = bronze_table
         self._rejected = rejected_table
+        self._hash_exclude_fields = hash_exclude_fields
 
     def _fetch_existing_hashes(
         self,
@@ -126,7 +132,15 @@ class BronzeLoader:
                     f"{type(record).__name__} has no source_recall_id field. "
                     "All bronze schemas must declare source_recall_id."
                 )
-            hashed.append((str(rid), content_hash(row_data), record))
+            # hash_exclude_fields strips query artifacts (e.g. FDA's RID position counter)
+            # from the hash input without removing them from the DB row — row_data is
+            # written to the DB unchanged; only the hash computation sees the filtered dict.
+            hash_input = (
+                {k: v for k, v in row_data.items() if k not in self._hash_exclude_fields}
+                if self._hash_exclude_fields
+                else row_data
+            )
+            hashed.append((str(rid), content_hash(hash_input), record))
 
         # --- Fetch latest existing hashes for this batch ---
         ids = [item[0] for item in hashed]

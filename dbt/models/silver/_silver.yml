@@ -14,7 +14,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['CPSC']
+                values: ['CPSC', 'FDA']
       - name: source_recall_id
         tests:
           - not_null
@@ -47,7 +47,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['CPSC']
+                values: ['CPSC', 'FDA']
 
   - name: firm
     description: Firm dimension deduped by normalized name (ADR 0002).

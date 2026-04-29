@@ -248,7 +248,15 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
         quarantined: list[QuarantineRecord],
         raw_landing_path: str,
     ) -> int:
-        loader = BronzeLoader(bronze_table=_fda_bronze, rejected_table=_fda_rejected)
+        # RID is excluded from hashing: it is a query-position counter (finding F in
+        # api_observations.md), not a property of the recall record. Different query
+        # windows return the same record at different positions, producing different RID
+        # values and spurious hash changes. RID is still written to the DB row.
+        loader = BronzeLoader(
+            bronze_table=_fda_bronze,
+            rejected_table=_fda_rejected,
+            hash_exclude_fields=frozenset({"rid"}),
+        )
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
             if records:
@@ -495,7 +503,11 @@ class FdaDeepRescanLoader(FdaExtractor):
         quarantined: list[QuarantineRecord],
         raw_landing_path: str,
     ) -> int:
-        loader = BronzeLoader(bronze_table=_fda_bronze, rejected_table=_fda_rejected)
+        loader = BronzeLoader(
+            bronze_table=_fda_bronze,
+            rejected_table=_fda_rejected,
+            hash_exclude_fields=frozenset({"rid"}),
+        )
         with self._engine.begin() as conn:
             # Does NOT update source_watermarks — the incremental extractor owns the
             # watermark exclusively.

@@ -1,0 +1,26 @@
+version: 2
+
+models:
+  - name: stg_fda_recalls
+    description: >
+      One row per FDA product (PRODUCTID = source_recall_id), latest version from bronze.
+      FDA's API returns one row per product per recall event; this view resolves edit history
+      by keeping the most recently extracted version of each product.
+    columns:
+      - name: source_recall_id
+        description: FDA PRODUCTID — unique product identifier, stable across re-extractions.
+        tests:
+          - not_null
+          - unique
+      - name: recall_event_id
+        description: FDA RECALLEVENTID — groups all products belonging to the same recall event.
+        tests:
+          - not_null
+      - name: event_lmd
+        description: Event-level last modified date (EVENTLMD). Watermark for incremental extraction.
+        tests:
+          - not_null
+      - name: content_hash
+        description: SHA-256 of canonicalized record payload (ADR 0007). Dedup key.
+        tests:
+          - not_null

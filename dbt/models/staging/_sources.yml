@@ -27,3 +27,34 @@ sources:
       - name: cpsc_recalls_rejected
         description: Quarantine table for records that failed validation or invariant checks (ADR 0013).
         loaded_at_field: rejected_at
+
+  - name: fda
+    description: Bronze layer for FDA iRES enforcement recalls, loaded by src.extractors.fda.FdaExtractor.
+    schema: public
+    tables:
+      - name: fda_recalls_bronze
+        description: >
+          One row per (source_recall_id, content_hash) landed from the FDA iRES bulk POST API.
+          source_recall_id = PRODUCTID (product-level key); recall_event_id = RECALLEVENTID
+          (event-level grouping key). Multiple rows per source_recall_id are expected when
+          content changes between extraction runs (edit detection per ADR 0007).
+        loaded_at_field: extraction_timestamp
+        freshness:
+          warn_after: {count: 72, period: hour}  # FDA publishes Mon-Fri; 72h covers weekends
+          error_after: {count: 7, period: day}
+        columns:
+          - name: source_recall_id
+            description: FDA PRODUCTID — unique product identifier across all FDA recall events.
+            tests:
+              - not_null
+          - name: content_hash
+            description: SHA-256 of canonicalized record payload (ADR 0007). Dedup key.
+            tests:
+              - not_null
+          - name: extraction_timestamp
+            description: When the extractor wrote this row.
+            tests:
+              - not_null
+      - name: fda_recalls_rejected
+        description: Quarantine table for FDA records that failed validation or invariant checks (ADR 0013).
+        loaded_at_field: rejected_at

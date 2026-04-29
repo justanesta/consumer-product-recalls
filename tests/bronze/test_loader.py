@@ -24,6 +24,14 @@ class SimpleRecord(BaseModel):
     count: int = 0
 
 
+class RecordWithArtifact(BaseModel):
+    """Simulates a source whose API injects a query-position counter (e.g. FDA RID)."""
+
+    source_recall_id: str
+    title: str
+    rid: int  # query-position artifact — should be excluded from hashing
+
+
 class RecordWithoutId(BaseModel):
     title: str
     count: int = 0
@@ -68,10 +76,15 @@ def _make_real_table(name: str = "bronze_cpsc") -> Table:
 def _make_loader(
     bronze_name: str = "bronze_cpsc",
     rejected_name: str = "rejected_cpsc",
+    hash_exclude_fields: frozenset[str] = frozenset(),
 ) -> tuple[BronzeLoader, MagicMock, MagicMock]:
     bronze = _make_table(bronze_name)
     rejected = _make_table(rejected_name)
-    loader = BronzeLoader(bronze_table=bronze, rejected_table=rejected)
+    loader = BronzeLoader(
+        bronze_table=bronze,
+        rejected_table=rejected,
+        hash_exclude_fields=hash_exclude_fields,
+    )
     return loader, bronze, rejected
 
 
@@ -436,3 +449,91 @@ def test_fetch_existing_hashes_returns_empty_dict_when_no_rows_found() -> None:
 
     result = loader._fetch_existing_hashes(conn, source_recall_ids=["CPSC-999"])
     assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# BronzeLoader — hash_exclude_fields (query-artifact exclusion)
+# ---------------------------------------------------------------------------
+
+
+def test_hash_exclude_fields_skips_record_when_only_excluded_field_changes() -> None:
+    """Changing an excluded field (e.g. RID) must not trigger a re-insert."""
+    from src.bronze.hashing import content_hash
+
+    loader, _, _ = _make_loader(hash_exclude_fields=frozenset({"rid"}))
+    conn = _make_conn()
+
+    # Record as returned in query window A (rid=10)
+    record_a = RecordWithArtifact(source_recall_id="FDA-001", title="Recall", rid=10)
+    # Compute the hash that the loader will produce for record_a (rid excluded)
+    hash_input = {k: v for k, v in record_a.model_dump(mode="json").items() if k != "rid"}
+    existing_hash = content_hash(hash_input)
+
+    # Simulate record re-appearing in query window B with rid=19 — only RID differs
+    record_b = RecordWithArtifact(source_recall_id="FDA-001", title="Recall", rid=19)
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={"FDA-001": existing_hash}):
+        count = loader.load(
+            conn,
+            records=[record_b],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    assert count == 0
+    conn.execute.assert_not_called()
+
+
+def test_hash_exclude_fields_still_writes_excluded_field_to_db_row() -> None:
+    """Excluded field is omitted from the hash but still persisted in the inserted row."""
+    loader, _, _ = _make_loader(hash_exclude_fields=frozenset({"rid"}))
+    conn = _make_conn()
+
+    record = RecordWithArtifact(source_recall_id="FDA-001", title="New Recall", rid=42)
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={}):
+        count = loader.load(
+            conn,
+            records=[record],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    assert count == 1
+    rows_inserted = conn.execute.call_args[0][1]
+    assert len(rows_inserted) == 1
+    row = rows_inserted[0]
+    # Excluded field must still appear in the DB row
+    assert row["rid"] == 42
+    assert row["source_recall_id"] == "FDA-001"
+    assert "content_hash" in row
+
+
+def test_hash_exclude_fields_still_detects_change_in_non_excluded_field() -> None:
+    """A change in a non-excluded field must still trigger a re-insert."""
+    from src.bronze.hashing import content_hash
+
+    loader, _, _ = _make_loader(hash_exclude_fields=frozenset({"rid"}))
+    conn = _make_conn()
+
+    record_old = RecordWithArtifact(source_recall_id="FDA-001", title="Old Title", rid=10)
+    hash_input_old = {k: v for k, v in record_old.model_dump(mode="json").items() if k != "rid"}
+    existing_hash = content_hash(hash_input_old)
+
+    # Same RID, but title changed — should be treated as an edit
+    record_new = RecordWithArtifact(source_recall_id="FDA-001", title="Updated Title", rid=10)
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={"FDA-001": existing_hash}):
+        count = loader.load(
+            conn,
+            records=[record_new],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    assert count == 1
+    rows_inserted = conn.execute.call_args[0][1]
+    assert rows_inserted[0]["source_recall_id"] == "FDA-001"
