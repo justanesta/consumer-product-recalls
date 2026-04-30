@@ -1,0 +1,104 @@
+info:
+  name: Probe field_last_modified_date as Filter
+  type: http
+  seq: 2
+
+http:
+  method: GET
+  url: "{{usda_root_uri}}?field_last_modified_date={{last_modified_date_start}}"
+  params:
+    - name: field_last_modified_date
+      value: "{{last_modified_date_start}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          console.log("record count: " + res.body.length);
+        });
+
+        test("response is an array", function() {
+          expect(res.body).to.be.an('array');
+        });
+
+        test("FILTER EFFECTIVENESS: log whether results are filtered by last_modified_date", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) {
+            console.log("RESULT: 0 records — filter may have worked (empty window) or parameter was silently ignored and returned 0 matching records. Cross-check with cardinality probe.");
+            return;
+          }
+          const filterDate = bru.getEnvVar('last_modified_date_start');
+          const totalCount = res.body.length;
+
+          // Check whether returned records have last_modified_date matching the filter
+          const matchingCount = res.body.filter(function(r) {
+            return r.field_last_modified_date && r.field_last_modified_date.startsWith(filterDate);
+          }).length;
+          const mismatchCount = totalCount - matchingCount;
+
+          console.log("filter_date=" + filterDate);
+          console.log("total_returned=" + totalCount);
+          console.log("matching_last_modified_date=" + matchingCount);
+          console.log("mismatched_last_modified_date=" + mismatchCount);
+
+          if (mismatchCount > 0 && totalCount > 100) {
+            console.log("CONCLUSION: Parameter likely IGNORED — large result set with mixed dates suggests full-dataset fallback.");
+          } else if (mismatchCount === 0 && totalCount > 0 && totalCount < 50) {
+            console.log("CONCLUSION: Filter appears to WORK — small result set with all dates matching filter.");
+          } else {
+            console.log("CONCLUSION: AMBIGUOUS — inspect records manually.");
+          }
+        });
+
+        test("log sample of last_modified_date values for inspection", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const sample = res.body.slice(0, 5);
+          sample.forEach(function(r) {
+            console.log(
+              `recall_number=${r.field_recall_number} ` +
+              `last_modified_date="${r.field_last_modified_date}" ` +
+              `recall_date=${r.field_recall_date}`
+            );
+          });
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Probes whether field_last_modified_date can be used as a server-side filter parameter.
+
+  This is the highest-priority unknown for the USDA incremental extraction strategy.
+  The PDF documents field_last_modified_date as a response field only — it does not appear
+  in the list of query parameters. However, other text-filter parameters follow the
+  `field_<name>_value` naming pattern (e.g., field_closed_date_value, field_summary_value),
+  so field_last_modified_date_value is the most likely candidate to try.
+
+  Interpretation guide:
+  - If the result set is small (< ~50) and all returned records have field_last_modified_date
+    matching the filter date → server-side filtering WORKS. Update incremental_extraction/
+    with get_recalls_by_last_modified_date_range.yml using confirmed parameter name.
+  - If the result set is large (hundreds or the full dataset count from cardinality probe)
+    and records have mixed last_modified_date values → parameter was silently IGNORED.
+    The incremental strategy must be client-side: pull all records, filter by
+    field_last_modified_date in Python, rely on bronze content hash to skip unchanged records.
+  - If the result set is 0 → ambiguous. Either the window has no matching records or the
+    parameter is unknown and the API returned nothing. Widen the date window and retry.
+
+  Observed behavior (confirmed 2026-04-29):
+  Both variants tested; both silently ignored:
+  - field_last_modified_date_value=2026-04-01 → 2,001 records returned (full dataset)
+  - field_last_modified_date=2026-04-01 → 2,001 records returned (full dataset)
+
+  CONCLUSION: field_last_modified_date is a response field only — not a supported query parameter.
+  The API silently ignores unrecognized parameters and returns the full dataset (same behavior
+  as CPSC). Full-dump extraction is the only viable strategy. See api_observations.md Finding D.

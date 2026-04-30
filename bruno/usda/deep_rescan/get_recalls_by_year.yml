@@ -1,0 +1,98 @@
+info:
+  name: Get Recalls by Year (field_year_id)
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{usda_root_uri}}?field_year_id={{recall_year_id}}"
+  params:
+    - name: field_year_id
+      value: "{{recall_year_id}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count for this year_id", function() {
+          console.log("year_id=" + bru.getEnvVar('recall_year_id') + " record count: " + (Array.isArray(res.body) ? res.body.length : "non-array"));
+        });
+
+        test("response is an array", function() {
+          expect(res.body).to.be.an('array');
+        });
+
+        test("all records have required top-level fields", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const requiredFields = [
+            'field_recall_number', 'field_title', 'field_recall_date',
+            'langcode', 'field_year', 'field_recall_classification'
+          ];
+          res.body.forEach(function(record) {
+            requiredFields.forEach(function(field) {
+              expect(record, `record missing field: ${field}`).to.have.property(field);
+            });
+          });
+        });
+
+        test("log field_year distribution for this year_id", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const yearCounts = {};
+          res.body.forEach(function(r) {
+            yearCounts[r.field_year] = (yearCounts[r.field_year] || 0) + 1;
+          });
+          console.log("field_year distribution: " + JSON.stringify(yearCounts));
+        });
+
+        test("log sample recall dates to verify year_id mapping", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const sample = res.body.slice(0, 5);
+          sample.forEach(function(r) {
+            console.log(
+              `recall_number=${r.field_recall_number} ` +
+              `recall_date=${r.field_recall_date} ` +
+              `field_year=${r.field_year} ` +
+              `langcode=${r.langcode}`
+            );
+          });
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Year-scoped recall fetch using the Drupal taxonomy ID for field_year_id.
+  Used for historical backfill — chunk the full dataset by year rather than loading all at once.
+
+  recall_year_id is pre-populated in environments/Development.yml with 685 (2026).
+  Full field_year_id taxonomy ID mapping is documented in api_observations.md Finding K
+  (extracted from PDF Appendix A — no empirical probe needed).
+
+  Open questions this request is designed to answer:
+  - What are the valid integer IDs for each year in field_year_id?
+    Document the full mapping in api_observations.md (finding TBD).
+  - Does field_year_id filter by the recall's issue year (field_year / field_recall_date year)
+    or the closed year (field_closed_year)?
+  - Is field_year_id exclusive to the issue year, or could a 2022 recall have a 2023 year_id
+    if closed/amended in 2023?
+  - Can field_year_id be combined with other filters (e.g., field_archive_recall) for
+    narrower historical chunks?
+
+  ETL use for UsdaExtractor.deep_rescan():
+  Iterate year-by-year from earliest known year to current year, passing field_year_id for each.
+  This avoids loading the entire dataset in one shot and gives a natural checkpoint for
+  resumable historical loads.
+
+  Observed behavior: NOT RUN empirically during exploration.
+  field_year_id → calendar year mapping confirmed from PDF Appendix A (no live probe needed —
+  IDs are fully documented). Full mapping in documentation/usda/recall_api_observations.md Finding K.
+  Sample: 2026=685, 2025=684, 2024=606, 2023=445, 2022=444, 2021=446, 2020=1.

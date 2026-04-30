@@ -1,0 +1,20 @@
+name: Development
+variables:
+  - name: usda_root_uri
+    value: https://www.fsis.usda.gov/fsis/api/recall/v/1
+  - name: bilingual_recall_number
+    value: 004-2020
+  - name: last_modified_date_start
+    value: 2026-04-01
+  - name: last_modified_date_end
+    value: 2026-04-29
+  - name: recall_year_id
+    value: "685"
+  - name: product_text
+    value: chicken
+  - name: recall_number
+    value: 001-2026
+  - name: establishment_root_uri
+    value: https://www.fsis.usda.gov/fsis/api/establishments/v/1
+  - name: establishment_name
+    value: '"CS Beef Packers, LLC"'

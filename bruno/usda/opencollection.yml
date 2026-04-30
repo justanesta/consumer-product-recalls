@@ -1,0 +1,142 @@
+opencollection: 1.0.0
+
+info:
+  name: usda
+config:
+  proxy:
+    inherit: true
+    config:
+      protocol: http
+      hostname: ""
+      port: ""
+      auth:
+        username: ""
+        password: ""
+      bypassProxy: ""
+
+docs:
+  content: |-
+    # USDA FSIS API Collection
+
+    Two separate FSIS endpoints: the Recall API and the Establishment Listing API.
+    Full empirical findings: `documentation/usda/recall_api_observations.md` and
+    `documentation/usda/establishment_api_observations.md`.
+
+    ---
+
+    ## Collection Structure
+
+    | Folder | Purpose |
+    |---|---|
+    | `data_exploration/` | Cardinality probe, bilingual pair validation, archive behavior, and `field_last_modified_date` filter probe. All findings confirmed 2026-04-29. |
+    | `lookup/` | Point lookup by `field_recall_number` (`DDD-YYYY`). Returns full bilingual pair (2 records). Confirmed 2026-04-29. |
+    | `deep_rescan/` | Year-scoped queries using `field_year_id` (Drupal taxonomy ID) — for forced historical re-ingestion by year. |
+    | `incremental_extraction/` | Full-dump extraction — `field_last_modified_date` is NOT a supported server-side filter (confirmed empirically). Every run pulls all 2,001 records. ETag (`If-None-Match`) skips the download when unchanged. |
+    | `establishment_exploration/` | Separate FSIS Establishment Listing API (`/fsis/api/establishments/v/1`). All probes confirmed 2026-04-29. |
+
+    ---
+
+    ## Recall API — Confirmed Findings (2026-04-29)
+
+    **Base URL:** `https://www.fsis.usda.gov/fsis/api/recall/v/1`
+    **Auth:** None. **Stack:** Drupal 10 / nginx 1.22.1 / PHP 8.3 / Akamai CDN.
+
+    **Response shape:** Flat JSON array, no pagination. Total: 2,001 records (1,212 English +
+    789 Spanish). Wire size: ~1.6 MB compressed (`content-length: 1,641,691`).
+
+    **Extraction strategy: full dump on every run.** `field_last_modified_date` is silently
+    ignored as a query parameter under any naming variant — both `field_last_modified_date` and
+    `field_last_modified_date_value` return the full 2,001-record dataset unchanged. 42.2% of
+    records have an empty `field_last_modified_date` anyway.
+
+    **ETag optimization available.** Unfiltered requests return `etag` and `last-modified` headers
+    (`cache-control: public, max-age=3100`). Send `If-None-Match: <last_etag>` on subsequent runs
+    — a `304 Not Modified` skips the download entirely when unchanged. Filtered requests are NOT
+    CDN-cached (`cache-control: max-age=0, no-cache, no-store`).
+
+    **91.4% of records are archived** (`field_archive_recall="True"`). Archived records are
+    included in the default no-filter response and must be ingested — they are valid historical data.
+    Only 5 active recalls have Spanish translations.
+
+    **Bilingual content model.** Recalls with `field_has_spanish="True"` exist as two records:
+    `langcode=English` and `langcode=Spanish`. Both share the same `field_recall_number` and
+    identical `field_last_modified_date` (updated atomically). `field_has_spanish="True"` appears
+    on BOTH language versions — use `langcode` to distinguish EN from ES.
+    Natural composite key: `(field_recall_number, langcode)`.
+
+    **`field_recall_number`** is the only identifier in the response (`DDD-YYYY` format, with
+    `PHA-MMDDYYYY-NN` exceptions for Public Health Alerts). No separate numeric primary key.
+    A full `DDD-YYYY` value never appears as a substring in another recall number — the documented
+    "contains" filter behaves as exact in practice.
+
+    **Undocumented field:** `field_recall_url` present in response but absent from PDF docs.
+    Differs between language versions. Declare as `Optional[str]` in the Pydantic schema.
+
+    **Dead field:** `field_en_press_release` is 100% empty across all 2,001 records. Exclude from
+    content hash. `field_press_release` is 99.9% empty — same posture.
+
+    **Filter input/output asymmetry (confirmed):**
+    - Response boolean fields (`field_archive_recall`, `field_related_to_outbreak`, etc.) return
+      `"True"` / `"False"` (capitalized strings). Filter inputs use integers: `1` = TRUE, `0` = FALSE.
+      Passing string values as filter input is silently ignored (full dataset returned).
+    - `langcode` response field uses full words (`"English"` / `"Spanish"`). The
+      `field_translation_language` query filter uses abbreviated codes (`en` / `es`). Not interchangeable.
+    - Selection parameters (`field_year_id`, `field_recall_classification_id`, etc.) require Drupal
+      taxonomy integer IDs, not human-readable values. Full mapping in `recall_api_observations.md` Finding K.
+
+    ---
+
+    ## Establishment Listing API — Confirmed Findings (2026-04-29)
+
+    **Base URL:** `https://www.fsis.usda.gov/fsis/api/establishments/v/1`
+    **Active MPI shortcut:** `https://www.fsis.usda.gov/fsis/api/establishments/mpi`
+    **Update cadence:** Weekly, Monday or Tuesday. **Auth:** None.
+
+    **Response shape:** Flat JSON array, no pagination. Total: 7,945 records (7,168 active MPI,
+    777 inactive). No ETag, no CDN caching (`cache-control: max-age=0, no-cache, no-store`),
+    chunked transfer (no `content-length`). The ETag optimization available on the recall API is
+    NOT available here — every run downloads the full dataset.
+
+    **Extraction scope: pull ALL establishments (full dump, no filter).** Recalled establishments
+    may no longer be in the active MPI directory. The `status_regulated_est_value_1_op=empty`
+    active-MPI filter excludes 777 inactive records still needed for historical join enrichment.
+
+    **`name` filter: URL-encoded double quotes are required for reliable joins.**
+    The `name` parameter is documented as a "contain" match on `establishment_name`, but a comma
+    in the value triggers OR token splitting — `name=CS Beef Packers, LLC` returns 2,481+ records
+    because "LLC" alone matches thousands of establishments. Wrapping in URL-encoded quotes
+    (`name=%22CS%20Beef%20Packers%2C%20LLC%22`) returns exactly 1 record via phrase match.
+    The ETL extractor must always construct `name=%22{url_encoded_value}%22`.
+
+    **Join confirmed 1:1 (one test case).** `field_establishment="CS Beef Packers, LLC"` ->
+    `name=%22CS%20Beef%20Packers,%20LLC%22` -> 1 record, matched via `establishment_name` (not `dbas`).
+    `establishment_id=6163082`, `establishment_number=M630`, status ACTIVE MPI.
+    If the quoted filter returns 0 results, fall back to `field_dbas_value` filter (recalls may
+    use the DBA name). If it returns 2+, disambiguate by `state` or `establishment_number`.
+
+    **`establishment_id`** — stable numeric FK usable across FSIS datasets (serialized as string
+    in JSON, e.g., `"6163082"`). Use as `source_establishment_id` in the bronze schema. Other FSIS
+    datasets reference this as "EstablishmentID" (camelCase).
+
+    **`status_regulated_est`** — two values only (confirmed across all 7,945 records):
+    `""` (empty string) = active MPI; `"Inactive"` = inactive. No third value observed.
+
+    **`LatestMPIActiveDate`** — 100% populated on all records including inactive. For active
+    establishments: date of the most recent weekly MPI directory update (e.g., `2026-04-27`).
+    For inactive establishments: the last date the establishment appeared in the active MPI
+    directory before going inactive. Useful context for recall enrichment dating.
+
+    **Field serialization gotchas:**
+    - `activities` and `dbas` — true JSON arrays; elements after index 0 may have a leading space
+      (e.g., `" Meat Slaughter"`). Strip whitespace on each element during transformation.
+    - `geolocation` and `county` — when missing, value is boolean `false` in JSON (not `null`,
+      not `""`). Pydantic validator must accept `str | Literal[False]` and normalize `false` -> `None`.
+    - `size` — observed values: `"Large"`, `"Small"`, `"Very Small"`, `"N / A"`, `""` (inactive records).
+    - `duns_number` — 85.5% empty; effectively always missing.
+  type: text/markdown
+bundled: false
+extensions:
+  bruno:
+    ignore:
+      - node_modules
+      - .git

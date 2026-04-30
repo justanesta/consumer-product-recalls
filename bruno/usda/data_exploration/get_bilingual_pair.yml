@@ -1,0 +1,115 @@
+info:
+  name: Get Bilingual Pair (English + Spanish)
+  type: http
+  seq: 3
+
+http:
+  method: GET
+  url: "{{usda_root_uri}}?field_recall_number={{bilingual_recall_number}}"
+  params:
+    - name: field_recall_number
+      value: "{{bilingual_recall_number}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          console.log("record count: " + res.body.length);
+        });
+
+        test("response is a non-empty array", function() {
+          expect(res.body).to.be.an('array');
+          expect(res.body.length).to.be.greaterThan(0);
+        });
+
+        test("log full bilingual pair details", function() {
+          if (!Array.isArray(res.body)) return;
+          res.body.forEach(function(r) {
+            console.log(
+              `recall_number=${r.field_recall_number} ` +
+              `langcode=${r.langcode} ` +
+              `has_spanish=${r.field_has_spanish} ` +
+              `last_modified_date="${r.field_last_modified_date}" ` +
+              `archive=${r.field_archive_recall}`
+            );
+          });
+        });
+
+        test("bilingual pair analysis: same recall_number across language versions", function() {
+          if (!Array.isArray(res.body) || res.body.length < 2) {
+            console.log("Only " + (res.body ? res.body.length : 0) + " record(s) returned — cannot compare bilingual pair.");
+            return;
+          }
+          const recallNumbers = [...new Set(res.body.map(function(r) { return r.field_recall_number; }))];
+          console.log("Distinct recall numbers: " + recallNumbers.join(', '));
+          expect(recallNumbers.length, "expected all records to share the same field_recall_number").to.equal(1);
+        });
+
+        test("check whether English and Spanish versions share last_modified_date", function() {
+          if (!Array.isArray(res.body) || res.body.length < 2) return;
+          const english = res.body.find(function(r) { return r.langcode === 'English'; });
+          const spanish = res.body.find(function(r) { return r.langcode === 'Spanish'; });
+          if (english && spanish) {
+            console.log("English last_modified_date: " + english.field_last_modified_date);
+            console.log("Spanish last_modified_date: " + spanish.field_last_modified_date);
+            console.log(
+              english.field_last_modified_date === spanish.field_last_modified_date
+                ? "MATCH: both language versions have identical last_modified_date"
+                : "MISMATCH: English and Spanish versions have different last_modified_date values"
+            );
+          } else {
+            console.log("Could not find both English and Spanish versions. langcodes present: " +
+              res.body.map(function(r) { return r.langcode; }).join(', '));
+          }
+        });
+
+        test("check field_has_spanish value", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const hasSpanishValues = [...new Set(res.body.map(function(r) { return r.field_has_spanish; }))];
+          console.log("field_has_spanish values: " + hasSpanishValues.join(', '));
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Fetches a recall by number to examine bilingual pair behavior — both English and Spanish versions.
+  Uses the same recall_number env var as the lookup request; update it to a known bilingual recall.
+
+  Open questions this request is designed to answer:
+  - How many records are returned for a single recall number? Always 2 (EN + ES)? Sometimes 1?
+  - Do both language versions share the same field_recall_number?
+  - Do English and Spanish versions have the same field_last_modified_date, or does editing
+    the English version advance only the English record's timestamp?
+  - Is field_has_spanish=True on the English version and False on the Spanish version,
+    or consistent across both?
+  - What fields actually differ between the EN and ES versions (title, summary, press release,
+    product_items)? What fields are shared and identical?
+
+  This directly informs the check_invariants() bilingual dedup logic (ADR 0006 + ADR 0013).
+  The invariant asserts that paired EN/ES records share field_recall_number and that the
+  Spanish record is a translation companion, not a distinct recall event. If last_modified_date
+  differs between the pair, the extractor must decide which version drives the watermark.
+
+  Run with a recall number confirmed to have field_has_spanish=True (find one from the cardinality
+  probe by scanning for field_has_spanish=True records, then pick its field_recall_number).
+
+  Observed behavior (confirmed 2026-04-29, recall 004-2020):
+  - Exactly 2 records returned (langcode=English + langcode=Spanish).
+  - Both share field_recall_number=004-2020.
+  - field_last_modified_date is IDENTICAL across both versions (2020-05-20) — FSIS updates both atomically.
+  - field_has_spanish="True" on BOTH the English and Spanish records — use langcode to distinguish versions.
+  - Fields differing EN vs ES: field_title, field_recall_url, field_product_items, field_summary.
+  - All factual/metadata fields (dates, classification, risk level, states, etc.) are identical.
+  - field_recall_url is an undocumented field not in the PDF — different URL path per language version.
+    See api_observations.md Finding H.

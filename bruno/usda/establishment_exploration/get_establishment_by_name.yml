@@ -1,0 +1,125 @@
+info:
+  name: Get Establishment by Name (Join Key Probe)
+  type: http
+  seq: 3
+
+http:
+  method: GET
+  url: "{{establishment_root_uri}}?name={{establishment_name}}"
+  params:
+    - name: name
+      value: "{{establishment_name}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count for name lookup", function() {
+          const count = Array.isArray(res.body) ? res.body.length : "non-array";
+          console.log("name=" + bru.getEnvVar('establishment_name') + " → record count: " + count);
+          if (count === 1) {
+            console.log("RESULT: clean 1:1 match — name filter returned exactly 1 establishment");
+          } else if (count > 1) {
+            console.log("RESULT: ambiguous match — name filter returned " + count + " establishments (contain behavior)");
+          } else if (count === 0) {
+            console.log("RESULT: no match — name not found in establishment_name field");
+          }
+        });
+
+        test("response is an array", function() {
+          expect(res.body).to.be.an('array');
+        });
+
+        test("log establishment details for all returned records", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          res.body.forEach(function(r, i) {
+            console.log(
+              "record[" + i + "] " +
+              "establishment_id=" + r.establishment_id + " " +
+              "establishment_number=" + r.establishment_number + " " +
+              "establishment_name=\"" + r.establishment_name + "\" " +
+              "city=" + r.city + " state=" + r.state
+            );
+          });
+        });
+
+        test("log activities for returned establishments", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          res.body.forEach(function(r, i) {
+            console.log("record[" + i + "] activities=" + JSON.stringify(r.activities));
+          });
+        });
+
+        test("log dbas (Doing Business As) for returned establishments", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          res.body.forEach(function(r, i) {
+            console.log("record[" + i + "] dbas=" + JSON.stringify(r.dbas));
+          });
+        });
+
+        test("log geolocation and size for returned establishments", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          res.body.forEach(function(r, i) {
+            console.log(
+              "record[" + i + "] " +
+              "size=" + r.size + " " +
+              "geolocation=" + r.geolocation + " " +
+              "grant_date=" + r.grant_date
+            );
+          });
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Name-based establishment lookup using the join key parameter.
+  Uses {{establishment_name}} env var (default: "CS Beef Packers, LLC").
+
+  The `name` filter matches `establishment_name` with a "contain" method per Appendix A.
+  Key question: does a full establishment name like "CS Beef Packers, LLC" return 1 record
+  (effectively exact) or multiple (true substring behavior)?
+
+  IMPORTANT — run two variants manually in Bruno IDE to test quote behavior:
+  1. name=CS Beef Packers, LLC        (no quotes — plain contain)
+  2. name="CS Beef Packers, LLC"      (with URL-encoded quotes: %22...%22)
+  The user-confirmed working URL uses URL-encoded quotes. Determine if quotes enforce phrase match.
+
+  Open questions this request is designed to answer:
+  - Is the name filter contain (substring) or effectively exact for full establishment names?
+  - Do URL-encoded double quotes around the value force a phrase/exact match?
+  - Is the match case-sensitive? (Try uppercase vs lowercase variant if ambiguous)
+  - Does `establishment_name` match the value seen in recall `field_establishment`, or do
+    recalls use the `dbas` (Doing Business As) name instead?
+  - What does a typical establishment record look like — all fields populated?
+
+  The join strategy for the ETL depends entirely on this probe:
+  - 1:1 match → reliable programmatic join by name
+  - 1:N match → need disambiguation (by state, establishment_number, or other field)
+  - 0:N match → `field_establishment` uses DBA names; must also query field_dbas_value
+
+  Observed behavior (confirmed 2026-04-29, establishment_name="CS Beef Packers, LLC"):
+
+  WITHOUT quotes (name=CS Beef Packers, LLC):
+  - Records returned: 2,481+
+  - The comma causes the API to split the value into tokens and do an OR match across all of them.
+    "LLC" alone matches thousands of establishments. Completely unusable for programmatic joins.
+
+  WITH URL-encoded quotes (name=%22CS%20Beef%20Packers%2C%20LLC%22):
+  - Records returned: 1 — clean 1:1 match.
+  - establishment_id=6163082, establishment_number=M630, city=Kuna, state=ID.
+  - Match was via establishment_name (exact). dbas=[] (empty — no DBA names for this record).
+
+  CONCLUSION: URL-encoded double quotes are REQUIRED for reliable joins. The ETL extractor
+  must always wrap the field_establishment value in %22...%22 when constructing the name filter.
+  For names with no comma, the unquoted form may work as a substring match — but quote-wrapping
+  is the safe universal strategy.

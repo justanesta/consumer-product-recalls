@@ -1,0 +1,114 @@
+info:
+  name: Get Recalls by Last Modified Date Range
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{usda_root_uri}}?field_last_modified_date_value={{last_modified_date_start}}"
+  params:
+    - name: field_last_modified_date_value
+      value: "{{last_modified_date_start}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          console.log("record count: " + (Array.isArray(res.body) ? res.body.length : "non-array"));
+        });
+
+        test("response is an array", function() {
+          expect(res.body).to.be.an('array');
+        });
+
+        test("all records have required top-level fields", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const requiredFields = [
+            'field_recall_number', 'field_title', 'field_recall_date',
+            'langcode', 'field_recall_type', 'field_recall_classification',
+            'field_establishment', 'field_product_items', 'field_recall_reason',
+            'field_risk_level', 'field_last_modified_date', 'field_archive_recall',
+            'field_has_spanish'
+          ];
+          res.body.forEach(function(record) {
+            requiredFields.forEach(function(field) {
+              expect(record, `record ${record.field_recall_number} missing field: ${field}`).to.have.property(field);
+            });
+          });
+        });
+
+        test("all records have field_last_modified_date on or after filter start (if filter works)", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const start = bru.getEnvVar('last_modified_date_start');
+          let outsideWindow = 0;
+          res.body.forEach(function(record) {
+            const lmd = record.field_last_modified_date;
+            if (lmd && lmd < start) {
+              outsideWindow++;
+              console.log(`record ${record.field_recall_number} has last_modified_date ${lmd} before start ${start}`);
+            }
+          });
+          if (outsideWindow > 0) {
+            console.log("WARNING: " + outsideWindow + " records have last_modified_date before filter start — filter may not be working server-side.");
+          }
+        });
+
+        test("log last_modified_date range in results", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const dates = res.body
+            .map(function(r) { return r.field_last_modified_date; })
+            .filter(function(d) { return d && d !== ''; })
+            .sort();
+          if (dates.length > 0) {
+            console.log("last_modified_date range: " + dates[0] + " to " + dates[dates.length - 1]);
+          }
+          const emptyCount = res.body.length - dates.length;
+          if (emptyCount > 0) {
+            console.log("records with empty last_modified_date: " + emptyCount);
+          }
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Incremental extraction query using field_last_modified_date as the watermark cursor.
+  Equivalent to CPSC's LastPublishDateStart query and FDA's EVENTLMD range filter.
+
+  IMPORTANT — SERVER-SIDE FILTER AVAILABILITY UNCONFIRMED.
+  Run data_exploration/probe_last_modified_date_as_filter.yml first.
+
+  If server-side filtering works:
+  - Update this request's URL and params to use the confirmed parameter name and syntax.
+    The current URL uses field_last_modified_date_value={{last_modified_date_start}} as the
+    most likely candidate based on the PDF's text-filter naming pattern. Adjust if needed.
+  - Add a two-param date range variant once the lower-bound parameter name is confirmed
+    (e.g., field_last_modified_date_value for start and a separate end param if it exists).
+  - This becomes the primary incremental path for UsdaExtractor.extract().
+
+  If server-side filtering does NOT work:
+  - Replace this file with get_all_recalls_no_filter.yml that documents the full-dump approach.
+  - The extractor pulls all records each run and relies on content-hash dedup in bronze to
+    skip unchanged records. Document the total record count in api_observations.md so the
+    ingestion cost per run is understood.
+  - field_last_modified_date is still useful for client-side watermark tracking even if it
+    cannot be used as a server-side filter.
+
+  The last_modified_date_end variable is defined in environments/Development.yml for use in
+  a two-bound range request — update this request's params if a range syntax is confirmed.
+
+  Observed behavior: NOT RUN — rendered obsolete by Finding D (confirmed 2026-04-29).
+  field_last_modified_date is silently ignored as a server-side filter under any naming variant.
+  Both field_last_modified_date_value and field_last_modified_date return the full 2,001-record
+  dataset unchanged. Full-dump extraction is the only viable strategy for this source.
+  This request exists as a reference stub only; do not use in production.

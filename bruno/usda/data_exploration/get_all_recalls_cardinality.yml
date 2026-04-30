@@ -1,0 +1,128 @@
+info:
+  name: Get All Recalls (Cardinality Probe)
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{usda_root_uri}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count (English + Spanish combined)", function() {
+          console.log("total record count: " + res.body.length);
+        });
+
+        test("response is a flat array (not paginated envelope)", function() {
+          expect(res.body).to.be.an('array');
+          // If this fails, the response is an object — check for pagination keys
+          // like _links, pager, meta, next, page_count, total
+        });
+
+        test("no pagination envelope keys on response", function() {
+          // Response should be a bare array; if it's an object, pagination exists
+          if (!Array.isArray(res.body)) {
+            const keys = Object.keys(res.body);
+            console.log("PAGINATION DETECTED — response is an object with keys: " + keys.join(', '));
+            expect(Array.isArray(res.body), "expected flat array but got object — see console log").to.be.true;
+          }
+        });
+
+        test("all records have minimum required fields", function() {
+          const requiredFields = [
+            'field_recall_number', 'field_title', 'field_recall_date',
+            'langcode', 'field_recall_type', 'field_recall_classification',
+            'field_last_modified_date'
+          ];
+          let missingFieldCounts = {};
+          res.body.forEach(function(record) {
+            requiredFields.forEach(function(field) {
+              if (!record.hasOwnProperty(field)) {
+                missingFieldCounts[field] = (missingFieldCounts[field] || 0) + 1;
+              }
+            });
+          });
+          const missing = Object.keys(missingFieldCounts);
+          if (missing.length > 0) {
+            console.log("Fields missing from some records: " + JSON.stringify(missingFieldCounts));
+          }
+          expect(missing.length, "some required fields missing — see console").to.equal(0);
+        });
+
+        test("log field nullability counts", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const fieldsToCheck = [
+            'field_last_modified_date', 'field_closed_date', 'field_closed_year',
+            'field_distro_list', 'field_en_press_release', 'field_press_release',
+            'field_qty_recovered', 'field_company_media_contact', 'field_labels',
+            'field_states', 'field_related_to_outbreak', 'field_has_spanish'
+          ];
+          const emptyCounts = {};
+          res.body.forEach(function(record) {
+            fieldsToCheck.forEach(function(f) {
+              if (record[f] === '' || record[f] === null || record[f] === undefined) {
+                emptyCounts[f] = (emptyCounts[f] || 0) + 1;
+              }
+            });
+          });
+          console.log("Empty/null field counts out of " + res.body.length + " records:");
+          fieldsToCheck.forEach(function(f) {
+            console.log("  " + f + ": " + (emptyCounts[f] || 0) + " empty");
+          });
+        });
+
+        test("log langcode distribution", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const langCounts = {};
+          res.body.forEach(function(r) {
+            langCounts[r.langcode] = (langCounts[r.langcode] || 0) + 1;
+          });
+          console.log("langcode distribution: " + JSON.stringify(langCounts));
+        });
+
+        test("log archive distribution", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const archiveCounts = {};
+          res.body.forEach(function(r) {
+            const v = r.field_archive_recall;
+            archiveCounts[v] = (archiveCounts[v] || 0) + 1;
+          });
+          console.log("field_archive_recall distribution: " + JSON.stringify(archiveCounts));
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  No-filter request — returns the full USDA FSIS recall dataset. Run first.
+
+  Open questions this request is designed to answer:
+  - What is the total record count (English + Spanish combined)?
+  - Is the response a flat JSON array, or does it have a pagination envelope
+    (_links, pager, meta, next, page_count, total)?
+  - Which fields are reliably populated vs. frequently empty across the full dataset?
+  - What is the langcode distribution (how many English vs. Spanish records)?
+  - How many records are archived (field_archive_recall=True) vs. active?
+
+  ETL note: if the full dataset is returned in one shot (no pagination), the incremental
+  strategy may need to be client-side — pull everything and filter by field_last_modified_date
+  in Python. The cardinality here determines whether that is feasible or requires chunking.
+
+  Observed behavior (confirmed 2026-04-29):
+  - Total records: 2,001 (1,212 English + 789 Spanish). Flat JSON array, no pagination.
+  - Wire size: content-length=1,641,691 bytes compressed (~12 MB uncompressed in Bruno).
+  - ETag present: "1777472976". last-modified: Wed, 29 Apr 2026 14:29:36 GMT.
+    cache-control: public, max-age=3100. CDN caches unfiltered requests ~51 min.
+  - Archived (field_archive_recall="True"): 1,829 (91.4%). Active: 172 (8.6%).
+  - field_last_modified_date empty: 845 / 2,001 (42.2%). field_en_press_release: 100% empty (dead field).
+  - Stack: Drupal 10 / nginx 1.22.1 / PHP 8.3 / Akamai CDN (ak_bmsc cookie on every response).

@@ -228,7 +228,7 @@ Phase 3 established a three-part empirical process for CPSC that must be repeate
 - Firm entity resolution: FDA's `firmfeinum` as the anchor per ADR 0002; fuzzy-match (RapidFuzz) across sources for non-FDA firms
 - Full dbt test suite per ADR 0015 (60–80 generic tests + 5 singular + freshness)
 - Gold: aggregate views for dashboards, denormalized search index
-- `recall_event_history` view per ADR 0007 — FDA from native history tables + snapshot diffs for other four sources
+- `recall_event_history` silver dbt model per ADR 0022 — uniform `LAG()` window function over bronze snapshot tables for all five sources (CPSC, FDA, USDA, NHTSA, USCG); no source-asymmetric path. Model partitions by `(source, source_recall_id)`, orders by `extraction_timestamp`, and emits one row per changed field per snapshot interval. FDA's native history endpoints (`/search/productHistory/{productid}` and `/search/eventproducthistory/{eventid}`) were confirmed empty across all tested lifecycle states in Phase 5a; if they ever start populating, file a new ADR and add: (a) an Alembic migration for `fda_product_history_bronze` and `fda_event_product_history_bronze`, (b) an extraction path for those tables, and (c) a `UNION` branch in this model to merge native-history rows with the snapshot-derived rows. Until then those tables do not exist.
 - `scripts/re_ingest.py` — re-ingest CLI per ADR 0014 for schema-drift recovery
 - Alembic migrations for all silver and gold tables
 - Create final column-level ERD in `documentation/diagrams/` for silver postgres DB.

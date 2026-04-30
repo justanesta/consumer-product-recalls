@@ -1,0 +1,84 @@
+info:
+  name: Probe Active MPI Filter (status_regulated_est_value_1_op=empty)
+  type: http
+  seq: 2
+
+http:
+  method: GET
+  url: "{{establishment_root_uri}}?status_regulated_est_value_1_op=empty"
+  params:
+    - name: status_regulated_est_value_1_op
+      value: empty
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("active MPI record count", function() {
+          console.log("active MPI record count: " + (Array.isArray(res.body) ? res.body.length : "non-array response"));
+        });
+
+        test("response is an array", function() {
+          expect(res.body).to.be.an('array');
+        });
+
+        test("all returned records have status_regulated_est == '' (empty)", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const nonEmpty = res.body.filter(function(r) { return r.status_regulated_est !== ''; });
+          if (nonEmpty.length > 0) {
+            console.log("WARNING: " + nonEmpty.length + " records have non-empty status_regulated_est");
+            console.log("Sample values: " + [...new Set(nonEmpty.slice(0, 5).map(function(r) { return r.status_regulated_est; }))].join(', '));
+          }
+          expect(nonEmpty.length, "expected all active MPI records to have empty status_regulated_est").to.equal(0);
+        });
+
+        test("log LatestMPIActiveDate population in active MPI records", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const populated = res.body.filter(function(r) { return r.LatestMPIActiveDate && r.LatestMPIActiveDate !== ''; }).length;
+          console.log("LatestMPIActiveDate populated: " + populated + " / " + res.body.length);
+          if (populated > 0) {
+            console.log("Sample LatestMPIActiveDate values: " + res.body.slice(0, 3).map(function(r) { return r.LatestMPIActiveDate; }).join(', '));
+          }
+        });
+
+        test("log cache behavior for filtered request", function() {
+          console.log("cache-control: " + res.headers['cache-control']);
+          console.log("x-drupal-dynamic-cache: " + res.headers['x-drupal-dynamic-cache']);
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Tests the active MPI directory filter: status_regulated_est_value_1_op=empty.
+  This returns only establishments currently in the active MPI directory.
+  Equivalent short URL: https://www.fsis.usda.gov/fsis/api/establishments/mpi
+
+  Open questions this request is designed to answer:
+  - How many active MPI establishments are there vs the full dataset (cross-reference with cardinality probe)?
+  - Does the filter correctly exclude non-MPI or inactive establishments?
+    (All returned records should have status_regulated_est == "")
+  - Is LatestMPIActiveDate consistently populated for active MPI records?
+  - Are filtered requests CDN-cached or not (cache-control header)?
+
+  ETL implication: recalled establishments may no longer be in the active MPI directory —
+  a recall from 2010 may reference an establishment that has since closed. The extractor
+  should pull ALL establishments (full dump, no filter), not just active MPI, to ensure
+  historical recalls can be enriched. This probe confirms the active vs total split.
+
+  Observed behavior (confirmed 2026-04-29):
+  - Active MPI count: 7,168 / 7,945 total (90.2%). Inactive: 777 (9.8%).
+  - All 7,168 returned records have status_regulated_est == "" — filter is exact.
+  - LatestMPIActiveDate: 100% populated on all active records. Sample value: 2026-04-27
+    (consistent with weekly Mon/Tue refresh; this date = last weekly directory update).
+  - cache-control: max-age=0 no-cache no-store — same as unfiltered; no CDN caching on any
+    establishment API endpoint.

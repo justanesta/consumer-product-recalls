@@ -1,0 +1,102 @@
+info:
+  name: Get Recall by Recall Number
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{usda_root_uri}}?field_recall_number={{recall_number}}"
+  params:
+    - name: field_recall_number
+      value: "{{recall_number}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count", function() {
+          console.log("record count: " + res.body.length);
+        });
+
+        test("response is a non-empty array", function() {
+          expect(res.body).to.be.an('array');
+          expect(res.body.length).to.be.greaterThan(0);
+        });
+
+        test("all records have required top-level fields", function() {
+          const requiredFields = [
+            'field_recall_number', 'field_title', 'field_recall_date',
+            'langcode', 'field_recall_type', 'field_recall_classification',
+            'field_establishment', 'field_product_items', 'field_recall_reason',
+            'field_risk_level', 'field_summary', 'field_year',
+            'field_active_notice', 'field_archive_recall', 'field_has_spanish',
+            'field_last_modified_date'
+          ];
+          res.body.forEach(function(record) {
+            requiredFields.forEach(function(field) {
+              expect(record, `record missing field: ${field}`).to.have.property(field);
+            });
+          });
+        });
+
+        test("all returned records match the queried recall number", function() {
+          const queried = bru.getEnvVar('recall_number');
+          
+          
+          res.body.forEach(function(record) {
+            expect(
+              record.field_recall_number,
+              `expected field_recall_number "${record.field_recall_number}" to equal "${queried}"`
+            ).to.equal(queried);
+          });
+        });
+
+        test("langcode values present on all records", function() {
+          res.body.forEach(function(record) {
+            expect(
+              ['English', 'Spanish'],
+              `unexpected langcode: ${record.langcode}`
+            ).to.include(record.langcode);
+          });
+        });
+
+        test("log recall number, langcode, and last_modified_date per record", function() {
+          res.body.forEach(function(record) {
+            console.log(
+              `recall_number=${record.field_recall_number} ` +
+              `langcode=${record.langcode} ` +
+              `last_modified_date="${record.field_last_modified_date}" ` +
+              `has_spanish=${record.field_has_spanish}`
+            );
+          });
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Point lookup by recall number (format: DDD-YYYY, e.g. 040-2022).
+
+  Open questions this request is designed to answer:
+  - Does filtering by field_recall_number return both English and Spanish versions of the recall,
+    or just one? How many records come back for a single recall number?
+  - Is field_recall_number exact-match or substring/contains like CPSC's RecallNumber?
+    (Likely substring based on the PDF "text" parameter type — verify.)
+  - Is field_last_modified_date populated on this record, and does it look reliable?
+  - Is there a separate internal numeric ID that would be a better primary key than field_recall_number?
+
+  Observed behavior (confirmed 2026-04-29, recall_number=004-2020):
+  - Returned exactly 2 records: langcode=English and langcode=Spanish.
+  - Both share field_recall_number="004-2020" and field_last_modified_date="2020-05-20" (atomic update).
+  - No spurious matches. Full DDD-YYYY value is effectively exact in practice.
+  - No separate numeric primary key. Natural composite key: (field_recall_number, langcode).
+  - Filtered lookup requests are not CDN-cached (cache-control: max-age=0, no-cache, no-store).

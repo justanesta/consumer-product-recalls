@@ -1,0 +1,90 @@
+info:
+  name: Probe Archive Behavior
+  type: http
+  seq: 4
+
+http:
+  method: GET
+  url: "{{usda_root_uri}}?field_archive_recall=1"
+  params:
+    - name: field_archive_recall
+      value: "1"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count (archived records)", function() {
+          console.log("archived record count: " + (Array.isArray(res.body) ? res.body.length : "non-array response"));
+        });
+
+        test("response is an array", function() {
+          expect(res.body).to.be.an('array');
+        });
+
+        test("all returned records are archived (field_archive_recall=True)", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const nonArchived = res.body.filter(function(r) {
+            return r.field_archive_recall !== 'True';
+          });
+          if (nonArchived.length > 0) {
+            console.log("Non-archived records in archived filter response: " + nonArchived.length);
+            console.log("Sample field_archive_recall values: " +
+              [...new Set(res.body.slice(0, 10).map(function(r) { return r.field_archive_recall; }))].join(', '));
+          }
+          expect(nonArchived.length, "expected all records to be archived").to.equal(0);
+        });
+
+        test("log last_modified_date population rate in archived records", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const withDate = res.body.filter(function(r) { return r.field_last_modified_date !== ''; }).length;
+          const withoutDate = res.body.length - withDate;
+          console.log("field_last_modified_date populated: " + withDate + " / " + res.body.length);
+          console.log("field_last_modified_date empty: " + withoutDate + " / " + res.body.length);
+        });
+
+        test("log langcode distribution in archived records", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const langCounts = {};
+          res.body.forEach(function(r) {
+            langCounts[r.langcode] = (langCounts[r.langcode] || 0) + 1;
+          });
+          console.log("archived langcode distribution: " + JSON.stringify(langCounts));
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Probes archived recall behavior by filtering field_archive_recall=1 (integer TRUE per Appendix A).
+
+  Open questions this request is designed to answer:
+  - How many records are archived vs. active (cross-reference with total from cardinality probe)?
+  - Does field_archive_recall filter work server-side, or does it return the full dataset?
+    (If result count equals full dataset count, the parameter was ignored.)
+  - Are field_last_modified_date values populated for archived records, or empty?
+    If archived records always have empty last_modified_date, the watermark strategy must
+    ensure archived records still get ingested (via recall_date or a full rescan).
+  - Are archived records bilingual (both EN + ES) or typically English-only?
+
+  ETL note: the deep-rescan-usda.yml workflow should include archived records unless they
+  are confirmed to be inaccessible or permanently frozen. Archived recalls are still valid
+  historical data. Run with field_archive_recall=FALSE as a second manual test in Bruno
+  IDE to confirm the complement record count.
+
+  Observed behavior (confirmed 2026-04-29, field_archive_recall=1):
+  - Filter works server-side: returned exactly 1,829 records matching cardinality probe's archived count.
+  - field_last_modified_date populated: 986/1,829 (53.9%); empty: 843/1,829 (46.1%).
+  - 843 of 845 total empty-date records are archived — pattern is historical, not random.
+  - Active Spanish records: only 5 (789 total Spanish − 784 archived Spanish).
+  - Filtered requests are NOT CDN-cached (cache-control: no-cache, no-store). ETag optimization
+    only applies to the no-filter full-dump request. See api_observations.md Finding J.

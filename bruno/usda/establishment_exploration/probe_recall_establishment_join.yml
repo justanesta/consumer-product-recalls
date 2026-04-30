@@ -1,0 +1,116 @@
+info:
+  name: Probe Recall-Establishment Join (End-to-End)
+  type: http
+  seq: 4
+
+http:
+  method: GET
+  url: "{{establishment_root_uri}}?name={{establishment_name}}"
+  params:
+    - name: name
+      value: "{{establishment_name}}"
+      type: query
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("join result: at least 1 establishment found for recall's field_establishment value", function() {
+          const queried = bru.getEnvVar('establishment_name');
+          const count = Array.isArray(res.body) ? res.body.length : 0;
+          console.log("field_establishment value queried: \"" + queried + "\"");
+          console.log("establishments returned: " + count);
+          if (count === 0) {
+            console.log("JOIN FAILURE: no establishment matched field_establishment value — likely name mismatch or DBA vs official name");
+          } else if (count === 1) {
+            console.log("JOIN SUCCESS: clean 1:1 match");
+          } else {
+            console.log("JOIN AMBIGUOUS: " + count + " matches — need disambiguation logic");
+          }
+          expect(count, "expected at least 1 establishment to match the recall's field_establishment value").to.be.greaterThan(0);
+        });
+
+        test("log establishment_id (foreign key for bronze schema)", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          res.body.forEach(function(r, i) {
+            console.log(
+              "record[" + i + "] " +
+              "establishment_id=" + r.establishment_id + " " +
+              "establishment_number=" + r.establishment_number + " " +
+              "establishment_name=\"" + r.establishment_name + "\" " +
+              "state=" + r.state
+            );
+          });
+        });
+
+        test("compare queried name vs returned establishment_name and dbas", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const queried = bru.getEnvVar('establishment_name');
+          res.body.forEach(function(r, i) {
+            const nameMatch = r.establishment_name === queried;
+            const dbasMatch = Array.isArray(r.dbas)
+              ? r.dbas.some(function(d) { return d.trim() === queried; })
+              : (r.dbas || '').includes(queried);
+            console.log(
+              "record[" + i + "] " +
+              "establishment_name match=" + nameMatch + " " +
+              "dbas match=" + dbasMatch + " " +
+              "establishment_name=\"" + r.establishment_name + "\" " +
+              "dbas=" + JSON.stringify(r.dbas)
+            );
+          });
+        });
+
+        test("log status_regulated_est for matched establishment (active vs inactive)", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          res.body.forEach(function(r, i) {
+            const activeStatus = r.status_regulated_est === '' ? 'ACTIVE MPI' : 'INACTIVE/OTHER (' + r.status_regulated_est + ')';
+            console.log("record[" + i + "] status: " + activeStatus + " | LatestMPIActiveDate=" + r.LatestMPIActiveDate);
+          });
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  End-to-end join validation: takes the value of `field_establishment` from a real recall record
+  and queries the establishment API using `name={{establishment_name}}` to confirm the join works.
+
+  PRE-RUN SETUP:
+  Before running this probe, set `establishment_name` in environments/Development.yml to the exact
+  value of `field_establishment` from a recall record with a non-empty establishment. Steps:
+  1. Scan the recall API cardinality response (from data_exploration/get_all_recalls_cardinality.yml)
+     for records with non-empty `field_establishment`.
+  2. Pick one value (e.g., "CS Beef Packers, LLC" is pre-confirmed by the user to return a match).
+  3. Set `establishment_name` env var to that exact value and re-run this probe.
+
+  This probe is intentionally similar to get_establishment_by_name.yml but framed around the
+  join validation use case — it logs additional fields relevant to the ETL decision (establishment_id
+  as foreign key, status_regulated_est to confirm active/inactive, DBA name comparison).
+
+  Open questions this request is designed to answer:
+  - Does querying the `name` filter with a value taken directly from recall `field_establishment`
+    return the expected establishment record?
+  - Is the match via `establishment_name` or via `dbas`? (Some recalls may use the DBA name.)
+  - Is the matched establishment currently active (status_regulated_est == "") or inactive?
+    Historical recalls may reference establishments that are no longer in the active MPI directory.
+  - What is `establishment_id` for the matched record? This is the stable FK for the bronze schema.
+  - If count > 1: which disambiguation field (state, establishment_number, fips_code) resolves
+    the ambiguity?
+
+  Observed behavior (confirmed 2026-04-29, establishment_name="CS Beef Packers, LLC"):
+  - Count: 1 — clean 1:1 match.
+  - Match via establishment_name: YES. Match via dbas: N/A (dbas=[]).
+  - establishment_id=6163082, establishment_number=M630, state=ID.
+  - status: ACTIVE MPI (status_regulated_est=""). LatestMPIActiveDate=2026-04-27.
+  NOTE: this probe was effectively answered by get_establishment_by_name.yml Variant B
+  (URL-encoded quotes) run on the same date with the same env var. The two probes overlap
+  in behavior; this one adds join-specific logging framing.

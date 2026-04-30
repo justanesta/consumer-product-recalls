@@ -1,0 +1,119 @@
+info:
+  name: Get All Establishments (Cardinality Probe)
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{establishment_root_uri}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("record count (total establishments)", function() {
+          console.log("total establishment count: " + (Array.isArray(res.body) ? res.body.length : "non-array response"));
+        });
+
+        test("response is a flat array (no pagination envelope)", function() {
+          expect(res.body).to.be.an('array');
+          const paginationSignals = ['_links', 'pager', 'meta', 'next', 'page_count', 'total', 'data', 'results'];
+          if (!Array.isArray(res.body)) {
+            paginationSignals.forEach(function(key) {
+              if (res.body[key] !== undefined) {
+                console.log("PAGINATION SIGNAL FOUND: " + key + " = " + JSON.stringify(res.body[key]));
+              }
+            });
+          }
+        });
+
+        test("log activities and dbas serialization format (first 5 records)", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          res.body.slice(0, 5).forEach(function(r, i) {
+            console.log(
+              "record[" + i + "] " +
+              "activities type=" + typeof r.activities + " isArray=" + Array.isArray(r.activities) + " value=" + JSON.stringify(r.activities) + " | " +
+              "dbas type=" + typeof r.dbas + " isArray=" + Array.isArray(r.dbas) + " value=" + JSON.stringify(r.dbas)
+            );
+          });
+        });
+
+        test("log geolocation format (first 5 records)", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          res.body.slice(0, 5).forEach(function(r, i) {
+            console.log("record[" + i + "] geolocation=" + JSON.stringify(r.geolocation));
+          });
+        });
+
+        test("log LatestMPIActiveDate population rate", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const populated = res.body.filter(function(r) { return r.LatestMPIActiveDate && r.LatestMPIActiveDate !== ''; }).length;
+          const empty = res.body.length - populated;
+          console.log("LatestMPIActiveDate populated: " + populated + " / " + res.body.length);
+          console.log("LatestMPIActiveDate empty: " + empty + " / " + res.body.length);
+        });
+
+        test("log status_regulated_est distribution", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          const emptyStatus = res.body.filter(function(r) { return r.status_regulated_est === ''; }).length;
+          const nonEmpty = res.body.length - emptyStatus;
+          console.log("status_regulated_est empty (active MPI): " + emptyStatus + " / " + res.body.length);
+          console.log("status_regulated_est non-empty (inactive/other): " + nonEmpty + " / " + res.body.length);
+        });
+
+        test("log key field nullability", function() {
+          if (!Array.isArray(res.body) || res.body.length === 0) return;
+          var fields = ['establishment_name', 'address', 'state', 'zip', 'phone', 'duns_number', 'county', 'fips_code'];
+          fields.forEach(function(f) {
+            var empty = res.body.filter(function(r) { return !r[f] || r[f] === ''; }).length;
+            console.log(f + " empty: " + empty + " / " + res.body.length + " (" + (empty / res.body.length * 100).toFixed(1) + "%)");
+          });
+        });
+
+        test("log response headers (caching and identity)", function() {
+          console.log("content-length: " + res.headers['content-length']);
+          console.log("etag: " + res.headers['etag']);
+          console.log("last-modified: " + res.headers['last-modified']);
+          console.log("cache-control: " + res.headers['cache-control']);
+          console.log("x-drupal-dynamic-cache: " + res.headers['x-drupal-dynamic-cache']);
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Full dataset probe — no filter parameters. Establishes total establishment count,
+  pagination behavior, field serialization formats, and field nullability.
+
+  Open questions this request is designed to answer:
+  - How many regulated establishments are in the directory (total cardinality)?
+  - Is the response a flat JSON array (like the recall API) or does it have a pagination envelope?
+    If paginated, the extractor design changes significantly — check for _links, pager, meta, next keys.
+  - Are `activities` and `dbas` true JSON arrays, or comma-separated strings?
+    (PDF docs say "text string Array" but doesn't clarify JSON serialization.)
+  - What does `geolocation` look like in practice — a single lat,lng string, separate fields, or null?
+  - Is `LatestMPIActiveDate` present on all records or only active MPI establishments?
+  - What is the `status_regulated_est` distribution — empty (active MPI) vs non-empty?
+  - Are there ETags on the unfiltered response for conditional-GET optimization?
+  - What is the wire size (content-length)?
+
+  Observed behavior (confirmed 2026-04-29):
+  - Total: 7,945 establishments. Flat JSON array, no pagination.
+  - No ETag, no content-length (chunked), cache-control: no-cache, no-store.
+    No conditional-GET optimization available (contrast with recall API).
+  - activities: true JSON array. Elements after index 0 may have a leading space — strip on ingest.
+  - dbas: true JSON array. Same leading-space issue. Can be empty array [].
+  - geolocation: string "lat, lng" when present; boolean false (not null, not "") when absent.
+  - county: boolean false when absent on inactive records (not null, not "").
+  - LatestMPIActiveDate: 100% populated on all 7,945 records (including inactive).
+  - status_regulated_est: "" (7,168 active MPI) or "Inactive" (777); other values possible.
+  - duns_number: 85.5% empty — effectively always missing.
+  - establishment_name, address, state, zip: 100% populated.

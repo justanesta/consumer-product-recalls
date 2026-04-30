@@ -2,6 +2,110 @@ opencollection: 1.0.0
 
 info:
   name: fda
+config:
+  proxy:
+    inherit: true
+    config:
+      protocol: http
+      hostname: ""
+      port: ""
+      auth:
+        username: ""
+        password: ""
+      bypassProxy: ""
+
+docs:
+  content: |-
+    # FDA iRES Enforcement Report API
+
+    REST API providing access to the FDA's Industry Recall Enterprise System (iRES) recall records.
+    Docs: `documentation/fda/iRES_enforcement_reports_api_usage_documentation.pdf` +
+    `documentation/fda/enforcement_report_api_definitions.pdf` — both describe the same API;
+    the Definitions PDF is the column-level reference linked from the Usage PDF.
+
+    **Base URL:** `https://www.accessdata.fda.gov/rest/iresapi`
+    **Auth:** `Authorization-User` and `Authorization-Key` HTTP request headers (not query params).
+    Credentials via `{{FDA_AUTHORIZATION_USER}}` / `{{FDA_AUTHORIZATION_KEY}}` environment variables.
+    Do not hardcode credentials — they live in `environments/Development.yml` which is git-ignored.
+    **Signature cache-busting:** Every request must include `?signature={{$timestamp}}` (or a UUID).
+    Without it, a bad-credential 401 gets cached and replays even after credentials are fixed.
+    **Pagination (bulk POST only):** `start` (1-based, inclusive) + `rows`. No pagination on GET endpoints.
+
+    ---
+
+    ## Collection Structure
+
+    | Folder | Purpose |
+    |---|---|
+    | `incremental_extraction/` | Daily-incremental POST using `eventlmdfrom`/`eventlmdto` filter — the ETL watermark cursor per ADR 0010 |
+    | `lookup/` | GET point lookups by event ID, product ID, press release URLs, code info, and product-type reference data |
+    | `deep_rescan/` | POST full paginated over a wide date window — for historical backfill per ADR 0023 |
+    | `data_exploration/` | POST with no filter or minimal filter to seed test event/product IDs and validate response shape |
+    | `history/` | GET field-level edit history (`/search/productHistory/`, `/search/eventproducthistory/`) — confirmed empty in practice (see Finding L); retained for opportunistic use if FDA populates them |
+
+    ---
+
+    ## Key Behavioral Findings
+
+    Full empirical notes in `documentation/fda/api_observations.md`. Summary of what diverges from the PDFs:
+
+    **Response shape asymmetry (Finding D):**
+    GET endpoints return a columnar envelope (`RESULT.COLUMNS` + `RESULT.DATA`).
+    POST `/recalls/` returns an object-array (`RESULT: [{KEY: value, ...}]`).
+    The PDFs show columnar shape for every endpoint — that is wrong for the bulk POST.
+
+    **`STATUSCODE` not `APIRETURNCODE` (Finding A):**
+    The PDFs show the success field as `APIRETURNCODE`. The live API uses `STATUSCODE`.
+    Values: `400` = success, `412` = bulk POST empty result (no `RESULT` key in body), `401` = auth failure.
+
+    **`RESULTCOUNT` = total matching dataset, not rows returned (Finding E):**
+    A bulk POST requesting `rows: 50` returns `RESULTCOUNT: 133841` (the full-dataset size) alongside 50 rows.
+    RESULTCOUNT is only equal to the row count on GET lookup endpoints, where there is no paging.
+
+    **`start` is 1-based inclusive (Finding G):**
+    Pagination math: `start_for_page_N = (N - 1) * rows + 1`. Pagination terminates when `len(RESULT) < rows`.
+    Do not use `RID` as a pagination cursor — out-of-order RIDs can straddle page boundaries (Finding F).
+
+    **Date format is `MM/DD/YYYY` (Finding H):**
+    Not documented in the PDFs. Applies to both filter parameters (`eventlmdfrom`) and response date fields
+    (`EVENTLMD`, `PRODUCTLMD`, `RECALLINITIATIONDT`, etc.). Bronze schema parses with explicit format.
+
+    **All field values are strings (Finding J):**
+    Even numeric-looking values (`FIRMFEINUM`, `RECALLEVENTID`) and booleans (`DISTRIBUTIONPATTERNINDICATOR`)
+    are returned as strings. Pydantic schema coerces via `BeforeValidator`.
+    Nullable fields use both JSON `null` AND empty string `""` as distinct sentinels — normalize at validation.
+
+    **History endpoints are empty in practice (Finding L / ADR 0022):**
+    `/search/productHistory/` and `/search/eventproducthistory/` return `RESULTCOUNT: 0` for all tested
+    lifecycle states (ongoing 2026, terminated 2026, archive-migrated 2002). Endpoints are functional;
+    they simply have no data. FDA falls back to bronze-snapshot `LAG()` synthesis for lineage, same as
+    CPSC/USDA/NHTSA/USCG (see ADR 0022).
+
+    **Archive migration floods the incremental window (Finding M):**
+    FDA is actively re-touching old recalls (e.g., `RECALLINITIATIONDT: 2002`, `EVENTLMD: 2026-04-02`),
+    bumping their `EVENTLMD` into the daily incremental window. Most such records are content-hash
+    no-ops in bronze (ADR 0007), but they inflate the daily delta from ~20 true new records to
+    potentially hundreds. Deep-rescan workflow required per ADR 0023.
+
+    **Anti-abuse throttling: 302 redirect to HTML "FDA Apology" page, not 429 (Finding N):**
+    Rapid bursts (~33 requests/minute sustained) trigger an IP-level block. The response is
+    `302 → /apology_objects/abuse-detection-apology.html` (which itself 404s). Detect by
+    `Content-Type: text/html` on a POST response, not by status code. Do not retry on throttle
+    — it extends the block. Recovery is time-based; at least 30 minutes observed.
+
+    ---
+
+    ## ETL Notes
+
+    - **Daily incremental:** `POST /recalls/` with `eventlmdfrom=yesterday` filter, `rows=5000`.
+      With ~20 true records/day (plus archive-migration noise), a single page covers normal deltas.
+    - **Historical load / deep rescan:** same POST structure, wider date window, `sort=recalleventid asc`
+      for deterministic resumable pagination. ~27 pages at 5000 rows/page for full history (~134K records).
+    - **Signature:** inject `int(time.time())` into every request. VCR cassettes need a custom matcher
+      that strips `signature` from the query string before comparison (FDA cassettes only).
+    - **`PRODUCTLMD` is lookup-only:** including it in `displaycolumns` on the bulk POST returns
+      `STATUSCODE: 406`. Use `EVENTLMD` as the production watermark; `PRODUCTLMD` is enrichment only.
+  type: text/markdown
 bundled: false
 extensions:
   bruno:
