@@ -1,0 +1,106 @@
+info:
+  name: Probe ETag — Step 3 (Cross-day reliability)
+  type: http
+  seq: 8
+
+http:
+  method: GET
+  url: "{{usda_root_uri}}"
+  auth: inherit
+  headers:
+    - name: If-None-Match
+      value: "{{usda_last_etag}}"
+      enabled: true
+    - name: If-Modified-Since
+      value: "{{usda_last_last_modified}}"
+      enabled: true
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("env vars from probe_etag_capture are populated", function() {
+          const etag = bru.getEnvVar('usda_last_etag');
+          expect(etag, "expected usda_last_etag — run probe_etag_capture.yml ≥24h ago").to.exist;
+          expect(etag).to.not.equal('');
+        });
+
+        test("evaluate cross-day behavior", function() {
+          const priorCount = parseInt(bru.getEnvVar('usda_last_record_count') || '0', 10);
+          const priorLm = bru.getEnvVar('usda_last_last_modified') || '';
+          const currentEtag = res.headers.etag || res.headers.ETag || '';
+          const currentLm = res.headers['last-modified'] || res.headers['Last-Modified'] || '';
+
+          if (res.status === 304) {
+            console.log("304 NOT MODIFIED returned across day boundary.");
+            console.log("  prior_last_modified = " + priorLm);
+            console.log("  current_last_modified header (if any) = " + currentLm);
+            console.log("Interpretation:");
+            console.log("  (a) If FSIS did not publish/update any recalls since prior capture, this is correct.");
+            console.log("  (b) If FSIS DID publish/update recalls in the window, this is a STALE-POSITIVE 304");
+            console.log("      and the etag optimization is UNSAFE. Cross-reference against the FSIS");
+            console.log("      recall page or the recall API's no-filter response (run probe_etag_capture");
+            console.log("      again WITHOUT If-None-Match) to confirm the dataset has actually changed.");
+          } else if (res.status === 200) {
+            const currentCount = Array.isArray(res.body) ? res.body.length : 0;
+            console.log("200 OK returned across day boundary — dataset changed.");
+            console.log("  prior_record_count = " + priorCount);
+            console.log("  current_record_count = " + currentCount);
+            console.log("  prior_etag = " + bru.getEnvVar('usda_last_etag'));
+            console.log("  current_etag = " + currentEtag);
+            if (priorCount > 0 && currentCount === priorCount && currentEtag === bru.getEnvVar('usda_last_etag')) {
+              console.log("WARNING: 200 returned with identical record count AND identical etag — server may not be honoring If-None-Match correctly.");
+            }
+            // Re-capture for the next iteration
+            if (currentEtag) bru.setEnvVar('usda_last_etag', currentEtag);
+            if (currentLm) bru.setEnvVar('usda_last_last_modified', currentLm);
+            if (Array.isArray(res.body)) bru.setEnvVar('usda_last_record_count', String(currentCount));
+          } else {
+            console.log("UNEXPECTED status " + res.status + " — investigate.");
+          }
+        });
+
+        test("contradiction guard: 304 with advanced last-modified is a server bug", function() {
+          if (res.status !== 304) return;
+          const currentLm = res.headers['last-modified'] || res.headers['Last-Modified'];
+          const priorLm = bru.getEnvVar('usda_last_last_modified');
+          if (currentLm && priorLm && currentLm !== priorLm) {
+            console.log("CONTRADICTION: server returned 304 but the 'last-modified' header advanced.");
+            console.log("  prior = " + priorLm);
+            console.log("  current = " + currentLm);
+            console.log("This is a server-side bug (or CDN cache layer issue). The extractor must guard");
+            console.log("against this exact case — see UsdaExtractor's contradiction guard in src/extractors/usda.py.");
+          }
+          // Note: this is informational, not a hard assertion — the contradiction guard runs in production code.
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Step 3 of the ETag conditional-GET reliability probe (Finding N).
+
+  Operator-run cross-day probe. Run probe_etag_capture.yml on day 1 to populate the env
+  vars; wait at least 24 hours; then run THIS probe.
+
+  Two acceptable outcomes:
+    1. Dataset unchanged across the window → 304 Not Modified, etag identical, last-modified identical.
+    2. Dataset changed across the window → 200 OK, new etag, advanced last-modified, possibly
+       different record count.
+
+  Failure mode to detect:
+    - 304 returned BUT cross-referencing the FSIS recall page shows new content was published
+      → etag is stale-positive; the optimization is unsafe in production. Document as
+      Finding N and disable etag handling in the extractor.
+
+  Re-running this probe (when 200 is returned) automatically updates the captured env vars
+  so subsequent runs continue the chain.
+
+  Decision rule:
+    - Both Step 2 (same-day 304) AND Step 3 (correct cross-day behavior) pass → enable
+      ETag short-circuit in UsdaExtractor.
+    - Either step fails → leave ETag handling disabled (do not send If-None-Match) and
+      document the failure mode in Finding N.

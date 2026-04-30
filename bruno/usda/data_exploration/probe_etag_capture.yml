@@ -1,0 +1,82 @@
+info:
+  name: Probe ETag — Step 1 (Capture)
+  type: http
+  seq: 6
+
+http:
+  method: GET
+  url: "{{usda_root_uri}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("response carries an etag header", function() {
+          const etag = res.headers.etag || res.headers.ETag;
+          if (!etag) {
+            console.log("NO ETAG HEADER — the conditional-GET optimization is not viable on this endpoint.");
+          }
+          expect(etag, "expected etag header").to.exist;
+        });
+
+        test("response carries last-modified header", function() {
+          const lm = res.headers['last-modified'] || res.headers['Last-Modified'];
+          if (!lm) {
+            console.log("NO LAST-MODIFIED HEADER — contradiction guard cannot run.");
+          }
+          expect(lm, "expected last-modified header").to.exist;
+        });
+
+        test("capture etag and last-modified into env vars", function() {
+          const etag = res.headers.etag || res.headers.ETag;
+          const lm = res.headers['last-modified'] || res.headers['Last-Modified'];
+          if (etag) {
+            bru.setEnvVar('usda_last_etag', etag);
+            console.log("captured usda_last_etag = " + etag);
+          }
+          if (lm) {
+            bru.setEnvVar('usda_last_last_modified', lm);
+            console.log("captured usda_last_last_modified = " + lm);
+          }
+          // Also capture a content fingerprint so cross-day probe can detect actual data change
+          if (Array.isArray(res.body)) {
+            bru.setEnvVar('usda_last_record_count', String(res.body.length));
+            console.log("captured usda_last_record_count = " + res.body.length);
+          }
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Step 1 of the ETag conditional-GET reliability probe (Finding N in api_observations.md).
+
+  Captures the current etag, last-modified, and record-count values from a no-filter
+  GET into Bruno environment variables so the conditional-get probe and cross-day probe
+  can replay against them.
+
+  Operator workflow:
+    1. Run this probe (Step 1).
+    2. Within ~50 minutes (CDN cache TTL is 3100s = ~51 min), run probe_etag_conditional_get.yml (Step 2).
+       It MUST return 304 Not Modified. If it returns 200, the server is not honoring
+       If-None-Match — the optimization is not viable.
+    3. ≥24h later, run probe_etag_cross_day.yml (Step 3) to confirm the etag advances
+       on actual content changes (or remains stable when the dataset is unchanged).
+    4. Record outcomes as Finding N in documentation/usda/recall_api_observations.md.
+       If both Step 2 and Step 3 pass, the UsdaExtractor's conditional-GET short-circuit
+       is safe to enable in production.
+
+  Captured env vars:
+    - usda_last_etag — value to send as If-None-Match in subsequent probes
+    - usda_last_last_modified — for the contradiction-guard check (304 + advanced
+      last-modified means the etag is stale-positive and the optimization is unsafe)
+    - usda_last_record_count — content fingerprint; if cross-day probe gets 304 but
+      record count is different, etag is stale-positive

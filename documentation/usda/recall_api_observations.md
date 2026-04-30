@@ -405,6 +405,75 @@ A Spanish record with no matching English record is a data anomaly worth quarant
 
 ---
 
+## ETag Conditional-GET Reliability
+
+### Finding N — ETag conditional-GET is not reliably available (DISABLED)
+
+Confirmed 2026-04-30 via three back-to-back probes. **The optimization is disabled
+in `config/sources/usda.yaml` (`etag_enabled: false`).** The extractor pulls the
+full ~1.6 MB compressed payload on every run; idempotency is handled by the bronze
+content-hash loader (ADR 0007).
+
+**Probe sequence and headers observed:**
+
+| Run | Time (UTC) | etag | last-modified | cache-control | transfer | x-drupal-cache | akamai-grn |
+|---|---|---|---|---|---|---|---|
+| Finding A baseline | 2026-04-29 14:29 | `"1777472976"` | `Wed, 29 Apr 2026 14:29:36 GMT` | `public, max-age=3100` | `content-length: 1,641,691` | (HIT-shape; not recorded) | — |
+| capture (round 1) | 2026-04-30 22:10 | absent | absent | `max-age=0, no-cache, no-store` | chunked | `UNCACHEABLE (request policy)` | `0.6be82d17.…2194f2a3` |
+| cardinality (round 1) | 2026-04-30 22:22 | absent | absent | `max-age=0, no-cache, no-store` | chunked | `UNCACHEABLE (request policy)` | `0.6be82d17.…21a9af9c` |
+| capture +25s (round 1) | 2026-04-30 22:23 | absent | absent | `max-age=0, no-cache, no-store` | chunked | `UNCACHEABLE (request policy)` | `0.ad24c317.…90074de6` |
+
+**Root-cause analysis:**
+
+1. **Drupal origin explicitly forbids caching.** Every today-response carried
+   `x-drupal-cache: UNCACHEABLE (request policy)` and `cache-control: max-age=0,
+   no-cache, no-store`. The cacheable response observed in Finding A was Akamai
+   *overriding* the origin directive (synthesizing an etag and `cache-control:
+   public, max-age=3100`) — not Drupal serving a cacheable response.
+2. **Akamai's CDN cache override does not fire reliably.** Three sequential
+   no-filter GETs within 25 seconds all bypassed the cache and went origin-direct.
+   Priming did not produce a HIT on the immediately-following request.
+3. **Akamai edge node rotation compounds miss rates.** The third probe
+   (`akamai-grn: 0.ad24c317.…`) hit a different edge node than the prior two
+   (`akamai-grn: 0.6be82d17.…`); each Akamai node has its own local cache, so a HIT
+   on one node does nothing for a request that lands on another.
+4. **Akamai bot manager is the most likely gate.** Set-Cookie evolved across
+   probes: run 1 carried `ak_bmsc` (initial bot fingerprint); runs 2 and 3 carried
+   `bm_sv` (bot session validation). Akamai is progressively fingerprinting
+   Bruno (and would similarly classify Python httpx in CI) as a non-browser
+   client, which can cause Akamai to gate the cached fast-path behind
+   browser-like reputation.
+
+**Implication for production:** Our extractor's httpx client will look at least
+as bot-like as Bruno. The etag optimization would work occasionally and fail
+unpredictably — the worst-case combination, because it would also expose us to
+stale-positive 304s when a cached edge response carries an etag that no longer
+matches origin. Disabling is the correct call.
+
+**Future API exploration opportunities** (Rounds 2 and 3 of the probe runbook —
+optional, only if revisiting this optimization later):
+
+- **Round 2 (TTL-window test):** ~10 minutes after a primed pair, run
+  `probe_etag_capture.yml` once. If headers match the last successful HIT, the
+  CDN survives the gap; if MISS, caching is dropping unpredictably.
+- **Round 3 (post-cache-window test):** ~30 minutes after Round 2, run
+  `probe_etag_capture.yml` again. The 3100s `max-age` should still be active.
+  HIT with the same etag confirms the cache survives the full window; MISS
+  indicates active invalidation.
+- **Browser-like User-Agent test (not in the probe scripts):** repeat capture
+  with a real browser User-Agent string and standard browser `Accept` /
+  `Accept-Language` headers. If Akamai serves a HIT for a browser-like client
+  but MISS for httpx, bot detection is confirmed as the gate. A workaround would
+  be possible but adds substantial complexity (User-Agent management, cookie
+  jar, possibly TLS fingerprint matching) for a 1.6 MB payload — the cost
+  almost certainly does not justify the savings at this dataset size.
+
+The kill switch (`etag_enabled: false` in config) is sufficient to disable
+without removing the extractor's ETag-handling code path. Re-enable by flipping
+to `true` if a future audit shows Akamai/FSIS behavior has changed.
+
+---
+
 ## Open Items
 
 - [x] Document total cardinality and field nullability map (Findings B, C) — confirmed 2026-04-29

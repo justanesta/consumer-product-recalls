@@ -1,0 +1,47 @@
+name: Deep Rescan USDA FSIS Recalls
+
+# USDA's deep-rescan path differs from the incremental path in two ways:
+#   1. Never sends If-None-Match — always fetches the full payload, providing a
+#      weekly safety net that self-corrects any silent ETag bug (Finding N in
+#      documentation/usda/recall_api_observations.md).
+#   2. Never updates source_watermarks — the incremental extractor owns the watermark
+#      (last_etag, last_cursor=last_modified, last_successful_extract_at) exclusively.
+#
+# No cron yet — cron turns on in Phase 7 (weekly).
+# No --start-date / --end-date inputs: USDA's API has no working server-side date
+# filter (Finding D), so date-window deep rescans are not meaningful for this source.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  deep-rescan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
+          [[ -n "$R2_BUCKET_NAME" ]] || (echo "::error::R2_BUCKET_NAME secret is missing" && exit 1)
+          [[ -n "$R2_ACCOUNT_ID" ]] || (echo "::error::R2_ACCOUNT_ID secret is missing" && exit 1)
+          [[ -n "$R2_ACCESS_KEY_ID" ]] || (echo "::error::R2_ACCESS_KEY_ID secret is missing" && exit 1)
+          [[ -n "$R2_SECRET_ACCESS_KEY" ]] || (echo "::error::R2_SECRET_ACCESS_KEY secret is missing" && exit 1)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Run USDA deep rescan
+        run: uv run recalls deep-rescan usda
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}

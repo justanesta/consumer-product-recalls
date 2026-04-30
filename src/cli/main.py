@@ -86,6 +86,29 @@ def extract(
             f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
         )
 
+    elif source == "usda":
+        from src.config.settings import Settings
+        from src.extractors.usda import UsdaExtractor
+
+        settings = Settings()  # type: ignore[call-arg]
+        # USDA has no usable server-side date filter (Finding D in
+        # documentation/usda/recall_api_observations.md), so --lookback-days has no
+        # meaningful effect on the request; the extractor pulls the full payload every run.
+        # The flag is accepted for CLI shape parity but ignored with a notice.
+        if lookback_days is not None:
+            typer.echo("usda: --lookback-days has no effect (full-dump every run; see Finding D).")
+        extractor = UsdaExtractor(
+            base_url="https://www.fsis.usda.gov/fsis/api/recall/v/1",
+            timeout_seconds=60.0,
+            settings=settings,
+        )
+        result = extractor.run()
+        typer.echo(
+            f"usda: fetched={result.records_fetched} "
+            f"loaded={result.records_loaded} "
+            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
+        )
+
     else:
         typer.echo(f"Unknown source: {source}", err=True)
         raise typer.Exit(code=1)
@@ -93,15 +116,15 @@ def extract(
 
 @app.command(name="deep-rescan")
 def deep_rescan(
-    source: Annotated[str, typer.Argument(help="Source to deep-rescan (e.g. fda)")],
+    source: Annotated[str, typer.Argument(help="Source to deep-rescan (e.g. fda, usda)")],
     start_date: Annotated[
-        str,
-        typer.Option("--start-date", help="Start date (YYYY-MM-DD)"),
-    ],
+        str | None,
+        typer.Option("--start-date", help="Start date (YYYY-MM-DD); required for FDA"),
+    ] = None,
     end_date: Annotated[
-        str,
-        typer.Option("--end-date", help="End date (YYYY-MM-DD)"),
-    ],
+        str | None,
+        typer.Option("--end-date", help="End date (YYYY-MM-DD); required for FDA"),
+    ] = None,
 ) -> None:
     """Run a historical / deep-rescan load for a given source over a date window."""
     configure_logging()
@@ -111,6 +134,10 @@ def deep_rescan(
 
         from src.config.settings import Settings
         from src.extractors.fda import FdaDeepRescanLoader
+
+        if start_date is None or end_date is None:
+            typer.echo("fda deep-rescan requires --start-date and --end-date", err=True)
+            raise typer.Exit(code=1)
 
         settings = Settings()  # type: ignore[call-arg]
         loader = FdaDeepRescanLoader(
@@ -124,6 +151,33 @@ def deep_rescan(
         result = loader.run()
         typer.echo(
             f"fda deep-rescan [{start_date} → {end_date}]: "
+            f"fetched={result.records_fetched} "
+            f"loaded={result.records_loaded} "
+            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
+        )
+
+    elif source == "usda":
+        from src.config.settings import Settings
+        from src.extractors.usda import UsdaDeepRescanLoader
+
+        # USDA's deep-rescan path fetches the full payload (same as incremental) but
+        # never touches source_watermarks and never sends If-None-Match — the workflow
+        # exists as an operator-triggered "force a full re-pull" knob and as a weekly
+        # safety net that self-corrects any silent ETag bug (Finding N in
+        # documentation/usda/recall_api_observations.md).
+        if start_date is not None or end_date is not None:
+            typer.echo(
+                "usda: --start-date / --end-date are ignored (full-dump every run; see Finding D)."
+            )
+        settings = Settings()  # type: ignore[call-arg]
+        loader = UsdaDeepRescanLoader(
+            base_url="https://www.fsis.usda.gov/fsis/api/recall/v/1",
+            timeout_seconds=60.0,
+            settings=settings,
+        )
+        result = loader.run()
+        typer.echo(
+            f"usda deep-rescan: "
             f"fetched={result.records_fetched} "
             f"loaded={result.records_loaded} "
             f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"

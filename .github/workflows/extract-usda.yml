@@ -1,0 +1,51 @@
+name: Extract USDA FSIS Recalls
+
+# USDA FSIS recall extractor (Phase 5b). No cron yet — cron turns on in Phase 7.
+# USDA has no usable server-side date filter (Finding D); --lookback-days is
+# accepted for parity but ignored. The extractor pulls the full ~2,001-record
+# dataset every run; bronze content-hash dedup handles idempotency.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: "Ignored for USDA (full-dump every run); accepted for parity"
+        required: false
+        default: ""
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
+          [[ -n "$R2_BUCKET_NAME" ]] || (echo "::error::R2_BUCKET_NAME secret is missing" && exit 1)
+          [[ -n "$R2_ACCOUNT_ID" ]] || (echo "::error::R2_ACCOUNT_ID secret is missing" && exit 1)
+          [[ -n "$R2_ACCESS_KEY_ID" ]] || (echo "::error::R2_ACCESS_KEY_ID secret is missing" && exit 1)
+          [[ -n "$R2_SECRET_ACCESS_KEY" ]] || (echo "::error::R2_SECRET_ACCESS_KEY secret is missing" && exit 1)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Run USDA extractor
+        run: |
+          if [[ -n "${{ github.event.inputs.lookback_days }}" ]]; then
+            uv run recalls extract usda --lookback-days "${{ github.event.inputs.lookback_days }}"
+          else
+            uv run recalls extract usda
+          fi
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}

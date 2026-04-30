@@ -18,3 +18,11 @@ variables:
     value: https://www.fsis.usda.gov/fsis/api/establishments/v/1
   - name: establishment_name
     value: '"CS Beef Packers, LLC"'
+  # Populated by probe_etag_capture.yml; consumed by probe_etag_conditional_get.yml
+  # and probe_etag_cross_day.yml. Leave blank initially.
+  - name: usda_last_etag
+    value: ""
+  - name: usda_last_last_modified
+    value: ""
+  - name: usda_last_record_count
+    value: ""

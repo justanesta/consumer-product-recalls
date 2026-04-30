@@ -183,3 +183,99 @@ def test_deep_rescan_unknown_source_exits_with_error() -> None:
     )
     assert result.exit_code == 1
     assert "not implemented" in result.output
+
+
+# ---------------------------------------------------------------------------
+# USDA dispatch — extract and deep-rescan
+# ---------------------------------------------------------------------------
+
+
+def test_extract_usda_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result(fetched=2001, loaded=2001)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.usda.UsdaExtractor", return_value=mock_extractor),
+    ):
+        result = runner.invoke(app, ["extract", "usda"])
+
+    assert result.exit_code == 0
+    assert "usda:" in result.output
+    assert "fetched=2001" in result.output
+
+
+def test_extract_usda_lookback_days_warns_but_does_not_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result(fetched=2001, loaded=0)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.usda.UsdaExtractor", return_value=mock_extractor),
+    ):
+        result = runner.invoke(app, ["extract", "usda", "--lookback-days", "7"])
+
+    assert result.exit_code == 0
+    assert "no effect" in result.output
+
+
+def test_deep_rescan_usda_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_loader = MagicMock()
+    mock_loader.run.return_value = _fake_run_result(fetched=2001, loaded=12)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.usda.UsdaDeepRescanLoader", return_value=mock_loader),
+    ):
+        result = runner.invoke(app, ["deep-rescan", "usda"])
+
+    assert result.exit_code == 0
+    assert "usda deep-rescan" in result.output
+    assert "fetched=2001" in result.output
+
+
+def test_deep_rescan_usda_ignores_date_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_loader = MagicMock()
+    mock_loader.run.return_value = _fake_run_result(fetched=2001, loaded=0)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.usda.UsdaDeepRescanLoader", return_value=mock_loader),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "deep-rescan",
+                "usda",
+                "--start-date",
+                "2026-01-01",
+                "--end-date",
+                "2026-04-26",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "ignored" in result.output
+
+
+def test_deep_rescan_fda_missing_dates_exits_with_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+    with patch("src.cli.main.configure_logging"):
+        result = runner.invoke(app, ["deep-rescan", "fda"])
+    assert result.exit_code == 1
+    assert "requires" in result.output

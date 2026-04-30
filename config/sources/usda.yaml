@@ -1,0 +1,23 @@
+source_name: usda
+source_type: rest_api
+base_url: https://www.fsis.usda.gov/fsis/api/recall/v/1
+# ~12 MB uncompressed flat-array response; longer than CPSC (30s) to account for cold cache misses
+timeout_seconds: 60.0
+rate_limit_rps: null
+# Finding D — field_last_modified_date is silently ignored as a server-side filter
+# under both naming variants. No working incremental filter exists; the extractor
+# pulls the full ~2,001-record dataset every run and relies on the bronze content-hash
+# loader for idempotency.
+incremental_filter_param: null
+incremental_filter_format: null
+default_lookback_days: null
+format_param: null
+credentials: null
+# ETag conditional-GET optimization. Disabled per Finding N (operator probe, 2026-04-30):
+# the cacheable response shape observed in Finding A was an Akamai cache override that
+# does not fire reliably for non-browser clients. Three back-to-back requests today all
+# returned origin-direct with no etag, no last-modified, and `x-drupal-cache: UNCACHEABLE
+# (request policy)`. The optimization is not viable; the extractor pulls the full ~1.6 MB
+# compressed payload every run and relies on bronze content-hash dedup for idempotency.
+# Re-enable by flipping to true if Akamai/FSIS behavior changes (no code changes needed).
+etag_enabled: false

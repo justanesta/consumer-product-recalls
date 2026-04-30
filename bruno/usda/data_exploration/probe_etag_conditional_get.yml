@@ -1,0 +1,80 @@
+info:
+  name: Probe ETag — Step 2 (Conditional GET, same day)
+  type: http
+  seq: 7
+
+http:
+  method: GET
+  url: "{{usda_root_uri}}"
+  auth: inherit
+  headers:
+    - name: If-None-Match
+      value: "{{usda_last_etag}}"
+      enabled: true
+    - name: If-Modified-Since
+      value: "{{usda_last_last_modified}}"
+      enabled: true
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("env vars from probe_etag_capture are populated", function() {
+          const etag = bru.getEnvVar('usda_last_etag');
+          if (!etag || etag === '') {
+            console.log("usda_last_etag is not set. Run probe_etag_capture.yml first.");
+          }
+          expect(etag, "expected usda_last_etag to be set — run probe_etag_capture.yml first").to.exist;
+          expect(etag).to.not.equal('');
+        });
+
+        test("status is 304 Not Modified", function() {
+          if (res.status === 200) {
+            console.log("FAILURE: server returned 200, not 304. ETag conditional-GET is NOT honored on this endpoint.");
+            console.log("Inspect response: etag=" + (res.headers.etag || 'none') + " body length=" + JSON.stringify(res.body).length);
+            console.log("Conclusion: the conditional-GET optimization is NOT viable. Document as Finding N and disable etag handling in the extractor.");
+          } else if (res.status === 304) {
+            console.log("SUCCESS: server returned 304 Not Modified. Same-day conditional-GET works.");
+          } else {
+            console.log("UNEXPECTED status " + res.status + " — investigate.");
+          }
+          expect(res.status).to.equal(304);
+        });
+
+        test("304 response body is empty", function() {
+          if (res.status !== 304) return;
+          const bodySize = res.body ? JSON.stringify(res.body).length : 0;
+          // A 304 should carry no body. Some servers send small/empty objects;
+          // the key signal is that we save a ~12 MB download.
+          if (bodySize > 100) {
+            console.log("WARNING: 304 returned with non-trivial body size " + bodySize + " — review.");
+          }
+          expect(bodySize).to.be.lessThan(100);
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  Step 2 of the ETag conditional-GET reliability probe (Finding N).
+
+  Sends the same no-filter GET as probe_etag_capture, but with If-None-Match set to the
+  previously-captured etag. Asserts the server returns 304 Not Modified within the same-day
+  CDN cache window (cache-control: max-age=3100 = ~51 min).
+
+  Run AFTER probe_etag_capture.yml, within 50 minutes.
+
+  Decision rule:
+    - 304 returned → server honors conditional GET. Proceed to Step 3 (cross-day probe).
+    - 200 returned → server does NOT honor If-None-Match. The optimization is not viable;
+      the extractor must always download the full payload. Document as Finding N and ship
+      without ETag short-circuit.
+    - Anything else → investigate before drawing conclusions.
+
+  Reference: documentation/usda/recall_api_observations.md Finding A documents that the
+  recall-API endpoint returns etag and last-modified headers and has a 51-minute CDN
+  cache window. The header presence is necessary but not sufficient — this probe verifies
+  the server actually short-circuits on If-None-Match.
