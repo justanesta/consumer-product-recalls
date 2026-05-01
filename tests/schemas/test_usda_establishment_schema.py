@@ -20,6 +20,7 @@ _REQUIRED: dict = {
     "establishment_name": "CS Beef Packers, LLC",
     "establishment_number": "M630",
     "address": "123 Main St",
+    "city": "Kuna",
     "state": "ID",
     "zip": "83634",
     "LatestMPIActiveDate": "2026-04-27",
@@ -142,3 +143,26 @@ class TestUsdaFsisEstablishment:
     def test_inactive_status_value(self) -> None:
         m = UsdaFsisEstablishment.model_validate({**_REQUIRED, "status_regulated_est": "Inactive"})
         assert m.status_regulated_est == "Inactive"
+
+    def test_empty_string_normalized_to_none_on_optional_strs(self) -> None:
+        # Per the empty-string-to-None follow-up after Phase 5b.2 first
+        # extraction (2026-05-01): all Optional[str] fields use the same
+        # _normalize_str validator as the recall schema, so '' → None at the
+        # bronze boundary instead of leaking empty strings into bronze.
+        m = UsdaFsisEstablishment.model_validate(
+            {
+                **_REQUIRED,
+                "phone": "",
+                "duns_number": "",
+                "fips_code": "",
+                "size": "",
+                "district": "",
+                "circuit": "",
+            }
+        )
+        assert m.phone is None
+        assert m.duns_number is None
+        assert m.fips_code is None
+        assert m.size is None
+        assert m.district is None
+        assert m.circuit is None

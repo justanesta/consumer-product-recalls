@@ -279,3 +279,52 @@ def test_deep_rescan_fda_missing_dates_exits_with_error(monkeypatch: pytest.Monk
         result = runner.invoke(app, ["deep-rescan", "fda"])
     assert result.exit_code == 1
     assert "requires" in result.output
+
+
+# ---------------------------------------------------------------------------
+# USDA establishments dispatch — extract only (no deep-rescan path; full-dump every run)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_usda_establishments_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result(fetched=7945, loaded=7945)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch(
+            "src.extractors.usda_establishment.UsdaEstablishmentExtractor",
+            return_value=mock_extractor,
+        ),
+    ):
+        result = runner.invoke(app, ["extract", "usda_establishments"])
+
+    assert result.exit_code == 0
+    assert "usda_establishments:" in result.output
+    assert "fetched=7945" in result.output
+    assert "loaded=7945" in result.output
+
+
+def test_extract_usda_establishments_lookback_days_warns_but_does_not_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result(fetched=7945, loaded=0)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch(
+            "src.extractors.usda_establishment.UsdaEstablishmentExtractor",
+            return_value=mock_extractor,
+        ),
+    ):
+        result = runner.invoke(app, ["extract", "usda_establishments", "--lookback-days", "7"])
+
+    assert result.exit_code == 0
+    assert "no effect" in result.output

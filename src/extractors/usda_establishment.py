@@ -69,6 +69,7 @@ _establishments_bronze = sa.Table(
     sa.Column("establishment_name", sa.Text),
     sa.Column("establishment_number", sa.Text),
     sa.Column("address", sa.Text),
+    sa.Column("city", sa.Text),
     sa.Column("state", sa.Text),
     sa.Column("zip", sa.Text),
     sa.Column("latest_mpi_active_date", sa.TIMESTAMP(timezone=True)),
@@ -293,5 +294,16 @@ class UsdaEstablishmentExtractor(RestApiExtractor[UsdaFsisEstablishment]):
         try:
             with self._engine.begin() as conn:
                 conn.execute(_extraction_runs.insert().values(**row))
-        except Exception:
-            logger.warning("extraction_run.record_failed", run_id=run_id, status=status)
+        except Exception as exc:
+            # Run-recording is best-effort: the bronze write already committed,
+            # so a failure here doesn't lose data. Include the exception type
+            # and message so a constraint violation (e.g., missing FK row in
+            # source_watermarks for a new source) is diagnosable from logs
+            # rather than requiring code-side instrumentation to reproduce.
+            logger.warning(
+                "extraction_run.record_failed",
+                run_id=run_id,
+                status=status,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )

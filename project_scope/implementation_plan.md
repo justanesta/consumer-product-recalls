@@ -297,9 +297,38 @@ per-source workflow:
    Document in `documentation/usda/establishment_join_coverage.md`.
 4. Cassettes: one full-dump cassette + one quoted-name-filter cassette;
    pagination scenarios don't apply.
+
+**Step 4.5 — Bronze normalization refactor (ADR 0027) — gates Phase 5c.**
+Before writing the establishment silver staging model in Step 5, refactor
+the affected bronze schemas (FDA, USDA recall, USDA establishment — CPSC
+already conformant per audit) per ADR 0027 — bronze keeps storage-forced
+transforms only, value-level normalization moves to silver staging. Doing
+this between Steps 4 and 5 means the establishment silver staging model is
+written once with the new pattern rather than rewritten afterward, and
+NHTSA/USCG inherit the corrected pattern from day one.
+
+Same PR also lands two supporting artifacts required by the production
+re-baseline playbook (`documentation/operations/re_baseline_playbook.md`):
+
+- Alembic migration adding `extraction_runs.change_type TEXT NOT NULL DEFAULT 'routine'` (allowed values: `routine`, `schema_rebaseline`, `hash_helper_rebaseline`).
+- CLI flag `recalls extract <source> --change-type=<value>` in `src/cli/main.py`, defaulting to `routine`. The first re-extract per refactored source uses `--change-type=schema_rebaseline` to mark the wave.
+
+Expected re-baseline waves: FDA (medium), USDA recall (medium), USDA
+establishment (small ~14% second wave). CPSC: none. Acceptable on dev;
+the production-side gates (PR template, CI guard) land in Phase 7 before
+cron turn-on. This is the only refactor in the plan that gates a downstream
+phase — positioned here precisely to prevent the inconsistency from
+propagating to NHTSA and USCG.
+
 5. Silver: `stg_usda_fsis_establishments` staging view; extend `firm.sql` to
    populate `observed_company_ids` for USDA rows with the FSIS
-   `establishment_id` (matched on normalized name with DBA fallback). Optional:
+   `establishment_id` (matched on normalized name; **HTML-entity decode the
+   recall side first** — per `establishment_join_coverage.md`, the recall API
+   returns names with `&#039;` and `&amp;` while the establishment API
+   returns plain text, accounting for ~80% of unmatched names; fixing this
+   takes the per-distinct-name match rate from 82.85% → ~97%). Skip DBA
+   fallback at the staging-join layer (probe Q3 confirmed zero additional
+   matches). Defer fuzzy matching to Phase 6 firm entity resolution. Optional:
    add a `firm_establishment_attributes` silver dim for address/geolocation/FIPS.
 
 Best landed before or alongside Phase 6 firm entity resolution work — the
@@ -309,6 +338,10 @@ FDA's FEI per ADR 0002).
 ---
 
 ### 5c. NHTSA flat-file (ZIP + tab-delimited + schema evolution)
+
+> **Schema follows ADR 0027** — bronze does storage-forced transforms only;
+> value-level normalization (empty-string sentinels, whitespace, etc.) lives
+> in `stg_nhtsa_recalls.sql`, not in `src/schemas/nhtsa.py`.
 
 **Step 1 — Source exploration** (pending)
 - Direct inspection of the NHTSA recall ZIP download URL before writing the extractor. Key questions: How often does NHTSA release a new ZIP vs update an existing one? Does the file modification date reliably reflect content changes or just re-packaging? Document in `documentation/nhtsa/`.
@@ -333,6 +366,10 @@ FDA's FEI per ADR 0002).
 ---
 
 ### 5d. USCG scraping (brittle source)
+
+> **Schema follows ADR 0027** — bronze does storage-forced transforms only;
+> value-level normalization lives in `stg_uscg_recalls.sql`, not in
+> `src/schemas/uscg.py`.
 
 **Step 1 — Source exploration** (pending)
 - Direct inspection of the USCG target HTML before writing the scraper. Document the observed HTML structure, publication frequency, and whether historical records are accessible via pagination or only the current page. Document in `documentation/uscg/`.
@@ -392,6 +429,32 @@ FDA's FEI per ADR 0002).
 
   - Make a decision on using the USDA etag instead of the full download content hash for data updates.
 
+  - **`source_watermarks` seeding for new sources.** Migration 0001 hardcodes
+    a five-source list (`cpsc/fda/usda/nhtsa/uscg`) and seeds
+    `source_watermarks` with one row per source. `extraction_runs.source` is a
+    FK to that table, so any new source needs a one-row seed migration before
+    its `_record_run` call can succeed (otherwise the FK insert fails silently
+    inside the broad except — surfaced during Phase 5b.2 first extraction
+    when `usda_establishments` warning'd `extraction_run.record_failed` while
+    bronze loaded normally). Two cleaner long-term options: (a) drop the FK in
+    favor of a CHECK constraint listing valid sources, updated as sources are
+    added; (b) drop the constraint entirely and let the application enforce
+    the source enum. Either avoids the per-new-source seed-migration ritual.
+    Also: replicate the diagnostic-logging fix from
+    `src/extractors/usda_establishment.py::_record_run` (capture exception
+    `type` + `message` instead of swallowing) across `cpsc.py`, `fda.py`,
+    `usda.py`. Best landed before Phase 7 cron turn-on.
+
+  - **ADR 0027 implementation: bronze does storage-forced transforms only.**
+    Tracked in `documentation/decisions/0027-bronze-storage-forced-transforms-only.md`.
+    Status: Draft, pending three acceptance criteria (storage-type choice for
+    boolean-false sentinel, re-baseline strategy, migration ordering
+    confirmation). **Not a free-floating follow-up:** placed on the critical
+    path as Phase 5b.2 Step 4.5 (see section 5b.2 above), gating Phase 5c so
+    NHTSA and USCG inherit the corrected pattern from day one. Listed here
+    as a cross-reference for visibility alongside the other architectural
+    items.
+
   - **FDA firm role reconciliation.** `firm.sql` and `recall_event_firm.sql`
     label FDA's `firm_legal_nam` with `role='manufacturer'`, but semantically
     that field is the *recalling establishment* (analogous to USDA's
@@ -413,7 +476,7 @@ FDA's FEI per ADR 0002).
 - Firm entity resolution: FDA's `firmfeinum` as the anchor per ADR 0002; fuzzy-match (RapidFuzz) across sources for non-FDA firms
 - Full dbt test suite per ADR 0015 (60–80 generic tests + 5 singular + freshness)
 - Gold: aggregate views for dashboards, denormalized search index
-- `recall_event_history` silver dbt model per ADR 0022 — uniform `LAG()` window function over bronze snapshot tables for all five sources (CPSC, FDA, USDA, NHTSA, USCG); no source-asymmetric path. Model partitions by `(source, source_recall_id)`, orders by `extraction_timestamp`, and emits one row per changed field per snapshot interval. FDA's native history endpoints (`/search/productHistory/{productid}` and `/search/eventproducthistory/{eventid}`) were confirmed empty across all tested lifecycle states in Phase 5a; if they ever start populating, file a new ADR and add: (a) an Alembic migration for `fda_product_history_bronze` and `fda_event_product_history_bronze`, (b) an extraction path for those tables, and (c) a `UNION` branch in this model to merge native-history rows with the snapshot-derived rows. Until then those tables do not exist.
+- `recall_event_history` silver dbt model per ADR 0022 — uniform `LAG()` window function over bronze snapshot tables for all five sources (CPSC, FDA, USDA, NHTSA, USCG); no source-asymmetric path. Model partitions by `(source, source_recall_id)`, orders by `extraction_timestamp`, and emits one row per changed field per snapshot interval. **Joins to `extraction_runs.change_type` and excludes rows from non-routine runs** (`schema_rebaseline`, `hash_helper_rebaseline`) from edit detection so parser-driven re-version waves don't synthesize false-edit events — see ADR 0027 + `documentation/operations/re_baseline_playbook.md`. FDA's native history endpoints (`/search/productHistory/{productid}` and `/search/eventproducthistory/{eventid}`) were confirmed empty across all tested lifecycle states in Phase 5a; if they ever start populating, file a new ADR and add: (a) an Alembic migration for `fda_product_history_bronze` and `fda_event_product_history_bronze`, (b) an extraction path for those tables, and (c) a `UNION` branch in this model to merge native-history rows with the snapshot-derived rows. Until then those tables do not exist.
 - `scripts/re_ingest.py` — re-ingest CLI per ADR 0014 for schema-drift recovery
 - Alembic migrations for all silver and gold tables
 - Create final column-level ERD in `documentation/diagrams/` for silver postgres DB.
@@ -441,6 +504,8 @@ FDA's FEI per ADR 0002).
 - `dbt docs generate` deploys to Cloudflare Pages on every main push
 - Quarterly secret-rotation reminder workflow per ADR 0016
 - Startup-check in every cron workflow that validates all required secrets are present before invoking extraction code (fail fast with a clear message rather than a `KeyError` mid-run)
+- **Database-level mutation guard on `*_rejected` tables.** ADR 0013 designs the per-source rejected tables as append-only audit trail (schema-drift forensics, re-ingest source per ADR 0014, data-loss accounting). Enforce that as a Postgres invariant in production rather than relying on operator discipline: revoke `TRUNCATE`, `DELETE`, and `UPDATE` on every `*_rejected` table from the production application role, leaving only `INSERT` and `SELECT`. The migration role retains DDL rights so future Alembic migrations still work. Dev branches keep full privileges (truncating is fine when iterating on a buggy schema). Filed during Phase 5b.2 first extraction (2026-05-01) — context: 7,945 records were rejected on a missed `city` field; the temptation to truncate before the fix-and-retry highlighted the need for a structural guard in prod.
+- **Re-baseline gate for bronze-shape PRs (ADR 0027).** Add `.github/PULL_REQUEST_TEMPLATE.md` with a "Does this change the bronze canonical dict?" checkbox, and a CI workflow `.github/workflows/re-baseline-check.yml` that fails any PR touching `src/schemas/*.py` or `src/bronze/hashing.py` whose body lacks a `RE-BASELINE: yes|no` line. Operator-side procedure documented at `documentation/operations/re_baseline_playbook.md`. Lands before cron turn-on so the first production schema PR hits the gate.
 
 **Quality gates:**
 

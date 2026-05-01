@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
-from src.schemas.usda import _parse_nullable_usda_date, _parse_usda_date
+from src.schemas.usda import _normalize_str, _parse_nullable_usda_date, _parse_usda_date
 
 
 def _normalize_false_sentinel(v: Any) -> str | None:
@@ -48,6 +48,12 @@ _FsisFalseSentinelStr = Annotated[str | None, BeforeValidator(_normalize_false_s
 _FsisStrippedStrList = Annotated[list[str], BeforeValidator(_strip_list_elements)]
 _UsdaDate = Annotated[datetime, BeforeValidator(_parse_usda_date)]
 _UsdaNullableDate = Annotated[datetime | None, BeforeValidator(_parse_nullable_usda_date)]
+# Empty-string-to-None normalizer, matching the recall schema's posture for
+# Optional[str] fields. Per Finding C and the establishment-extract follow-up
+# on 2026-05-01: the API returns "" (e.g., duns_number) where Pydantic strict
+# would otherwise store the empty string, leaking into bronze and forcing
+# every silver/gold consumer to remember the `nullif(col, '')` dance.
+_FsisNullableStr = Annotated[str | None, BeforeValidator(_normalize_str)]
 
 
 class UsdaFsisEstablishment(BaseModel):
@@ -85,6 +91,13 @@ class UsdaFsisEstablishment(BaseModel):
     establishment_name: str
     establishment_number: str
     address: str
+    # `city` was a Finding D blind spot — the cardinality probe didn't enumerate
+    # it but the API returns it on every record. First live extraction
+    # (2026-05-01) rejected 100% (7,945/7,945) on `extra_forbidden city`. Same
+    # class of miss as `field_active_notice` in the recall schema. Treated as
+    # required: 0% empty observed in the rejection sample of 7,945 records, so
+    # making it nullable would obscure a future shape change.
+    city: str
     state: str
     zip: str  # noqa: A003 — column name matches API; shadow of builtin is acceptable here
     # 100% populated on all records including inactive (Finding G).
@@ -96,17 +109,18 @@ class UsdaFsisEstablishment(BaseModel):
     dbas: _FsisStrippedStrList
 
     # --- Optional demographics (Finding D nullability rates in comments) ---
-    phone: str | None = Field(default=None)  # 3.9% empty
-    duns_number: str | None = Field(default=None)  # 85.5% empty
-    fips_code: str | None = Field(default=None)  # 4.3% empty
+    # All Optional[str] fields use _FsisNullableStr so '' → None at the bronze
+    # boundary, matching the recall schema's pattern (src/schemas/usda.py).
+    phone: _FsisNullableStr = Field(default=None)  # 3.9% empty
+    duns_number: _FsisNullableStr = Field(default=None)  # 85.5% empty
+    fips_code: _FsisNullableStr = Field(default=None)  # 4.3% empty
     # boolean false sentinel → None
     county: _FsisFalseSentinelStr = Field(default=None)  # 1.5% empty (false sentinel)
     geolocation: _FsisFalseSentinelStr = Field(default=None)  # 1.5%+ empty (false sentinel)
     # Optional date (presence not enumerated in Finding D — treat as nullable).
     grant_date: _UsdaNullableDate = Field(default=None)
     # Optional administrative metadata; '' on inactive records (per observations
-    # doc Implications section). Empty-string sentinel handling lives in the
-    # silver layer if needed — bronze keeps the raw string.
-    size: str | None = Field(default=None)
-    district: str | None = Field(default=None)
-    circuit: str | None = Field(default=None)
+    # doc Implications section) → None.
+    size: _FsisNullableStr = Field(default=None)
+    district: _FsisNullableStr = Field(default=None)
+    circuit: _FsisNullableStr = Field(default=None)

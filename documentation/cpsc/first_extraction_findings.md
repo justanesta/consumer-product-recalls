@@ -167,127 +167,17 @@ From indirect evidence (watermark timestamps and row counts), CPSC incremental r
 
 ## J. SQL Reference
 
-All queries used to produce this analysis. Each can be re-run against `cpsc_recalls_bronze` as the dataset grows.
+All queries used to produce this analysis live in
+`scripts/sql/cpsc/bronze/explore_bronze_shape.sql`. The file is a 12-query
+batch with `\echo` headers; sections A–I above cite individual queries by
+their `Q<n>` number.
 
-```sql
--- 1. Overall row count and date range
---    Establishes the extraction window and confirms the watermark field used.
-SELECT COUNT(*), MIN(last_publish_date), MAX(last_publish_date)
-FROM cpsc_recalls_bronze;
+Run with:
 
--- 2. Weekly cadence
---    Shows publication rhythm week-by-week; reveals holiday gaps and seasonal patterns.
-SELECT
-  DATE_TRUNC('week', last_publish_date)::date AS week_start,
-  COUNT(*) AS records,
-  COUNT(DISTINCT last_publish_date::date) AS active_days
-FROM cpsc_recalls_bronze
-GROUP BY DATE_TRUNC('week', last_publish_date)
-ORDER BY week_start;
-
--- 3. Records per day
---    Detailed daily view; used to identify spikes and confirm no weekend activity.
-SELECT last_publish_date::date AS day, COUNT(*) AS records
-FROM cpsc_recalls_bronze
-GROUP BY last_publish_date::date
-ORDER BY last_publish_date::date;
-
--- 4. Edit detection: recall_ids with multiple distinct content hashes
---    A non-empty result would indicate a record was re-fetched with changed content
---    (the content hash dedup mechanism captured an edit). Zero rows = no edits detected.
-SELECT recall_id, COUNT(DISTINCT content_hash) AS hash_versions, COUNT(*) AS total_rows
-FROM cpsc_recalls_bronze
-GROUP BY recall_id
-HAVING COUNT(DISTINCT content_hash) > 1
-ORDER BY hash_versions DESC;
-
--- 5. Total rows vs unique recall_ids (dedup summary)
---    Confirms whether source_recall_id is truly unique in bronze or whether
---    multi-version rows exist from edit detection.
-SELECT
-  COUNT(*) AS total_rows,
-  COUNT(DISTINCT recall_id) AS unique_recall_ids,
-  COUNT(*) - COUNT(DISTINCT recall_id) AS apparent_duplicates
-FROM cpsc_recalls_bronze;
-
--- 6. Null rates for scalar fields
---    Identifies which fields are reliably populated vs. optional. Critical input
---    for deciding which silver columns can be NOT NULL.
-SELECT
-  ROUND(100.0 * SUM(CASE WHEN title IS NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_null_title,
-  ROUND(100.0 * SUM(CASE WHEN recall_date IS NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_null_recall_date,
-  ROUND(100.0 * SUM(CASE WHEN description IS NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_null_description,
-  ROUND(100.0 * SUM(CASE WHEN url IS NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_null_url,
-  ROUND(100.0 * SUM(CASE WHEN consumer_contact IS NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_null_consumer_contact,
-  ROUND(100.0 * SUM(CASE WHEN sold_at_label IS NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_null_sold_at_label,
-  ROUND(100.0 * SUM(CASE WHEN product_upcs IS NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_null_upcs,
-  ROUND(100.0 * SUM(CASE WHEN injuries IS NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_null_injuries
-FROM cpsc_recalls_bronze;
-
--- 7. JSONB field empty-array rates
---    Checks whether JSONB arrays are populated, not just non-null.
---    A non-null but empty array (e.g. manufacturers = '[]') means the field exists
---    structurally but carries no data — different from a null field.
-SELECT
-  ROUND(100.0 * SUM(CASE WHEN products IS NULL OR products = '[]'::jsonb THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_empty_products,
-  ROUND(100.0 * SUM(CASE WHEN hazards IS NULL OR hazards = '[]'::jsonb THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_empty_hazards,
-  ROUND(100.0 * SUM(CASE WHEN remedies IS NULL OR remedies = '[]'::jsonb THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_empty_remedies,
-  ROUND(100.0 * SUM(CASE WHEN manufacturers IS NULL OR manufacturers = '[]'::jsonb THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_empty_manufacturers,
-  ROUND(100.0 * SUM(CASE WHEN retailers IS NULL OR retailers = '[]'::jsonb THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_empty_retailers,
-  ROUND(100.0 * SUM(CASE WHEN manufacturer_countries IS NULL OR manufacturer_countries = '[]'::jsonb THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_empty_mfr_countries
-FROM cpsc_recalls_bronze;
-
--- 8. Products per recall (confirms 1:1 model)
---    FDA has 1-to-many; this query confirms CPSC always has exactly 1 product per row.
-SELECT
-  jsonb_array_length(products) AS product_count,
-  COUNT(*) AS recalls
-FROM cpsc_recalls_bronze
-WHERE products IS NOT NULL
-GROUP BY jsonb_array_length(products)
-ORDER BY product_count;
-
--- 9. HazardType population check
---    Validates the TODO finding that HazardType is always an empty string
---    despite hazards arrays being non-empty. Used to assess silver filter viability.
-SELECT
-  COUNT(*) AS total_recalls,
-  SUM(CASE WHEN hazards != '[]'::jsonb THEN 1 ELSE 0 END) AS recalls_with_hazards,
-  SUM(CASE WHEN hazards != '[]'::jsonb AND (hazards->0->>'HazardType') != '' THEN 1 ELSE 0 END) AS recalls_with_hazard_type
-FROM cpsc_recalls_bronze;
-
--- 10. Top spike days
---     Identifies the highest-volume single days; used to check for anomalies
---     vs. expected publication patterns.
-SELECT last_publish_date::date AS day, COUNT(*) AS records
-FROM cpsc_recalls_bronze
-GROUP BY last_publish_date::date
-ORDER BY records DESC
-LIMIT 5;
-
--- 11. Weekday gap analysis
---     Finds weekdays with zero CPSC activity. Expected gaps = US federal holidays.
---     Unexpected gaps may indicate pipeline failures or API outages.
-WITH date_series AS (
-  SELECT generate_series(MIN(last_publish_date)::date, MAX(last_publish_date)::date, '1 day'::interval)::date AS day
-  FROM cpsc_recalls_bronze
-),
-active_days AS (
-  SELECT DISTINCT last_publish_date::date AS day FROM cpsc_recalls_bronze
-)
-SELECT d.day, TO_CHAR(d.day, 'Day') AS day_name
-FROM date_series d
-LEFT JOIN active_days a ON d.day = a.day
-WHERE a.day IS NULL AND EXTRACT(DOW FROM d.day) NOT IN (0, 6)
-ORDER BY d.day;
-
--- 12. Extraction run history
---     Confirms pipeline runs were recorded with correct counts and status.
---     Note: runs prior to the extraction_runs fix (feature/fda-first-extraction)
---     will not appear here.
-SELECT source, status, records_extracted, records_inserted, records_rejected,
-  started_at, EXTRACT(EPOCH FROM (finished_at - started_at))::int AS duration_seconds
-FROM extraction_runs
-WHERE source = 'cpsc'
-ORDER BY started_at;
+```bash
+set -a && . .env && set +a
+PGPASSWORD="$NEON_PASSWORD" psql -h "$NEON_HOST" -U "$NEON_USER" -d "$NEON_DBNAME" \
+  -f scripts/sql/cpsc/bronze/explore_bronze_shape.sql
 ```
+
+See `scripts/sql/README.md` for the broader query-organization convention.

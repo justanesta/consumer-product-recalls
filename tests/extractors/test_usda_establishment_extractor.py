@@ -35,6 +35,7 @@ _VALID_RAW: dict[str, Any] = {
     "establishment_name": "CS Beef Packers, LLC",
     "establishment_number": "M630",
     "address": "123 Main St",
+    "city": "Kuna",
     "state": "ID",
     "zip": "83634",
     "LatestMPIActiveDate": "2026-04-27",
@@ -225,6 +226,92 @@ class TestCheckInvariants:
         passing, quarantined = extractor.check_invariants([record])
         assert len(passing) == 1
         assert len(quarantined) == 0
+
+    def test_null_source_id_routes_to_quarantine(
+        self, extractor: UsdaEstablishmentExtractor
+    ) -> None:
+        # Construct a real record then forcibly empty its source_recall_id so
+        # check_null_source_id flags it. Pydantic strict-mode would reject ""
+        # at validate_records time, so we bypass that to exercise the
+        # invariants-quarantine path directly.
+        from src.schemas.usda_establishment import UsdaFsisEstablishment
+
+        record = UsdaFsisEstablishment.model_validate(_VALID_RAW)
+        # Use Pydantic v2's model_copy to override the field without re-validating.
+        bad_record = record.model_copy(update={"source_recall_id": ""})
+        extractor._current_landing_path = _FAKE_R2_PATH
+        passing, quarantined = extractor.check_invariants([bad_record])
+        assert len(passing) == 0
+        assert len(quarantined) == 1
+        assert quarantined[0].failure_stage == "invariants"
+        assert quarantined[0].raw_landing_path == _FAKE_R2_PATH
+
+
+# ---------------------------------------------------------------------------
+# _capture_error_response — invoked on 4xx/5xx paths in _fetch
+# ---------------------------------------------------------------------------
+
+
+class TestCaptureErrorResponse:
+    def test_capture_invokes_r2_land_error_response(
+        self, extractor: UsdaEstablishmentExtractor
+    ) -> None:
+        # Build a real httpx.Response (so .request.method / .request.url / .text
+        # / .headers are real) and confirm _capture_error_response forwards the
+        # right kwargs to R2LandingClient.land_error_response.
+        request = httpx.Request("GET", _BASE_URL)
+        response = httpx.Response(
+            500,
+            request=request,
+            content=b"upstream is down",
+            headers={"content-type": "text/plain"},
+        )
+        extractor._capture_error_response(response)
+        extractor._r2_client.land_error_response.assert_called_once()  # type: ignore[attr-defined]
+        kwargs = extractor._r2_client.land_error_response.call_args.kwargs  # type: ignore[attr-defined]
+        assert kwargs["source"] == "usda_establishments"
+        assert kwargs["status_code"] == 500
+        assert kwargs["response_body"] == "upstream is down"
+
+    def test_capture_swallows_r2_failure(self, extractor: UsdaEstablishmentExtractor) -> None:
+        # If R2 itself is down, _capture_error_response must not propagate —
+        # error capture is best-effort, the original 5xx is what callers care about.
+        request = httpx.Request("GET", _BASE_URL)
+        response = httpx.Response(503, request=request, content=b"")
+        extractor._r2_client.land_error_response.side_effect = RuntimeError("R2 down")  # type: ignore[attr-defined]
+        # No exception expected; the broad except/logger.warning swallows it.
+        extractor._capture_error_response(response)
+
+
+# ---------------------------------------------------------------------------
+# _record_run — broad-except diagnostic path (FK violation, etc.)
+# ---------------------------------------------------------------------------
+
+
+class TestRecordRun:
+    def test_db_failure_is_logged_not_raised(self, extractor: UsdaEstablishmentExtractor) -> None:
+        # The bronze write has already committed by the time _record_run is
+        # called; a failure here (e.g., missing source_watermarks FK row, as
+        # seen on Phase 5b.2 first extraction) must not propagate. The fix
+        # added on 2026-05-01 captures the exception type + message so the
+        # cause is diagnosable from the structured-log output.
+        from datetime import UTC, datetime
+
+        # Make conn.execute raise to simulate the FK violation.
+        mock_engine: MagicMock = extractor._engine  # type: ignore[assignment]
+        mock_conn = MagicMock()
+        mock_conn.execute.side_effect = RuntimeError("FK violation")
+        mock_engine.begin.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)
+
+        # Should not raise — the broad except in _record_run swallows it.
+        extractor._record_run(
+            run_id="test-run-id",
+            started_at=datetime.now(UTC),
+            status="success",
+            result=None,
+            error_message=None,
+        )
 
 
 # ---------------------------------------------------------------------------
