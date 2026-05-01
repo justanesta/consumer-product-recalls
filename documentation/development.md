@@ -351,6 +351,62 @@ uv run pytest tests/integration/test_<source>_extractor.py --record-mode=rewrite
 
 Full procedure documented in `documentation/operations.md` once the workflow is built.
 
+### Managing cassette size
+
+Cassette YAML files store the full decoded API response body. For sources that return large flat-array payloads (CPSC ~9,700 records, USDA ~2,001 records), live-recorded cassettes are 13–15 MB each. This is well under GitHub's 100 MB per-file hard limit, but the files accumulate in git history on every re-recording.
+
+**Current state (Phase 5b):** CPSC (~42 MB) + FDA (<1 MB) + USDA (~28 MB) = ~70 MB of cassette data. Within comfortable bounds.
+
+**When to act:** if total cassette data in the repo approaches ~300 MB, or if a single cassette exceeds ~50 MB (GitHub's soft warning threshold), apply one of the two strategies below.
+
+#### Strategy 1 — Truncate cassettes to a representative sample (preferred first move)
+
+The happy-path tests only need enough records to exercise schema coverage — field nullability, type coercions, optional fields, source-specific edge cases (USDA bilingual pairs, CPSC nested arrays, etc.). A sample of 50 records is sufficient; the full 2,001-record or 9,700-record payload is not needed.
+
+**Planned automation:** `scripts/truncate_cassette.py` (not yet implemented — implement when first re-recording is needed). The script will:
+
+1. Accept one or more cassette YAML paths and a `--max-records N` flag (default: 50).
+2. Load the YAML, locate `interactions[*].response.body.string`.
+3. Parse the body string as a JSON array.
+4. Slice to the first N records.
+5. Re-serialize to a compact JSON string and write back the YAML in-place.
+
+Invocation after recording:
+
+```bash
+# Step 1 — record against the live API
+uv run pytest --vcr-record=all tests/integration/test_<source>_live_cassettes.py \
+    -k "<cassette tests>"
+
+# Step 2 — truncate before committing
+uv run python scripts/truncate_cassette.py \
+    tests/fixtures/cassettes/<source>/test_happy_path_*.yaml \
+    --max-records 50
+```
+
+Record the truncation step in each source's test file docstring alongside the recording command so it's not forgotten. After truncation, re-run the full test file to confirm the sliced cassette still passes all assertions (record count assertions should use `> 0`, not `== 2001`, so they survive truncation without edits).
+
+**USDA note:** the current USDA cassettes are at 14 MB each and have not been truncated. Truncate them during the first re-recording rather than retroactively — there is no urgency at the current size.
+
+#### Strategy 2 — Git LFS (fallback if truncation is insufficient)
+
+If cassette files grow past ~50 MB individually (unlikely given truncation), or if git history bloat becomes an issue after many re-recordings, move cassettes to Git LFS:
+
+```bash
+git lfs track "tests/fixtures/cassettes/**/*.yaml"
+git add .gitattributes
+```
+
+GitHub provides 1 GB LFS storage and 1 GB/month bandwidth on the free tier. Every contributor and CI runner then needs `git lfs install` and the CI workflow needs `git lfs pull` before running tests. This is a meaningful increase in onboarding friction — exhaust truncation first.
+
+To rewrite history and move existing large files retroactively:
+
+```bash
+git filter-repo --path tests/fixtures/cassettes/ --use-mailmap
+```
+
+Run this on a fresh clone and force-push; coordinate with all active contributors to re-clone.
+
 ---
 
 ## API exploration with Bruno

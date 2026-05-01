@@ -26,16 +26,16 @@ jobs:
         run: uv sync --frozen
 
       - name: Lint (ruff)
-        run: uv run ruff check src/ tests/ scripts/ migrations/
+        run: uv run ruff check
 
       - name: Format check (ruff)
-        run: uv run ruff format --check src/ tests/ scripts/ migrations/
+        run: uv run ruff format --check
 
       - name: Type check (pyright)
         run: uv run pyright
 
       - name: Run tests
-        run: uv run pytest
+        run: uv run pytest --cov-fail-under=85
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}

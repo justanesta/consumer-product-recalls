@@ -138,83 +138,179 @@ CPSC is chosen first because it has no auth, clean nested JSON, and a stable eve
 
 **Goal:** complete source coverage.
 
-Built in order of increasing complexity so earlier lessons inform later sources:
+Built in order of increasing complexity so earlier lessons inform later sources.
 
-**Standing requirement for all four sources in Phase 5:**
+---
 
-**Incremental extractor vs. historical load path.** Every source has two distinct code paths that must not be conflated:
+### Standing architectural requirement: incremental vs. historical load paths
+
+Every source has two distinct code paths that must not be conflated:
 
 - **Incremental path** (`<Source>Extractor.extract()`) — uses the watermark cursor (e.g. `LastPublishDateStart`, `eventlmd`, file modification date) to fetch only records changed since the last run. This path includes a response-count guard that raises `TransientExtractionError` if the result set exceeds a source-specific ceiling (e.g. `_MAX_INCREMENTAL_RECORDS = 500` for CPSC). The guard prevents a silently-ignored cursor parameter from loading the full database undetected.
 - **Historical load path** (`deep-rescan-<source>.yml` workflow) — fetches all records in a date range for initial seeding or gap backfill. This path calls a **separate method or extractor class**, never `<Source>Extractor.extract()`, because it must handle arbitrarily large result sets and the incremental count guard would immediately fire. The historical path has no count guard.
 
 This split was established for CPSC in Phase 3 (CPSC API behavior confirmed: an invalid or missing `LastPublishDateStart` parameter returns the full ~9,700-record dataset silently). Apply the same pattern for each source in Phase 5: FDA iRES, USDA FSIS, NHTSA, and USCG each need both an incremental extractor with a source-appropriate count guard and a separate historical load path without one.
 
-Phase 3 established a three-part empirical process for CPSC that must be repeated for each source:
+---
 
-0. **Bruno API exploration (REST API sources only — FDA, USDA).** Before writing the schema or extractor, use Bruno to interactively explore the source's endpoints. Build the collection in `bruno/<source>/` with an `environments/dev.bru` file referencing credentials via `{{variables}}` — never hardcoded in `.bru` request files. Commit the collection alongside the extractor; `.bru` files are plain text and diff cleanly in git. Use `bru run bruno/<source>/` for quick scripted smoke tests from the terminal. The collection informs which cassette scenarios are worth recording and serves as living API documentation. Not applicable to NHTSA (flat file) or USCG (HTML scrape).
+### Per-source workflow
 
-1. **Live cassette recording.** After the schema and extractor are written, record a set of live VCR cassettes against the real source before committing. **The scenarios recorded must be tuned to the source's actual API shape** — there is no universal 4-cassette matrix. The lists below are **starting heuristics, not prescriptions**:
-   - For paginated APIs (e.g., FDA iRES): single-page, multi-page, partial last page, empty.
-   - For non-paginated APIs (e.g., CPSC — one GET returns everything): recent, wide window, narrow window, empty. (Pagination-specific scenarios don't apply and recording them is busywork.)
-   - For flat-file downloads (e.g., NHTSA ZIP): one representative archive plus an intentionally-malformed variant. The "page" concept doesn't apply.
-   - For HTML scrapes (e.g., USCG): current-page HTML plus a structurally-drifted variant to exercise the scraper's failure mode.
+Each sub-phase replicates the Phase 3 → Phase 4 pattern for its source: build and run the extractor first, then design cassettes from real evidence, then establish the silver layer before moving on. The five steps are ordered — each informs the next, and none should be skipped or resequenced.
 
-   **Trim the suite based on what the API actually does at the source's data volume**, not on what the projected matrix above suggests. The projected scenarios above were drafted before any source's empirical investigation; the real cassette suite must be designed against findings from Bruno exploration and the first live extraction. Concrete example from FDA (Phase 5a): the projected matrix called for `single_page`, `multi_page`, and `partial_last_page` cassettes, but with FDA's measured ~20 records/day and `PAGE_SIZE=5000`, no realistic window paginated — all three cassettes ended up testing the same single-iteration code path, so two were deleted post-recording. See `documentation/fda/api_observations.md` finding O for the full reasoning. Apply the same critical-evaluation step to USDA/NHTSA/USCG: record what the matrix suggests, then audit each cassette's HTTP-call count, response shape, and code path against the others; delete or merge anything that turns out to be redundant before committing.
+**Step 1 — Source exploration**
 
-   CPSC cassette recording revealed four schema bugs that hand-crafted respx mocks had hidden: a missing `SoldAtLabel` field, a missing `Caption` sub-field on images, a wrong alias casing (`InConjunctions` vs `Inconjunctions`), and a datetime string format difference. Treat cassette failures as schema bugs to fix, not test failures to skip.
+For REST API sources (FDA, USDA): Bruno collection in `bruno/<source>/` with an `environments/dev.bru` file referencing credentials via `{{variables}}` — never hardcoded in `.bru` request files. Commit the collection alongside the extractor; `.bru` files are plain text and diff cleanly in git. Use `bru run bruno/<source>/` for quick scripted smoke tests from the terminal. The collection informs which cassette scenarios are worth recording and serves as living API documentation.
 
-2. **API data exploration.** After the first live extraction run, query the bronze table to surface publication patterns, gap distributions, and any data shape surprises — the same analysis done for CPSC in `documentation/cpsc/last_publish_date_semantics.md`. Key questions to answer for each source: Does the incremental cursor field reliably advance on genuine edits? Are there batch/migration events that flood the watermark? What is the publication cadence and are there historical gaps in the database? Document findings in the corresponding `documentation/<source>/` directory. These findings directly inform whether deep-rescan workflows can be relaxed or must be treated as the primary historical-load mechanism.
+For flat-file and HTML sources (NHTSA, USCG): direct inspection of the download URL and response shape before writing the extractor. Document the observed format, update cadence, and any schema-drift history in `documentation/<source>/` before writing any code.
 
-**5a. FDA iRES** (auth + signature cache-busting)
+**Step 2 — Schema, extractor, YAML config, and Alembic migration**
 
+Deliverables common to every source:
+
+- `src/schemas/<source>.py` — Pydantic bronze model with `ConfigDict(extra='forbid', strict=True)` per ADR 0014
+- `src/extractors/<source>.py` — incremental extractor + deep-rescan subclass
+- `config/sources/<source>.yaml` — declarative config per ADR 0012
+- Alembic migration: `<source>_recalls_bronze` + `<source>_recalls_rejected` tables
+- `.github/workflows/extract-<source>.yml` with `workflow_dispatch`
+- `.github/workflows/deep-rescan-<source>.yml` with `workflow_dispatch` per ADR 0010
+
+**Step 3 — First extraction run and bronze data documentation**
+
+Run the extractor against the live source and query the resulting bronze table to surface publication patterns, gap distributions, and any data shape surprises — the same analysis done for CPSC in `documentation/cpsc/last_publish_date_semantics.md`. Key questions to answer for each source: Does the incremental cursor field reliably advance on genuine edits? Are there batch/migration events that flood the watermark? What is the publication cadence and are there historical gaps in the database? Document findings in `documentation/<source>/`. These findings directly inform which cassette scenarios are worth recording in Step 4 and whether deep-rescan workflows can be relaxed or must be treated as the primary historical-load mechanism.
+
+**Step 4 — Cassette suite design and recording**
+
+Design and record VCR cassettes after the first extraction, not before — real data surfaces schema surprises that hand-crafted mocks hide. **The scenarios recorded must be tuned to the source's actual API shape** — there is no universal 4-cassette matrix. The lists below are **starting heuristics, not prescriptions**:
+
+- For paginated APIs (e.g., FDA iRES): single-page, multi-page, partial last page, empty.
+- For non-paginated APIs (e.g., CPSC — one GET returns everything): recent, wide window, narrow window, empty. (Pagination-specific scenarios don't apply and recording them is busywork.)
+- For flat-file downloads (e.g., NHTSA ZIP): one representative archive plus an intentionally-malformed variant. The "page" concept doesn't apply.
+- For HTML scrapes (e.g., USCG): current-page HTML plus a structurally-drifted variant to exercise the scraper's failure mode.
+
+**Trim the suite based on what the API actually does at the source's data volume**, not on what the projected matrix above suggests. The projected scenarios above were drafted before any source's empirical investigation; the real cassette suite must be designed against findings from Steps 1–3. Concrete example from FDA (Phase 5a): the projected matrix called for `single_page`, `multi_page`, and `partial_last_page` cassettes, but with FDA's measured ~20 records/day and `PAGE_SIZE=5000`, no realistic window paginated — all three cassettes ended up testing the same single-iteration code path, so two were deleted post-recording. See `documentation/fda/api_observations.md` finding O for the full reasoning. Apply the same critical-evaluation step to USDA/NHTSA/USCG: record what the matrix suggests, then audit each cassette's HTTP-call count, response shape, and code path against the others; delete or merge anything redundant before committing.
+
+CPSC cassette recording revealed four schema bugs that hand-crafted respx mocks had hidden: a missing `SoldAtLabel` field, a missing `Caption` sub-field on images, a wrong alias casing (`InConjunctions` vs `Inconjunctions`), and a datetime string format difference. Treat cassette failures as schema bugs to fix, not test failures to skip.
+
+**Step 5 — Silver dbt models**
+
+Per-source silver pass before moving on to the next source:
+
+- `models/staging/stg_<source>_recalls.sql` — staging view over the new bronze table with type casting and field normalization
+- Extend `models/silver/recall_event.sql`, `recall_product.sql`, `firm.sql`, and `recall_event_firm.sql` to incorporate the new source's staging model
+- dbt generic tests on the new staging model (not_null, unique, accepted_values, relationships)
+- `source freshness:` assertion on the new bronze table
+
+Phase 6 handles the work that genuinely requires all five sources to be present — firm entity resolution across sources, the `recall_event_history` snapshot model, gold aggregates, and the full dbt test suite.
+
+---
+
+### 5a. FDA iRES (auth + signature cache-busting) ✓
+
+**Step 1 — Bruno exploration** ✓
+- `bruno/fda/` — Bruno collection covering iRES endpoints (enforcement report list, single event detail, product history); `environments/dev.bru` stores `FDA_AUTHORIZATION_USER` and `FDA_AUTHORIZATION_KEY` as `{{variables}}`
+
+**Step 2 — Schema, extractor, migration** ✓
 - `FDA_AUTHORIZATION_USER` and `FDA_AUTHORIZATION_KEY` added to GitHub Actions repository secrets and local `.env` per ADR 0016
 - Pydantic schema, extractor, YAML config, Alembic migration
 - Handle Authorization-User/Key headers per ADR 0012
 - Handle `signature=` cache-busting parameter — extractor injects a unique value (e.g. `int(time.time())` or `uuid.uuid4()`) into every request URL because the iRES server caches by full URL including `signature`. Without this, a 401 from a bad credential is cached and returned even after the credential is fixed; stale 200s also leak across rapid retries. The pattern is documented in `bruno/fda/lookup/get_product_types.yml` (the `docs:` block enumerates the four iRES quirks).
 - `eventlmd` incremental logic
-- `bruno/fda/` — Bruno collection covering iRES endpoints (enforcement report list, single event detail, product history); `environments/dev.bru` stores `FDA_AUTHORIZATION_USER` and `FDA_AUTHORIZATION_KEY` as `{{variables}}`
-- 9 VCR scenarios + cron workflow. **Custom VCR request matcher required for FDA**: cassettes must match on path + method + filtered query params, with `signature` excluded from the match (or stripped before comparison). Without this, every replay attempt fails because the recorded `signature` value will never match the timestamp/UUID generated at replay time. Implement once in `tests/conftest.py` (or wherever the VCR fixture is configured) as a custom matcher that produces a query-string variant with `signature` removed; apply it to FDA cassettes only — CPSC/USDA/NHTSA/USCG cassettes use VCR's default matchers. Reference: signature cache-busting rationale and observed behavior documented in `bruno/fda/lookup/get_product_types.yml`.
-- **API identity check:** confirm whether `iRES_enforcement_reports_api_usage_documentation.pdf` and `enforcement_report_api_definitions.pdf` describe the same API (the agent audit on update semantics treated them as separate; likely the same). Document the resolution in `documentation/fda/` so future readers aren't confused. **UPDATE 2026-04-26: THIS HAS BEEN CONFIRMED, THESE TWO DOCUMENTS REFERENCE THE SAME API.**
-- **Empirical verification of `eventlmddt` edit semantics:** confirm via the documented `productHistory` / `eventproducthistory` endpoints that edits produce an advanced `eventlmddt` and corresponding history rows. FDA docs claim this explicitly; the check is to trust-but-verify before relying on it in production.
 - **Pre-bronze ADR revisions (per `documentation/fda/api_observations.md` findings H, L, M) — completed 2026-04-26:**
   - **ADR 0007 textual correction (done):** dropped the `dt` suffix from `eventlmddt` / `productlmddt` references — actual API columns are `EVENTLMD` and `PRODUCTLMD`. Edited ADR 0007 in place with a revision note.
   - **ADR 0022 (filed):** supersedes ADR 0007's FDA-specific history path. FDA's native field-history endpoints are universally empty; FDA uses bronze-snapshot synthesis like the other four sources. See `documentation/decisions/0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md`.
   - **ADR 0023 (filed):** supersedes ADR 0010's FDA no-rescan exemption. Archive migration re-touches old records wholesale; FDA needs a weekly `deep-rescan-fda.yml` workflow matching CPSC/USDA posture. See `documentation/decisions/0023-fda-deep-rescan-required-archive-migration-detected.md`.
 
-**5b. USDA FSIS** (bilingual dedup)
+**Step 3 — First extraction and bronze findings** ✓
+- **API identity check:** confirmed `iRES_enforcement_reports_api_usage_documentation.pdf` and `enforcement_report_api_definitions.pdf` describe the same API (2026-04-26).
+- **Empirical verification of `eventlmddt` edit semantics:** confirm via the documented `productHistory` / `eventproducthistory` endpoints that edits produce an advanced `eventlmddt` and corresponding history rows. FDA docs claim this explicitly; the check is to trust-but-verify before relying on it in production.
 
-- Schema, extractor, YAML config, migration
-- Bilingual edge case handled in `check_invariants()` per ADR 0006 + ADR 0013
-- `bruno/usda/` — Bruno collection covering FSIS recall endpoints; `environments/dev.bru` for any auth parameters
-- 9 VCR scenarios + cron workflow
-- `.github/workflows/deep-rescan-usda.yml` with `workflow_dispatch` trigger per ADR 0010's deep-rescan addendum
-- **Empirical verification of `field_last_modified_date`:** confirm the field exists in USDA FSIS API responses (the agent audit did not find it documented in the PDF, but ADR 0010 relies on it — this is the priority unknown to resolve). If present, confirm via a known-edited recall that the field advances on edits. Document findings in `documentation/usda/`. If the field does not exist or is unreliable, the USDA deep-rescan workflow becomes the primary extraction mechanism rather than a safety net.
+**Step 4 — Cassettes** ✓
+- 4 live-recorded cassettes + hand-constructed error-path tests (see `tests/integration/test_fda_live_cassettes.py`)
+- **Custom VCR request matcher required for FDA**: cassettes must match on path + method + filtered query params, with `signature` excluded from the match (or stripped before comparison). Without this, every replay attempt fails because the recorded `signature` value will never match the timestamp/UUID generated at replay time. Implemented in `tests/integration/test_fda_live_cassettes.py` via module-level `vcr_config` override with `filter_query_parameters: ["signature"]`.
 
-**5c. NHTSA flat-file** (ZIP + tab-delimited + schema evolution)
+**Step 5 — Silver** (pending)
+- `models/staging/stg_fda_recalls.sql` + extend silver models to incorporate FDA
 
+---
+
+### 5b. USDA FSIS (bilingual dedup)
+
+**Step 1 — Bruno exploration** ✓
+- `bruno/usda/` — Bruno collection covering FSIS recall endpoints; `environments/dev.bru` for auth parameters (none required — unauthenticated public API)
+
+**Step 2 — Schema, extractor, migration** ✓
+- Pydantic schema, extractor, YAML config, Alembic migration
+- Bilingual edge case handled in `check_invariants()` per ADR 0006 + ADR 0013 — Spanish records without an English sibling are quarantined
+- `.github/workflows/deep-rescan-usda.yml` with `workflow_dispatch` trigger per ADR 0010
+- ETag conditional-GET optimization implemented but disabled by default (`etag_enabled=False`) pending multi-day reliability evidence — see Finding N in `documentation/usda/recall_api_observations.md`
+- Browser-like UA + Accept headers required to pass Akamai Bot Manager — see Finding O
+
+**Step 3 — First extraction and bronze findings** ✓
+- **Empirical verification of `field_last_modified_date`:** field exists and is stored in bronze, but cannot be used as a server-side filter (both naming variants silently ignored — Finding D). 42.2% of records have no value (Finding C). Full-dump extraction is the only viable strategy. Document any findings about whether the field reliably advances on edits in `documentation/usda/`.
+
+**Step 4 — Cassettes** ✓
+- 2 live-recorded cassettes + 7 hand-constructed tests (see `tests/integration/test_usda_live_cassettes.py`)
+- No custom VCR matcher needed — USDA has no auth headers or cache-busting params
+
+**Step 5 — Silver** (pending)
+- `models/staging/stg_usda_fsis_recalls.sql` + extend silver models to incorporate USDA; bilingual pair handling in staging (EN as primary, ES as companion)
+
+---
+
+### 5c. NHTSA flat-file (ZIP + tab-delimited + schema evolution)
+
+**Step 1 — Source exploration** (pending)
+- Direct inspection of the NHTSA recall ZIP download URL before writing the extractor. Key questions: How often does NHTSA release a new ZIP vs update an existing one? Does the file modification date reliably reflect content changes or just re-packaging? Document in `documentation/nhtsa/`.
+
+**Step 2 — Schema, extractor, migration** (pending)
 - `src/extractors/_flat_file.py` — `FlatFileExtractor` operation-type subclass of the `Extractor` ABC (deferred from Phase 2 to its first use here). Shape is informed by NHTSA: ZIP download → stream-decompress → row-by-row parse → bronze load. Unit-tested in isolation before `NhtsaExtractor` lands on top of it.
 - `NhtsaExtractor(FlatFileExtractor)` per ADR 0008
 - Pydantic schema for 29-field tab-delimited row
 - Schema-drift detection on unexpected fields (NHTSA has added fields before)
 - Weekly cron workflow
 - Large bronze table; test with realistic row counts
-- **Live cassette recording + data exploration** per the standing requirement above. For NHTSA, the exploration should specifically address: how often does NHTSA release a new ZIP vs update an existing one, and does the file change date reliably reflect content changes or just re-packaging? Document in `documentation/nhtsa/`.
 
-**5d. USCG scraping** (brittle source)
+**Step 3 — First extraction and bronze findings** (pending)
+- After first extraction, document publication cadence, whether the modification date watermark is reliable, and any schema surprises in `documentation/nhtsa/`.
 
+**Step 4 — Cassettes** (pending)
+- One representative archive cassette + intentionally-malformed variant. The "page" concept doesn't apply to flat-file downloads; pagination-specific scenarios are busywork here.
+
+**Step 5 — Silver** (pending)
+- `models/staging/stg_nhtsa_recalls.sql` + extend silver models to incorporate NHTSA
+
+---
+
+### 5d. USCG scraping (brittle source)
+
+**Step 1 — Source exploration** (pending)
+- Direct inspection of the USCG target HTML before writing the scraper. Document the observed HTML structure, publication frequency, and whether historical records are accessible via pagination or only the current page. Document in `documentation/uscg/`.
+
+**Step 2 — Schema, extractor, migration** (pending)
 - `src/extractors/_html_scraping.py` — `HtmlScrapingExtractor` operation-type subclass of the `Extractor` ABC (deferred from Phase 2 to its first use here). Shape is informed by USCG: polite-scraper throttling → fetch HTML → archive raw to R2 → BeautifulSoup parse → bronze load. Unit-tested in isolation before `UscgScrapingExtractor` lands on top of it.
 - `UscgScrapingExtractor(HtmlScrapingExtractor)` using BeautifulSoup
 - Raw HTML archival to R2 (polite-scraper behavior)
 - Schema drift on HTML structure changes raises `ValidationError`
 - Weekly cron workflow
-- **Live cassette recording + data exploration** per the standing requirement above. For USCG, cassette recording means capturing the real scraped HTML structure (not a hand-crafted fixture), since HTML schema drift is the primary failure mode. The exploration should document the observed HTML structure, publication frequency, and whether historical records are accessible via pagination or only the current page. Document in `documentation/uscg/`.
 
-**Quality gates per source:**
+**Step 3 — First extraction and bronze findings** (pending)
+- After first extraction, document the observed publication cadence, pagination behavior, and any HTML structure surprises in `documentation/uscg/`.
 
-- 9 integration scenarios pass
-- Rejected records route correctly
-- Source freshness assertion configured appropriately
+**Step 4 — Cassettes** (pending)
+- Cassette recording means capturing the real scraped HTML structure (not a hand-crafted fixture), since HTML schema drift is the primary failure mode. Record current-page HTML + a structurally-drifted variant to exercise the scraper's failure path.
+
+**Step 5 — Silver** (pending)
+- `models/staging/stg_uscg_recalls.sql` + extend silver models to incorporate USCG
+
+---
+
+### Quality gates per source
+
+- All integration scenarios pass (live cassettes + hand-constructed error paths)
+- Rejected records route correctly to `<source>_recalls_rejected`
+- Source freshness assertion configured on the bronze table
 - Real API / file / scrape extraction works end-to-end
+- Silver staging model passes dbt generic tests
 
 ---
 
