@@ -14,7 +14,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['CPSC', 'FDA']
+                values: ['CPSC', 'FDA', 'USDA']
       - name: source_recall_id
         tests:
           - not_null
@@ -47,7 +47,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['CPSC', 'FDA']
+                values: ['CPSC', 'FDA', 'USDA']
 
   - name: firm
     description: Firm dimension deduped by normalized name (ADR 0002).
@@ -86,7 +86,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['manufacturer', 'retailer', 'importer', 'distributor']
+                values: ['manufacturer', 'retailer', 'importer', 'distributor', 'establishment']
     # recall_event_firm is built with SELECT DISTINCT so composite uniqueness
     # of (recall_event_id, firm_id, role) is structurally enforced; promote to
     # dbt_utils.unique_combination_of_columns in Phase 6.

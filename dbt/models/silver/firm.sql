@@ -6,9 +6,12 @@
 -- FDA contributes a single scalar firm per product row (firm_legal_nam + firm_fei_num),
 -- always in the 'manufacturer' role. DISTINCT prevents duplicating the same firm
 -- across multiple products in the same recall event.
+-- USDA contributes a free-text 'establishment' (recalling FSIS-regulated facility)
+-- with role='establishment'. company_id is null pending Phase 5b.2 (FSIS
+-- Establishment Listing API enrichment will populate it with establishment_id).
 -- Matching by normalized_name enables implicit cross-source firm deduplication:
--- a firm that appears in both CPSC and FDA data with the same normalized name will
--- collapse to a single row with both company IDs in observed_company_ids.
+-- a firm that appears in multiple sources with the same normalized name will
+-- collapse to a single row with all company IDs in observed_company_ids.
 
 with cpsc_firms as (
     select 'manufacturer' as role,
@@ -50,10 +53,23 @@ fda_normalized as (
       and trim(firm_legal_nam) <> ''
 ),
 
+usda_normalized as (
+    select distinct
+        'establishment'              as role,
+        establishment                as raw_name,
+        upper(trim(establishment))   as normalized_name,
+        cast(null as text)           as company_id
+    from {{ ref('stg_usda_fsis_recalls') }}
+    where establishment is not null
+      and trim(establishment) <> ''
+),
+
 all_normalized as (
     select * from cpsc_normalized
     union all
     select * from fda_normalized
+    union all
+    select * from usda_normalized
 )
 
 select

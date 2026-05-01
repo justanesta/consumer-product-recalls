@@ -58,3 +58,46 @@ sources:
       - name: fda_recalls_rejected
         description: Quarantine table for FDA records that failed validation or invariant checks (ADR 0013).
         loaded_at_field: rejected_at
+
+  - name: usda
+    description: Bronze layer for USDA FSIS recalls, loaded by src.extractors.usda.UsdaExtractor.
+    schema: public
+    tables:
+      - name: usda_fsis_recalls_bronze
+        description: >
+          One row per (source_recall_id, content_hash, langcode) landed from the USDA FSIS
+          public recall API. Bilingual: English and Spanish siblings co-exist in bronze
+          (langcode column distinguishes). Silver consumes only English (stg_usda_fsis_recalls
+          filters langcode='English').
+        loaded_at_field: extraction_timestamp
+        freshness:
+          # USDA recalls publish ad-hoc, averaging ~1/week (per
+          # documentation/usda/first_extraction_findings.md sections B-C: 115
+          # weekday gaps in 6 months, "one recall at a time"). Multi-week
+          # silences are not abnormal; SLA flags pipeline failure, not source
+          # quietness.
+          warn_after: {count: 14, period: day}
+          error_after: {count: 30, period: day}
+        columns:
+          - name: source_recall_id
+            description: USDA field_recall_number — stable identifier across republications.
+            tests:
+              - not_null
+          - name: content_hash
+            description: SHA-256 of canonicalized record payload (ADR 0007). Dedup key.
+            tests:
+              - not_null
+          - name: extraction_timestamp
+            description: When the extractor wrote this row.
+            tests:
+              - not_null
+          - name: langcode
+            description: "'English' or 'Spanish' — bilingual sibling marker (ADR 0006)."
+            tests:
+              - not_null
+              - accepted_values:
+                  arguments:
+                    values: ['English', 'Spanish']
+      - name: usda_fsis_recalls_rejected
+        description: Quarantine table for USDA records that failed validation or invariant checks (ADR 0013).
+        loaded_at_field: rejected_at

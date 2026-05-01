@@ -252,8 +252,59 @@ Phase 6 handles the work that genuinely requires all five sources to be present 
 - 2 live-recorded cassettes + 7 hand-constructed tests (see `tests/integration/test_usda_live_cassettes.py`)
 - No custom VCR matcher needed — USDA has no auth headers or cache-busting params
 
-**Step 5 — Silver** (pending)
-- `models/staging/stg_usda_fsis_recalls.sql` + extend silver models to incorporate USDA; bilingual pair handling in staging (EN as primary, ES as companion)
+**Step 5 — Silver** ✓
+- `models/staging/stg_usda_fsis_recalls.sql` filters `langcode='English'` (EN-primary, ES dropped from silver but retained in bronze for audit) — minimal interpretation of the original "EN as primary, ES as companion" plan. Bilingual JSONB companion sidecar deferred until a downstream consumer needs it.
+- Silver models extended: `recall_event`, `recall_product`, `firm`, `recall_event_firm` all gained a `usda_*` CTE. `published_at` coalesces `last_modified_date` → `recall_date` (last_modified_date is 42% null per Finding D). USDA `establishment` flows into `firm.sql` with **role='establishment'** (new role value) and into `recall_event_firm` accordingly. `_silver.yml` `accepted_values` extended on both `source` (`['CPSC','FDA','USDA']`) and `role` (added `'establishment'`).
+- `recall_product` emits one row per USDA recall event (recall_product_id = recall_event_id) — `product_items` is unstructured per ADR 0002 deferral.
+- USDA singular floor test added at `dbt/tests/assert_usda_row_count_sane.sql` (floor: 1,000 events).
+
+---
+
+### 5b.2. USDA FSIS Establishment Listing API — recall enrichment (pending)
+
+Functionally a sixth source. The FSIS Establishment Listing API
+(`/fsis/api/establishments/v/1`, 7,945 records, weekly Mon/Tue cadence, no
+auth, no pagination, no ETag — see `documentation/usda/establishment_api_observations.md`)
+provides demographic + geolocation data for FSIS-regulated establishments.
+Pre-extraction Bruno exploration is complete (collection in
+`bruno/usda/establishment_exploration/`). Steps mirror the standard 5-step
+per-source workflow:
+
+1. Bruno exploration — done.
+2. Schema (`src/schemas/usda_establishment.py` with `false`-sentinel handling
+   for `geolocation` / `county` per Finding C and array-whitespace stripping
+   for `activities` / `dbas`), extractor (`UsdaEstablishmentExtractor`),
+   `config/sources/usda_establishment.yaml`, Alembic migration
+   (`usda_fsis_establishments_bronze` + rejected table), `extract-usda-establishments.yml`
+   workflow with `workflow_dispatch` and weekly cron.
+3. First extraction + bronze findings: measure overlap between recall
+   `establishment` and establishment `establishment_name` / `dbas`. The
+   coverage gap from Finding F (1:1 join confirmed on a single record) needs
+   broad-spectrum verification before committing the silver join shape. Probe:
+   ```sql
+   with recall_names as (
+       select distinct upper(trim(establishment)) as nrm
+       from stg_usda_fsis_recalls
+       where establishment is not null and trim(establishment) <> ''
+   ),
+   est_names as (
+       select distinct upper(trim(establishment_name)) as nrm
+       from stg_usda_fsis_establishments
+   )
+   select count(*) as total, count(est_names.nrm) as matched
+   from recall_names left join est_names using (nrm);
+   ```
+   Document in `documentation/usda/establishment_join_coverage.md`.
+4. Cassettes: one full-dump cassette + one quoted-name-filter cassette;
+   pagination scenarios don't apply.
+5. Silver: `stg_usda_fsis_establishments` staging view; extend `firm.sql` to
+   populate `observed_company_ids` for USDA rows with the FSIS
+   `establishment_id` (matched on normalized name with DBA fallback). Optional:
+   add a `firm_establishment_attributes` silver dim for address/geolocation/FIPS.
+
+Best landed before or alongside Phase 6 firm entity resolution work — the
+Establishment ID is the strongest cross-source FSIS firm anchor (analogous to
+FDA's FEI per ADR 0002).
 
 ---
 
@@ -340,6 +391,15 @@ Phase 6 handles the work that genuinely requires all five sources to be present 
     change if you want historical lifecycle data from day one. 
 
   - Make a decision on using the USDA etag instead of the full download content hash for data updates.
+
+  - **FDA firm role reconciliation.** `firm.sql` and `recall_event_firm.sql`
+    label FDA's `firm_legal_nam` with `role='manufacturer'`, but semantically
+    that field is the *recalling establishment* (analogous to USDA's
+    `establishment` which uses `role='establishment'`). Relabel FDA to
+    `'establishment'` to align cross-source firm rollups. Best landed in Phase
+    6 alongside firm entity resolution work. Touches the `accepted_values`
+    enum on `recall_event_firm.role` and downstream queries that filter by
+    role.
 
 ---
 

@@ -6,6 +6,9 @@
 --   bronze rows up to a single event header — event-level fields (recall_num,
 --   firm_legal_nam, phase_txt, center_classification_type_txt) are stable across
 --   all products in the same event, so any representative row is correct.
+-- USDA: source_recall_id = field_recall_number; staging filters to English only.
+--   published_at coalesces last_modified_date → recall_date because
+--   last_modified_date is 42% null per Finding D.
 
 with cpsc_events as (
     select
@@ -69,8 +72,47 @@ fda_events as (
         raw_landing_path
     from {{ ref('stg_fda_recalls') }}
     order by recall_event_id, extraction_timestamp desc
+),
+
+usda_events as (
+    select
+        md5('USDA' || '|' || source_recall_id)             as recall_event_id,
+        'USDA'                                             as source,
+        source_recall_id,
+        announced_at,
+        coalesce(published_at, announced_at)               as published_at,
+        title,
+        summary                                            as description,
+        url,
+        classification,
+        case
+            when active_notice is true  then 'active'
+            when active_notice is false then 'closed'
+            else null
+        end                                                as status,
+        cast(null as jsonb)                                as hazards,
+        jsonb_build_object(
+            'establishment',         establishment,
+            'recall_type',           recall_type,
+            'risk_level',            risk_level,
+            'recall_reason',         recall_reason,
+            'processing',            processing,
+            'states',                states,
+            'related_to_outbreak',   related_to_outbreak,
+            'archive_recall',        archive_recall,
+            'closed_at',             closed_at,
+            'distro_list',           distro_list,
+            'labels',                labels,
+            'qty_recovered',         qty_recovered
+        )                                                  as source_payload_raw,
+        content_hash,
+        extraction_timestamp,
+        raw_landing_path
+    from {{ ref('stg_usda_fsis_recalls') }}
 )
 
 select * from cpsc_events
 union all
 select * from fda_events
+union all
+select * from usda_events

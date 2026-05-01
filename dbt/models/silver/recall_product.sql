@@ -5,6 +5,9 @@
 --   ordinal-based surrogate key to distinguish identical product names.
 -- FDA: each bronze row IS a product (PRODUCTID = source_recall_id), so no array
 --   explosion needed — staging feeds directly into the product table.
+-- USDA: product_items is a free-text blob; ADR 0002 defers structured parsing.
+--   Emit one product row per recall event (recall_product_id = recall_event_id)
+--   so referential integrity holds and downstream queries don't silently skip USDA.
 -- Neither source associates UPCs with specific products (CPSC UPCs are recall-level;
 -- FDA does not return them via the bulk POST endpoint), so upc is NULL for both.
 
@@ -63,8 +66,31 @@ fda_products as (
             'center_classification_type_txt', center_classification_type_txt
         )                                             as source_specific_attrs
     from {{ ref('stg_fda_recalls') }}
+),
+
+usda_products as (
+    select
+        md5('USDA' || '|' || source_recall_id)        as recall_product_id,
+        md5('USDA' || '|' || source_recall_id)        as recall_event_id,
+        'USDA'                                        as source,
+        source_recall_id,
+        title                                         as product_name,
+        product_items                                 as product_description,
+        cast(null as text)                            as model,
+        recall_type                                   as type,
+        cast(null as text)                            as category_id,
+        qty_recovered                                 as number_of_units,
+        cast(null as text)                            as upc,
+        jsonb_build_object(
+            'product_items_raw', product_items,
+            'labels',            labels,
+            'processing',        processing
+        )                                             as source_specific_attrs
+    from {{ ref('stg_usda_fsis_recalls') }}
 )
 
 select * from cpsc_products
 union all
 select * from fda_products
+union all
+select * from usda_products

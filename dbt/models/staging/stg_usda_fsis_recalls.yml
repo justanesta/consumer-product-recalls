@@ -1,0 +1,25 @@
+version: 2
+
+models:
+  - name: stg_usda_fsis_recalls
+    description: One row per USDA FSIS recall (English-only, latest version from bronze).
+    columns:
+      - name: source_recall_id
+        description: USDA field_recall_number.
+        tests:
+          - not_null
+          - unique
+      - name: announced_at
+        description: Recall date (recall_date — always populated per Finding C).
+        tests:
+          - not_null
+      - name: title
+        tests:
+          - not_null
+      - name: classification
+        description: Recall classification (Class I/II/III; always populated).
+        tests:
+          - not_null
+      - name: content_hash
+        tests:
+          - not_null
