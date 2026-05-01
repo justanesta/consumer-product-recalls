@@ -198,9 +198,25 @@ class TestUsdaFsisRecord:
         assert record.related_to_outbreak is None
 
     def test_required_bool_with_empty_string_raises(self) -> None:
+        # archive_recall stays required (Finding C confirmed 0% empty);
+        # an empty string here should still trip validation.
         row = {**_REQUIRED, "field_archive_recall": ""}
         with pytest.raises(ValidationError):
             UsdaFsisRecord.model_validate(row)
+
+    def test_active_notice_empty_string_becomes_none(self) -> None:
+        # Phase 5b first extraction surfaced 189/2001 records with
+        # `field_active_notice == ""`. Schema treats it as Optional[bool]
+        # so empty values normalize to None instead of failing validation.
+        row = {**_REQUIRED, "field_active_notice": ""}
+        record = UsdaFsisRecord.model_validate(row)
+        assert record.active_notice is None
+
+    def test_active_notice_omitted_defaults_to_none(self) -> None:
+        # Some records may omit the key entirely; tolerated for the same reason.
+        row = {k: v for k, v in _REQUIRED.items() if k != "field_active_notice"}
+        record = UsdaFsisRecord.model_validate(row)
+        assert record.active_notice is None
 
     def test_extra_field_raises(self) -> None:
         row = {**_REQUIRED, "field_unknown": "value"}

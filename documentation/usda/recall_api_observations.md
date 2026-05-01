@@ -92,6 +92,7 @@ Confirmed 2026-04-29 via `data_exploration/get_all_recalls_cardinality.yml` (n=2
 | `field_closed_year` | 177 | 8.8% | |
 | `field_closed_date` | 168 | 8.4% | |
 | `field_has_spanish` | 0 | 0% | Always populated — reliable boolean string |
+| `field_active_notice` | ~189 | ~9.4% | **Empirical, post-Finding C addendum (2026-05-01):** the original cardinality probe did not check this field, so it was initially treated as required in the schema. Phase 5b first extraction surfaced 189/2001 records with empty-string values (`field_active_notice == ""`). Schema now treats this as `Optional[bool]`. Likely correlates with archived/closed records where the "active notice" concept no longer applies. |
 
 **Pydantic schema implications:**
 - `field_en_press_release` — always `""` in the dataset; declare as `Optional[str] = None` and exclude from content hash (dead field that may never populate)
@@ -407,12 +408,18 @@ A Spanish record with no matching English record is a data anomaly worth quarant
 
 ## ETag Conditional-GET Reliability
 
-### Finding N — ETag conditional-GET is not reliably available (DISABLED)
+### Finding N — ETag conditional-GET behavior depends on client request shape (DISABLED in production, pending more probe evidence)
 
-Confirmed 2026-04-30 via three back-to-back probes. **The optimization is disabled
-in `config/sources/usda.yaml` (`etag_enabled: false`).** The extractor pulls the
-full ~1.6 MB compressed payload on every run; idempotency is handled by the bronze
-content-hash loader (ADR 0007).
+Status updated 2026-05-01 after Phase 5b first-extraction surfaced new evidence.
+**The optimization is disabled in production via the extractor class default
+(`UsdaExtractor.etag_enabled = False` in `src/extractors/usda.py`).** The extractor
+pulls the full ~1.6 MB compressed payload on every run; idempotency is handled by
+the bronze content-hash loader (ADR 0007).
+
+> **About the YAML file:** `config/sources/usda.yaml` also carries `etag_enabled:
+> false`, but **that file is not currently loaded by any code path** (the YAML
+> loader described in ADR 0012 has not yet been implemented). The live kill-switch
+> is the class default in Python; the YAML value is documentation of intent.
 
 **Probe sequence and headers observed:**
 
@@ -450,6 +457,58 @@ unpredictably — the worst-case combination, because it would also expose us to
 stale-positive 304s when a cached edge response carries an etag that no longer
 matches origin. Disabling is the correct call.
 
+### Finding N addendum (2026-05-01) — ETag works once browser-like headers are sent
+
+Phase 5b first-extraction surfaced contradicting evidence. Sequence:
+
+1. We added browser-like headers to the extractor (Finding O fix): Firefox/Linux
+   User-Agent + matching `Accept` / `Accept-Language` / `Accept-Encoding`.
+2. First successful extraction (2026-05-01 00:51 UTC) returned `200 OK` with
+   `etag: "1777596670"` — Akamai *did* serve a CDN-cached response for our request
+   shape. The extractor stored the etag in `source_watermarks.last_etag`.
+3. Second extraction 24 minutes later sent `If-None-Match: "1777596670"` and
+   received `304 Not Modified` — clean short-circuit, no body downloaded, no
+   bronze write, contradiction guard silent (last-modified header unchanged).
+
+So the optimization *does* work for our specific request shape, contradicting the
+Finding N evidence collected via Bruno. Most likely cause for the divergence:
+Akamai's bot manager scoring keys partly on header set (Accept/Accept-Language/
+Accept-Encoding). Bruno sends different Accept-Encoding / lacks Accept-Language,
+landing it on a different cache key (or the bot-throttled path); our extractor's
+deliberate Firefox-style header set lands on the cached path.
+
+**Why the optimization stays disabled despite this evidence:**
+
+- Two data points (one cache HIT followed by one valid 304) is not enough to
+  prove the cached path is *consistently* available across days, IP rotations,
+  Akamai bot-reputation cycles, or upstream cache-key changes. Bruno's failures
+  earlier the same day showed the cached path is conditional on factors we don't
+  fully control.
+- A stale-positive 304 (etag matched but origin actually advanced) silently
+  drops new records until the next deep-rescan run catches it. The contradiction
+  guard helps but only when last-modified also moves; if Akamai serves an entire
+  stale cached object, last-modified would also be stale and the guard wouldn't
+  fire.
+- Production correctness > cost optimization at this dataset size. 1.6 MB
+  compressed per run is cheap.
+
+**Re-enabling criteria** (when these are met, flip `etag_enabled` to `True`):
+
+- Multi-day probe sequence: capture etag on day N, send conditional GET on day
+  N+1, N+3, N+7, with at least one cycle landing on a different Akamai edge node
+  (`akamai-grn` rotation visible in headers). All cycles must show the expected
+  pattern: 304 if the dataset truly hasn't changed, 200 with new etag if it has.
+- At least one observed cache-key flip (e.g. Akamai promotes/expires the cached
+  object) without a stale-positive 304 leaking past the contradiction guard.
+- Cron-cadence simulation in dev: run the extractor on the same cron schedule
+  the production workflow will use for one full week and confirm no
+  contradiction-guard fires occur.
+
+Until then, the deep-rescan workflow + contradiction guard remain the safety net
+for whenever the optimization is enabled, and the extractor still captures and
+stores `last_etag` / `last_cursor` on every successful run so the data is ready
+when we are.
+
 **Future API exploration opportunities** (Rounds 2 and 3 of the probe runbook —
 optional, only if revisiting this optimization later):
 
@@ -471,6 +530,78 @@ optional, only if revisiting this optimization later):
 The kill switch (`etag_enabled: false` in config) is sufficient to disable
 without removing the extractor's ETag-handling code path. Re-enable by flipping
 to `true` if a future audit shows Akamai/FSIS behavior has changed.
+
+---
+
+## Akamai Bot Manager — request shape requirements
+
+### Finding O — Browser-like UA + Accept headers required for production extraction
+
+Confirmed 2026-04-30 during Phase 5b first-extraction verification. **The USDA
+extractor cannot use httpx defaults; it must send a real-browser User-Agent +
+matching `Accept` / `Accept-Language` / `Accept-Encoding` headers.** This is wired
+in `src/extractors/usda.py` (`_load_user_agent`, `_browser_headers`); UA strings
+are vendored in `data/user_agents.json` and refreshed weekly by the
+`.github/workflows/refresh-user-agents.yml` workflow.
+
+**Probe sequence and observed headers:**
+
+| Run | Client | UA | Result |
+|---|---|---|---|
+| 1 | `uv run recalls extract usda` | `python-httpx/<default>` | Hung indefinitely; tenacity retried up to ~5 min |
+| 2 | `curl --http2` (default UA) | `curl/7.81.0` | TLS+ALPN OK; HTTP/2 stream killed with `INTERNAL_ERROR (err 2)` after ~100 ms |
+| 3 | `curl --http2 -H "User-Agent: python-httpx/0.27.0"` | `python-httpx/0.27.0` | Same as run 2 — HTTP/2 stream `INTERNAL_ERROR` |
+| 4 | `curl --http1.1` (default UA) | `curl/7.81.0` | TCP+TLS OK; GET sent; **silent slowloris**, no response after 2:29 min |
+| 5 | `curl --http1.1 -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"` + Accept-* | Firefox/Linux | **200 OK in 294 ms, 1.6 MB body downloaded** |
+
+**Root-cause analysis:**
+
+1. **Akamai Bot Manager is deployed on this endpoint** (confirmed by `ak_bmsc` /
+   `bm_sv` Set-Cookie headers across all responses). It uses multi-signal scoring:
+   TLS handshake fingerprint (JA3/JA4), User-Agent string, request headers, request
+   rate, IP reputation, cookie history.
+2. **TLS fingerprint alone is not the sole gate.** The user's prior project against
+   the same endpoint succeeded with `python requests` (Python's `ssl` module +
+   OpenSSL — same TLS stack as httpx) using only a real-Firefox UA override. This
+   means a real-browser UA can pull the request below the bot threshold even with
+   a Python TLS stack — at least for a clean IP at low volume.
+3. **Akamai's rejection mode varies by HTTP version.** On HTTP/2, the edge sends
+   `INTERNAL_ERROR` (run 2/3). On HTTP/1.1, the edge slowloris-es (run 4) — TCP+TLS
+   complete, the GET goes out, the server holds the connection open and never
+   responds. Slowloris is harsher because retries deepen it.
+4. **Per-IP reputation degrades intra-day.** Yesterday's Bruno probes returned
+   cacheable responses with etags (Finding A); today's Bruno probes returned
+   `UNCACHEABLE (request policy)`; today's curl/httpx requests slowloris-ed
+   regardless of UA. After we hammered the endpoint with a hung extraction +
+   diagnostic curls, even Bruno's CDN cache override stopped firing. Treat IP
+   reputation as a fast-decaying resource.
+
+**Resolution:**
+
+- `src/extractors/usda.py` constructs `httpx.Client` with browser-like default
+  headers (UA + Accept + Accept-Language + Accept-Encoding) on every fetch.
+- The User-Agent string is loaded from `data/user_agents.json` per fetch; the
+  file is vendored in the repo and refreshed weekly via
+  `.github/workflows/refresh-user-agents.yml`, which fetches Mozilla
+  product-details and Chromium Dash, templates the UA, and opens a PR if either
+  upstream version has moved.
+- A `_FALLBACK_FIREFOX_UA` constant covers the case where the JSON file is
+  missing or malformed at runtime; the loader emits
+  `usda.user_agents_load_failed` so a degraded run is visible in logs.
+
+**Defense-in-depth follow-ups** (open if Akamai escalates further):
+
+- **Add Chrome UA rotation.** `data/user_agents.json` already includes
+  `chrome_linux`. If Akamai starts rejecting Firefox UAs, a one-line change in
+  `_load_user_agent()` rotates to Chrome.
+- **Adopt `browserforge`** (newer, ~3-year-active library) which generates whole
+  consistent header sets including Sec-CH-UA client hints. Useful when Akamai
+  begins fingerprinting on cross-header consistency.
+- **Adopt `curl-cffi`** if multi-signal scoring escalates to JA3/JA4 enforcement
+  for our IP class. `curl-cffi` impersonates Chrome's TLS handshake and is the
+  industry-standard remedy.
+- **Egress IP rotation / cooldown** if individual extraction runs start to fail
+  while UA + headers remain valid.
 
 ---
 

@@ -18,8 +18,11 @@ from src.extractors._base import (
     TransientExtractionError,
 )
 from src.extractors.usda import (
+    _FALLBACK_FIREFOX_UA,
     UsdaDeepRescanLoader,
     UsdaExtractor,
+    _browser_headers,
+    _load_user_agent,
     _parse_http_date,
 )
 from src.schemas.usda import UsdaFsisRecord
@@ -76,7 +79,13 @@ def _make_response(
 
 @pytest.fixture
 def extractor(monkeypatch: pytest.MonkeyPatch) -> UsdaExtractor:
-    """UsdaExtractor with mocked engine and R2 client."""
+    """UsdaExtractor with mocked engine and R2 client.
+
+    `etag_enabled=True` is set explicitly here so the existing TestFetch /
+    TestExtract tests continue to exercise the conditional-GET code path. The
+    production class default is False (per Finding N — disabled until multi-day
+    probe data confirms consistency); see TestEtagDefaults below.
+    """
     for k, v in _REQUIRED_ENV.items():
         monkeypatch.setenv(k, v)
     mock_engine = MagicMock(spec=sa.Engine)
@@ -87,7 +96,7 @@ def extractor(monkeypatch: pytest.MonkeyPatch) -> UsdaExtractor:
         patch("src.extractors.usda.R2LandingClient", return_value=mock_r2),
     ):
         settings = Settings()  # type: ignore[call-arg]
-        return UsdaExtractor(base_url=_BASE_URL, settings=settings)
+        return UsdaExtractor(base_url=_BASE_URL, settings=settings, etag_enabled=True)
 
 
 @pytest.fixture
@@ -418,6 +427,21 @@ class TestLoadBronze:
 # ---------------------------------------------------------------------------
 
 
+class TestEtagDefaults:
+    def test_usda_extractor_etag_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Production posture: do not depend on Akamai's cached path until
+        # multi-day probes confirm consistency (Finding N).
+        for k, v in _REQUIRED_ENV.items():
+            monkeypatch.setenv(k, v)
+        with (
+            patch("sqlalchemy.create_engine"),
+            patch("src.extractors.usda.R2LandingClient"),
+        ):
+            settings = Settings()  # type: ignore[call-arg]
+            extractor = UsdaExtractor(base_url=_BASE_URL, settings=settings)
+        assert extractor.etag_enabled is False
+
+
 class TestUsdaDeepRescanLoader:
     def test_etag_disabled_by_default(self, deep_rescan: UsdaDeepRescanLoader) -> None:
         assert deep_rescan.etag_enabled is False
@@ -634,3 +658,88 @@ class TestRecordRun:
                 status="success",
             )
         assert any(e.get("event") == "extraction_run.record_failed" for e in captured)
+
+
+# ---------------------------------------------------------------------------
+# _load_user_agent + _browser_headers — Akamai Bot Manager workaround (Finding O)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadUserAgent:
+    def test_returns_vendored_ua_when_file_present(self, tmp_path: Any) -> None:
+        # Real-file integration: write a tiny user_agents.json, point the loader at it,
+        # and verify the firefox_linux value comes back unchanged.
+        path = tmp_path / "user_agents.json"
+        path.write_text(
+            '{"user_agents": {"firefox_linux": "Mozilla/5.0 test/1.0", '
+            '"chrome_linux": "irrelevant"}}'
+        )
+        with patch("src.extractors.usda._USER_AGENTS_PATH", path):
+            assert _load_user_agent() == "Mozilla/5.0 test/1.0"
+
+    def test_falls_back_when_file_missing(self, tmp_path: Any) -> None:
+        missing = tmp_path / "does_not_exist.json"
+        with (
+            patch("src.extractors.usda._USER_AGENTS_PATH", missing),
+            structlog.testing.capture_logs() as captured,
+        ):
+            assert _load_user_agent() == _FALLBACK_FIREFOX_UA
+        assert any(e.get("event") == "usda.user_agents_load_failed" for e in captured)
+
+    def test_falls_back_when_json_malformed(self, tmp_path: Any) -> None:
+        path = tmp_path / "bad.json"
+        path.write_text("not json {")
+        with (
+            patch("src.extractors.usda._USER_AGENTS_PATH", path),
+            structlog.testing.capture_logs() as captured,
+        ):
+            assert _load_user_agent() == _FALLBACK_FIREFOX_UA
+        assert any(e.get("event") == "usda.user_agents_load_failed" for e in captured)
+
+    def test_falls_back_when_key_missing(self, tmp_path: Any) -> None:
+        path = tmp_path / "missing_key.json"
+        # Valid JSON, but no user_agents.firefox_linux
+        path.write_text('{"sources": {}}')
+        with (
+            patch("src.extractors.usda._USER_AGENTS_PATH", path),
+            structlog.testing.capture_logs() as captured,
+        ):
+            assert _load_user_agent() == _FALLBACK_FIREFOX_UA
+        assert any(e.get("event") == "usda.user_agents_load_failed" for e in captured)
+
+    def test_falls_back_when_ua_empty_string(self, tmp_path: Any) -> None:
+        # Defensive: schema present but value is empty — treat as malformed.
+        path = tmp_path / "empty_ua.json"
+        path.write_text('{"user_agents": {"firefox_linux": ""}}')
+        with (
+            patch("src.extractors.usda._USER_AGENTS_PATH", path),
+            structlog.testing.capture_logs() as captured,
+        ):
+            assert _load_user_agent() == _FALLBACK_FIREFOX_UA
+        assert any(e.get("event") == "usda.user_agents_load_failed" for e in captured)
+
+
+class TestBrowserHeaders:
+    def test_returns_browser_like_headers(self) -> None:
+        headers = _browser_headers()
+        assert "User-Agent" in headers
+        # Must look like a real browser, not python-httpx
+        assert "Mozilla/5.0" in headers["User-Agent"]
+        assert "python-httpx" not in headers["User-Agent"]
+        # Accompanying headers Akamai expects on real-browser requests
+        assert headers["Accept"] == "application/json,*/*"
+        assert headers["Accept-Language"] == "en-US,en;q=0.9"
+        assert headers["Accept-Encoding"] == "gzip, deflate"
+
+
+class TestFetchAppliesBrowserHeaders:
+    def test_httpx_client_constructed_with_browser_headers(self, extractor: UsdaExtractor) -> None:
+        response = _make_response(200, json_body=[], headers={})
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.get.return_value = response
+            extractor._fetch(prior_etag=None, prior_last_modified=None)
+        # httpx.Client was constructed with our browser headers as defaults.
+        ctor_kwargs = mock_client.call_args.kwargs
+        assert "headers" in ctor_kwargs
+        assert "Mozilla/5.0" in ctor_kwargs["headers"]["User-Agent"]
+        assert ctor_kwargs["headers"]["Accept"] == "application/json,*/*"

@@ -98,10 +98,15 @@ class UsdaFsisRecord(BaseModel):
     recall_type: str = Field(validation_alias="field_recall_type")
     recall_classification: str = Field(validation_alias="field_recall_classification")
 
-    # Required booleans — always populated per Finding C/D
+    # Required booleans — always populated per Finding C/D.
+    # `field_active_notice` was originally treated as required, but Phase 5b first
+    # extraction (2026-04-30) found 189/2001 (~9.4%) records with empty-string
+    # values for it — a Finding C blind spot since the original empty-rate audit
+    # did not probe `field_active_notice`. It is now Optional[bool]; see Finding
+    # C addendum in documentation/usda/recall_api_observations.md.
     archive_recall: _UsdaBool = Field(validation_alias="field_archive_recall")
     has_spanish: _UsdaBool = Field(validation_alias="field_has_spanish")
-    active_notice: _UsdaBool = Field(validation_alias="field_active_notice")
+    active_notice: _UsdaNullableBool = Field(default=None, validation_alias="field_active_notice")
 
     # --- Optional dates (Finding C: last_modified 42% empty, closed_date 8.4% empty) ---
     last_modified_date: _UsdaNullableDate = Field(

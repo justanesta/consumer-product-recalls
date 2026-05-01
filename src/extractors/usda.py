@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -124,6 +125,62 @@ _MAX_INCREMENTAL_RECORDS = 5_000
 # transition to drive a full bronze rewrite of every existing record.
 _HASH_EXCLUDE = frozenset({"en_press_release", "press_release"})
 
+# --- Akamai Bot Manager workaround (Finding O) ---
+# USDA FSIS sits behind Akamai. The default httpx User-Agent triggers slowloris-
+# style throttling at the Akamai edge: TCP+TLS complete, the GET is sent, and the
+# server never responds (no body, no close, no error). Empirically a real Firefox
+# UA + matching Accept / Accept-Language / Accept-Encoding passes Akamai's
+# multi-signal bot scoring and returns 200 in <500ms.
+#
+# UA strings are vendored in data/user_agents.json and refreshed weekly by
+# .github/workflows/refresh-user-agents.yml (which fetches Mozilla product-details
+# and Chromium Dash, templates the UAs, and opens a PR if the versions changed).
+# The fallback UA below is used only if data/user_agents.json is missing or
+# malformed at runtime — keep it reasonably current.
+_USER_AGENTS_PATH = Path(__file__).resolve().parents[2] / "data" / "user_agents.json"
+_FALLBACK_FIREFOX_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0"
+
+
+def _load_user_agent() -> str:
+    """Return the current Firefox/Linux UA from data/user_agents.json.
+
+    Falls back to `_FALLBACK_FIREFOX_UA` and emits `usda.user_agents_load_failed`
+    if the vendored file is missing, malformed, or missing the expected key. The
+    fallback path is also why this function is callable per-fetch rather than
+    cached at import time — a caller running outside the repo (e.g. an embedded
+    test harness) that lacks `data/user_agents.json` should still get a working
+    UA without import-time failure.
+    """
+    try:
+        data = json.loads(_USER_AGENTS_PATH.read_text())
+        ua = data["user_agents"]["firefox_linux"]
+        if not isinstance(ua, str) or not ua:
+            raise ValueError(f"firefox_linux UA empty or wrong type: {ua!r}")
+        return ua
+    except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "usda.user_agents_load_failed",
+            path=str(_USER_AGENTS_PATH),
+            error=str(exc),
+            fallback_ua=_FALLBACK_FIREFOX_UA,
+        )
+        return _FALLBACK_FIREFOX_UA
+
+
+def _browser_headers() -> dict[str, str]:
+    """Build the browser-like default headers for httpx.Client (Finding O).
+
+    UA is loaded fresh from `data/user_agents.json` on each call so a CI-merged
+    UA refresh takes effect immediately on the next extraction run, with no
+    process restart needed.
+    """
+    return {
+        "User-Agent": _load_user_agent(),
+        "Accept": "application/json,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+    }
+
 
 class UsdaFsisExtractionResult(ExtractionResult):
     """Marker for type-narrowing only; behavior identical to ExtractionResult."""
@@ -153,7 +210,13 @@ class UsdaExtractor(RestApiExtractor[UsdaFsisRecord]):
 
     source_name: str = _USDA_SOURCE
     settings: Settings
-    etag_enabled: bool = True
+    # Production default is OFF (Finding N — needs more cross-day evidence before
+    # we depend on it). The optimization is empirically viable when paired with
+    # the Finding O browser-like headers — re-runs hit Akamai's cached path and
+    # 304s work correctly, including the contradiction guard. Leaving disabled
+    # until multi-day probe data confirms consistency. Flip to True (or pass
+    # explicitly via constructor) once that evidence lands.
+    etag_enabled: bool = False
 
     _engine: sa.Engine = PrivateAttr()
     _r2_client: R2LandingClient = PrivateAttr()
@@ -291,6 +354,13 @@ class UsdaExtractor(RestApiExtractor[UsdaFsisRecord]):
             bronze_table=_usda_bronze,
             rejected_table=_usda_rejected,
             hash_exclude_fields=_HASH_EXCLUDE,
+            # USDA's natural identity is (source_recall_id, langcode) — bilingual
+            # English+Spanish siblings share `field_recall_number` (= source_recall_id)
+            # but are distinct logical records (Finding F). Without the composite
+            # identity, the loader's dedup query collapses sibling rows
+            # non-deterministically and treats one of each pair as "changed" on every
+            # re-run, causing bronze to grow by ~789 rows per idempotent re-run.
+            identity_fields=("source_recall_id", "langcode"),
         )
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
@@ -326,7 +396,10 @@ class UsdaExtractor(RestApiExtractor[UsdaFsisRecord]):
             headers["If-Modified-Since"] = prior_last_modified
 
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
+            with httpx.Client(
+                timeout=self.timeout_seconds,
+                headers=_browser_headers(),
+            ) as client:
                 response = client.get(self.base_url, headers=headers)
         except httpx.TransportError as exc:
             raise TransientExtractionError(f"USDA network error: {exc}") from exc
@@ -528,6 +601,13 @@ class UsdaDeepRescanLoader(UsdaExtractor):
             bronze_table=_usda_bronze,
             rejected_table=_usda_rejected,
             hash_exclude_fields=_HASH_EXCLUDE,
+            # USDA's natural identity is (source_recall_id, langcode) — bilingual
+            # English+Spanish siblings share `field_recall_number` (= source_recall_id)
+            # but are distinct logical records (Finding F). Without the composite
+            # identity, the loader's dedup query collapses sibling rows
+            # non-deterministically and treats one of each pair as "changed" on every
+            # re-run, causing bronze to grow by ~789 rows per idempotent re-run.
+            identity_fields=("source_recall_id", "langcode"),
         )
         with self._engine.begin() as conn:
             return loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]

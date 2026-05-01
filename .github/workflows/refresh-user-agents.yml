@@ -1,0 +1,51 @@
+name: Refresh User Agents
+
+# Keeps data/user_agents.json fresh from official browser-vendor release feeds
+# (Mozilla product-details + Chromium Dash) so the USDA extractor's browser-like
+# UA strings don't drift past Akamai Bot Manager's "looks like a real recent
+# browser" threshold (Finding O in documentation/usda/recall_api_observations.md).
+#
+# The refresh script writes deterministic output (sorted keys, no timestamps),
+# so this job opens a PR only when one of the upstream versions has actually moved.
+
+on:
+  schedule:
+    # Mondays at 12:00 UTC. Mozilla and Chrome release ~weekly, sometimes more often.
+    - cron: "0 12 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Refresh data/user_agents.json from upstream feeds
+        run: uv run python scripts/refresh_user_agents.py
+
+      - name: Open PR if data/user_agents.json changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(usda): refresh data/user_agents.json"
+          title: "chore(usda): refresh data/user_agents.json"
+          body: |
+            Automated refresh from official browser release feeds:
+              - Mozilla product-details (Firefox versions)
+              - Chromium Dash (Chrome stable for Linux)
+
+            Triggered by `.github/workflows/refresh-user-agents.yml`. Merging this PR
+            takes effect on the next USDA extraction run — `_load_user_agent()` reads
+            `data/user_agents.json` fresh on every fetch, so no extractor restart is needed.
+
+            See `documentation/usda/recall_api_observations.md` Finding O for context.
+          branch: chore/refresh-user-agents
+          delete-branch: true
+          add-paths: data/user_agents.json
+          labels: automated, usda

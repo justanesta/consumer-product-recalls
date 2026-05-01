@@ -53,7 +53,11 @@ def upgrade() -> None:
         sa.Column("recall_classification", sa.Text, nullable=False),
         sa.Column("archive_recall", sa.Boolean, nullable=False),
         sa.Column("has_spanish", sa.Boolean, nullable=False),
-        sa.Column("active_notice", sa.Boolean, nullable=False),
+        # active_notice is nullable: Phase 5b first extraction (2026-04-30) surfaced
+        # 189/2001 records with empty `field_active_notice` values, which was a
+        # Finding C blind spot. See Finding C addendum in
+        # documentation/usda/recall_api_observations.md.
+        sa.Column("active_notice", sa.Boolean, nullable=True),
         # Optional dates
         sa.Column("last_modified_date", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.Column("closed_date", sa.TIMESTAMP(timezone=True), nullable=True),

@@ -1,3 +1,16 @@
+# NOTE — As of Phase 5b (2026-05-01), this file is NOT loaded by any code path.
+# It exists as documented intent per ADR 0012 (declarative-source-config pattern,
+# adopted from NYC DCP's dcpy). The YAML loader, Pydantic-discriminated-union
+# dispatch, and registry described in ADR 0012 have not yet been implemented; CLI
+# dispatch in `src/cli/main.py` instantiates `UsdaExtractor` with hardcoded
+# constructor kwargs instead. Tracked as a follow-up: the loader/registry refactor
+# affects all five sources equally and merits its own branch + ADR.
+#
+# Until that wiring lands, treat the values below as "what the loaded config will
+# look like" — i.e. documentation, not configuration. Any runtime knob (e.g. the
+# ETag kill-switch — Finding N) lives on the extractor class default in
+# `src/extractors/usda.py`.
+
 source_name: usda
 source_type: rest_api
 base_url: https://www.fsis.usda.gov/fsis/api/recall/v/1
@@ -13,11 +26,11 @@ incremental_filter_format: null
 default_lookback_days: null
 format_param: null
 credentials: null
-# ETag conditional-GET optimization. Disabled per Finding N (operator probe, 2026-04-30):
-# the cacheable response shape observed in Finding A was an Akamai cache override that
-# does not fire reliably for non-browser clients. Three back-to-back requests today all
-# returned origin-direct with no etag, no last-modified, and `x-drupal-cache: UNCACHEABLE
-# (request policy)`. The optimization is not viable; the extractor pulls the full ~1.6 MB
-# compressed payload every run and relies on bronze content-hash dedup for idempotency.
-# Re-enable by flipping to true if Akamai/FSIS behavior changes (no code changes needed).
+# ETag conditional-GET optimization. Disabled in production per Finding N
+# (extractor class default `UsdaExtractor.etag_enabled = False`). Empirically
+# viable when paired with the Finding O browser-like headers — re-runs land on
+# Akamai's cached path and 304s with `If-None-Match` work correctly. Stays
+# disabled until multi-day probe data confirms consistency. NOTE: this YAML
+# value is intent-only; the live kill-switch is the class default referenced
+# above (this file is not loaded — see header comment).
 etag_enabled: false

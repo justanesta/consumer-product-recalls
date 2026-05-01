@@ -37,6 +37,14 @@ class RecordWithoutId(BaseModel):
     count: int = 0
 
 
+class BilingualRecord(BaseModel):
+    """Simulates USDA's bilingual schema where (source_recall_id, langcode) is identity."""
+
+    source_recall_id: str
+    langcode: str  # "English" or "Spanish"
+    title: str
+
+
 def _make_conn() -> MagicMock:
     """Return a mock SQLAlchemy Connection."""
     conn = MagicMock()
@@ -57,26 +65,36 @@ def _make_table(name: str = "bronze_cpsc") -> MagicMock:
     return table
 
 
-def _make_real_table(name: str = "bronze_cpsc") -> Table:
+def _make_real_table(
+    name: str = "bronze_cpsc",
+    extra_col_names: list[str] | None = None,
+) -> Table:
     """
     Return a real SQLAlchemy Table with minimal columns.
     Required for _fetch_existing_hashes tests because SQLAlchemy's select()
     coercion rejects MagicMock column objects.
+
+    `extra_col_names` lists additional column names (e.g. ["langcode"] for USDA)
+    so composite-identity tests can hit a real Table that knows about them.
+    Each call constructs fresh Column instances — Column objects can't be shared
+    across Tables.
     """
     meta = MetaData()
-    return Table(
-        name,
-        meta,
+    cols: list[Column] = [
         Column("source_recall_id", String),
         Column("content_hash", String),
         Column("extraction_timestamp", DateTime),
-    )
+    ]
+    for col_name in extra_col_names or []:
+        cols.append(Column(col_name, String))
+    return Table(name, meta, *cols)
 
 
 def _make_loader(
     bronze_name: str = "bronze_cpsc",
     rejected_name: str = "rejected_cpsc",
     hash_exclude_fields: frozenset[str] = frozenset(),
+    identity_fields: tuple[str, ...] = ("source_recall_id",),
 ) -> tuple[BronzeLoader, MagicMock, MagicMock]:
     bronze = _make_table(bronze_name)
     rejected = _make_table(rejected_name)
@@ -84,6 +102,7 @@ def _make_loader(
         bronze_table=bronze,
         rejected_table=rejected,
         hash_exclude_fields=hash_exclude_fields,
+        identity_fields=identity_fields,
     )
     return loader, bronze, rejected
 
@@ -91,73 +110,103 @@ def _make_loader(
 def _make_loader_with_real_tables(
     bronze_name: str = "bronze_cpsc",
     rejected_name: str = "rejected_cpsc",
+    identity_fields: tuple[str, ...] = ("source_recall_id",),
+    extra_col_names: list[str] | None = None,
 ) -> tuple[BronzeLoader, Table, Table]:
     """Return a BronzeLoader backed by real SQLAlchemy Table objects."""
-    bronze = _make_real_table(bronze_name)
-    rejected = _make_real_table(rejected_name)
-    loader = BronzeLoader(bronze_table=bronze, rejected_table=rejected)
+    bronze = _make_real_table(bronze_name, extra_col_names=extra_col_names)
+    rejected = _make_real_table(rejected_name, extra_col_names=extra_col_names)
+    loader = BronzeLoader(
+        bronze_table=bronze, rejected_table=rejected, identity_fields=identity_fields
+    )
     return loader, bronze, rejected
 
 
 # ---------------------------------------------------------------------------
-# filter_new_records
+# filter_new_records — tuple-keyed identity
 # ---------------------------------------------------------------------------
 
 
 def test_filter_new_records_returns_all_when_existing_hashes_empty() -> None:
     record = SimpleRecord(source_recall_id="CPSC-001", title="Recall A")
-    hashed: list[tuple[str, str, BaseModel]] = [("CPSC-001", "hash_a", record)]
+    hashed: list[tuple[tuple[str, ...], str, BaseModel]] = [(("CPSC-001",), "hash_a", record)]
     result = filter_new_records(hashed, existing_hashes={})
     assert result == hashed
 
 
 def test_filter_new_records_returns_empty_for_empty_hashed_list() -> None:
-    result = filter_new_records([], existing_hashes={"CPSC-001": "hash_a"})
+    result = filter_new_records([], existing_hashes={("CPSC-001",): "hash_a"})
     assert result == []
 
 
 def test_filter_new_records_skips_records_with_matching_hash() -> None:
     record = SimpleRecord(source_recall_id="CPSC-001", title="Recall A")
-    hashed: list[tuple[str, str, BaseModel]] = [("CPSC-001", "hash_a", record)]
-    result = filter_new_records(hashed, existing_hashes={"CPSC-001": "hash_a"})
+    hashed: list[tuple[tuple[str, ...], str, BaseModel]] = [(("CPSC-001",), "hash_a", record)]
+    result = filter_new_records(hashed, existing_hashes={("CPSC-001",): "hash_a"})
     assert result == []
 
 
 def test_filter_new_records_includes_records_with_changed_hash() -> None:
     record = SimpleRecord(source_recall_id="CPSC-001", title="Recall A Updated")
-    hashed: list[tuple[str, str, BaseModel]] = [("CPSC-001", "hash_b", record)]
-    # existing hash is "hash_a" — content has changed
-    result = filter_new_records(hashed, existing_hashes={"CPSC-001": "hash_a"})
+    hashed: list[tuple[tuple[str, ...], str, BaseModel]] = [(("CPSC-001",), "hash_b", record)]
+    result = filter_new_records(hashed, existing_hashes={("CPSC-001",): "hash_a"})
     assert result == hashed
 
 
 def test_filter_new_records_includes_new_ids_not_in_existing_hashes() -> None:
     record_new = SimpleRecord(source_recall_id="CPSC-002", title="New Recall")
     record_existing = SimpleRecord(source_recall_id="CPSC-001", title="Existing")
-    hashed: list[tuple[str, str, BaseModel]] = [
-        ("CPSC-001", "hash_a", record_existing),
-        ("CPSC-002", "hash_b", record_new),
+    hashed: list[tuple[tuple[str, ...], str, BaseModel]] = [
+        (("CPSC-001",), "hash_a", record_existing),
+        (("CPSC-002",), "hash_b", record_new),
     ]
-    result = filter_new_records(hashed, existing_hashes={"CPSC-001": "hash_a"})
+    result = filter_new_records(hashed, existing_hashes={("CPSC-001",): "hash_a"})
     assert len(result) == 1
-    assert result[0][0] == "CPSC-002"
+    assert result[0][0] == ("CPSC-002",)
 
 
 def test_filter_new_records_partial_match_skips_matching_includes_new() -> None:
     r1 = SimpleRecord(source_recall_id="CPSC-001", title="Same")
     r2 = SimpleRecord(source_recall_id="CPSC-002", title="Changed")
     r3 = SimpleRecord(source_recall_id="CPSC-003", title="Brand New")
-    hashed: list[tuple[str, str, BaseModel]] = [
-        ("CPSC-001", "hash_a", r1),
-        ("CPSC-002", "hash_new", r2),
-        ("CPSC-003", "hash_c", r3),
+    hashed: list[tuple[tuple[str, ...], str, BaseModel]] = [
+        (("CPSC-001",), "hash_a", r1),
+        (("CPSC-002",), "hash_new", r2),
+        (("CPSC-003",), "hash_c", r3),
     ]
-    existing = {"CPSC-001": "hash_a", "CPSC-002": "hash_old"}
+    existing = {("CPSC-001",): "hash_a", ("CPSC-002",): "hash_old"}
     result = filter_new_records(hashed, existing)
     ids = [item[0] for item in result]
-    assert "CPSC-001" not in ids
-    assert "CPSC-002" in ids
-    assert "CPSC-003" in ids
+    assert ("CPSC-001",) not in ids
+    assert ("CPSC-002",) in ids
+    assert ("CPSC-003",) in ids
+
+
+def test_filter_new_records_composite_identity_distinguishes_siblings() -> None:
+    """Records sharing source_recall_id but differing langcode must be treated as distinct."""
+    en = BilingualRecord(source_recall_id="USDA-004-2020", langcode="English", title="Beef")
+    es = BilingualRecord(source_recall_id="USDA-004-2020", langcode="Spanish", title="Carne")
+    hashed: list[tuple[tuple[str, ...], str, BaseModel]] = [
+        (("USDA-004-2020", "English"), "hash_en", en),
+        (("USDA-004-2020", "Spanish"), "hash_es", es),
+    ]
+    # Only the English row's hash is known — the Spanish row should be inserted.
+    existing = {("USDA-004-2020", "English"): "hash_en"}
+    result = filter_new_records(hashed, existing)
+    assert len(result) == 1
+    assert result[0][0] == ("USDA-004-2020", "Spanish")
+
+
+# ---------------------------------------------------------------------------
+# BronzeLoader.__init__ — identity_fields validation
+# ---------------------------------------------------------------------------
+
+
+def test_bronze_loader_rejects_empty_identity_fields() -> None:
+    bronze = _make_table()
+    rejected = _make_table()
+    with pytest.raises(ValueError, match="identity_fields"):
+        BronzeLoader(bronze_table=bronze, rejected_table=rejected, identity_fields=())
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +264,11 @@ def test_bronze_loader_load_skips_hash_identical_records() -> None:
 
     existing_hash = content_hash(record.model_dump(mode="json"))
 
-    with patch.object(loader, "_fetch_existing_hashes", return_value={"CPSC-001": existing_hash}):
+    with patch.object(
+        loader,
+        "_fetch_existing_hashes",
+        return_value={("CPSC-001",): existing_hash},
+    ):
         count = loader.load(
             conn,
             records=[record],
@@ -242,7 +295,10 @@ def test_bronze_loader_load_inserts_only_changed_records_in_mixed_batch() -> Non
     with patch.object(
         loader,
         "_fetch_existing_hashes",
-        return_value={"CPSC-001": existing_hash_r_same, "CPSC-002": "stale_hash"},
+        return_value={
+            ("CPSC-001",): existing_hash_r_same,
+            ("CPSC-002",): "stale_hash",
+        },
     ):
         count = loader.load(
             conn,
@@ -255,6 +311,71 @@ def test_bronze_loader_load_inserts_only_changed_records_in_mixed_batch() -> Non
     assert count == 1
     rows_inserted = conn.execute.call_args[0][1]
     assert rows_inserted[0]["source_recall_id"] == "CPSC-002"
+
+
+# ---------------------------------------------------------------------------
+# BronzeLoader.load — composite identity (USDA bilingual scenario)
+# ---------------------------------------------------------------------------
+
+
+def test_bronze_loader_dedup_with_composite_identity_keeps_both_siblings_unique() -> None:
+    """
+    The exact scenario from Phase 5b first re-extraction: a recall has English
+    and Spanish sibling rows sharing source_recall_id. With composite identity,
+    each sibling has its own dedup slot, so a hash-identical re-run inserts zero.
+    """
+    from src.bronze.hashing import content_hash
+
+    loader, _, _ = _make_loader(identity_fields=("source_recall_id", "langcode"))
+    conn = _make_conn()
+
+    en = BilingualRecord(source_recall_id="USDA-004-2020", langcode="English", title="Beef")
+    es = BilingualRecord(source_recall_id="USDA-004-2020", langcode="Spanish", title="Carne")
+    en_hash = content_hash(en.model_dump(mode="json"))
+    es_hash = content_hash(es.model_dump(mode="json"))
+
+    # Both siblings are already in bronze with their correct hashes — re-run
+    # should be a no-op.
+    with patch.object(
+        loader,
+        "_fetch_existing_hashes",
+        return_value={
+            ("USDA-004-2020", "English"): en_hash,
+            ("USDA-004-2020", "Spanish"): es_hash,
+        },
+    ):
+        count = loader.load(
+            conn,
+            records=[en, es],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    assert count == 0
+    conn.execute.assert_not_called()
+
+
+def test_bronze_loader_composite_identity_passes_tuple_keys_to_fetch() -> None:
+    """The keys passed to _fetch_existing_hashes are tuples, not bare strings."""
+    loader, _, _ = _make_loader(identity_fields=("source_recall_id", "langcode"))
+    conn = _make_conn()
+
+    en = BilingualRecord(source_recall_id="USDA-004-2020", langcode="English", title="Beef")
+    es = BilingualRecord(source_recall_id="USDA-004-2020", langcode="Spanish", title="Carne")
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={}) as mock_fetch:
+        loader.load(
+            conn,
+            records=[en, es],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    keys_passed = mock_fetch.call_args.args[1]
+    assert ("USDA-004-2020", "English") in keys_passed
+    assert ("USDA-004-2020", "Spanish") in keys_passed
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +490,7 @@ def test_bronze_loader_load_uses_explicit_extraction_timestamp_when_provided() -
 
 
 # ---------------------------------------------------------------------------
-# BronzeLoader.load — ValueError for missing source_recall_id
+# BronzeLoader.load — ValueError for missing identity fields
 # ---------------------------------------------------------------------------
 
 
@@ -408,6 +529,24 @@ def test_bronze_loader_load_raises_value_error_when_source_recall_id_is_falsy() 
         )
 
 
+def test_bronze_loader_raises_when_composite_identity_field_is_missing_on_record() -> None:
+    """Composite-identity loader must reject records missing the secondary identity field."""
+    loader, _, _ = _make_loader(identity_fields=("source_recall_id", "langcode"))
+    conn = _make_conn()
+
+    # SimpleRecord has no `langcode` — composite identity should fail to build.
+    record = SimpleRecord(source_recall_id="CPSC-001", title="Recall")
+
+    with pytest.raises(ValueError, match="langcode"):
+        loader.load(
+            conn,
+            records=[record],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+
 # ---------------------------------------------------------------------------
 # BronzeLoader._fetch_existing_hashes
 # ---------------------------------------------------------------------------
@@ -416,7 +555,7 @@ def test_bronze_loader_load_raises_value_error_when_source_recall_id_is_falsy() 
 def test_fetch_existing_hashes_returns_empty_dict_for_empty_ids() -> None:
     loader, _, _ = _make_loader()
     conn = _make_conn()
-    result = loader._fetch_existing_hashes(conn, source_recall_ids=[])
+    result = loader._fetch_existing_hashes(conn, identity_keys=[])
     assert result == {}
     conn.execute.assert_not_called()
 
@@ -433,9 +572,9 @@ def test_fetch_existing_hashes_returns_dict_from_query_rows() -> None:
     ]
     conn.execute.return_value = mock_result
 
-    result = loader._fetch_existing_hashes(conn, source_recall_ids=["CPSC-001", "CPSC-002"])
+    result = loader._fetch_existing_hashes(conn, identity_keys=[("CPSC-001",), ("CPSC-002",)])
 
-    assert result == {"CPSC-001": "hash_abc", "CPSC-002": "hash_def"}
+    assert result == {("CPSC-001",): "hash_abc", ("CPSC-002",): "hash_def"}
     conn.execute.assert_called_once()
 
 
@@ -447,8 +586,36 @@ def test_fetch_existing_hashes_returns_empty_dict_when_no_rows_found() -> None:
     mock_result.fetchall.return_value = []
     conn.execute.return_value = mock_result
 
-    result = loader._fetch_existing_hashes(conn, source_recall_ids=["CPSC-999"])
+    result = loader._fetch_existing_hashes(conn, identity_keys=[("CPSC-999",)])
     assert result == {}
+
+
+def test_fetch_existing_hashes_keys_dict_on_composite_identity() -> None:
+    """Bilingual scenario: same source_recall_id, different langcode → distinct keys."""
+    loader, _, _ = _make_loader_with_real_tables(
+        identity_fields=("source_recall_id", "langcode"),
+        extra_col_names=["langcode"],
+    )
+    conn = _make_conn()
+
+    mock_result = MagicMock()
+    # Each row: (source_recall_id, langcode, content_hash) — same recall_id,
+    # two langcodes, distinct hashes.
+    mock_result.fetchall.return_value = [
+        ("USDA-004-2020", "English", "hash_en"),
+        ("USDA-004-2020", "Spanish", "hash_es"),
+    ]
+    conn.execute.return_value = mock_result
+
+    result = loader._fetch_existing_hashes(
+        conn,
+        identity_keys=[("USDA-004-2020", "English"), ("USDA-004-2020", "Spanish")],
+    )
+
+    assert result == {
+        ("USDA-004-2020", "English"): "hash_en",
+        ("USDA-004-2020", "Spanish"): "hash_es",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +639,7 @@ def test_hash_exclude_fields_skips_record_when_only_excluded_field_changes() -> 
     # Simulate record re-appearing in query window B with rid=19 — only RID differs
     record_b = RecordWithArtifact(source_recall_id="FDA-001", title="Recall", rid=19)
 
-    with patch.object(loader, "_fetch_existing_hashes", return_value={"FDA-001": existing_hash}):
+    with patch.object(loader, "_fetch_existing_hashes", return_value={("FDA-001",): existing_hash}):
         count = loader.load(
             conn,
             records=[record_b],
@@ -525,7 +692,7 @@ def test_hash_exclude_fields_still_detects_change_in_non_excluded_field() -> Non
     # Same RID, but title changed — should be treated as an edit
     record_new = RecordWithArtifact(source_recall_id="FDA-001", title="Updated Title", rid=10)
 
-    with patch.object(loader, "_fetch_existing_hashes", return_value={"FDA-001": existing_hash}):
+    with patch.object(loader, "_fetch_existing_hashes", return_value={("FDA-001",): existing_hash}):
         count = loader.load(
             conn,
             records=[record_new],

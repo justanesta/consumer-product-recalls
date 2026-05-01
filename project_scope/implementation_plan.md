@@ -218,6 +218,35 @@ Phase 3 established a three-part empirical process for CPSC that must be repeate
 
 ---
 
+ ## Architectural follow-ups                                                                                                
+  
+  Cross-cutting work that's in scope for v1 but not gated to a specific phase.                                               
+  File a branch + (in some cases) an ADR when each lands.
+                                                                                                                             
+  - **ADR 0012 implementation: source-config loader and registry.** The                                                      
+    `config/sources/*.yaml` files were filed as Phase 1 deliverables, but the                                                
+    loader, Pydantic-discriminated-union dispatch, and registry described in                                                 
+    ADR 0012 were never implemented. CLI dispatch in `src/cli/main.py`                                                       
+    instantiates extractors with hardcoded constructor kwargs, so YAML edits
+    have no runtime effect. Affects all five sources equally. Surfaced during                                                
+    Phase 5b USDA extraction when an `etag_enabled: false` YAML edit had no
+    effect on the running extractor; see detour L3 in                                                                        
+    `documentation/usda/first_extraction_findings.md` and the header comment in
+    `config/sources/usda.yaml`. Best landed before Phase 7 cron turn-on so                                                   
+    per-environment config overlays are clean from day one of production. Not
+    a Phase 6 blocker.                                                                                                       
+                  
+  - **ADR 0026 implementation: per-run snapshot-presence manifest.** Tracked in                                              
+    `documentation/decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md`.
+    Status: Draft, pending three acceptance criteria (scope, manifest                                                        
+    representation, timing). Best landed in Phase 6 alongside the silver                                                     
+    `current_content` / `edit_count` columns; could land earlier as a bronze-only                                            
+    change if you want historical lifecycle data from day one. 
+
+  - Make a decision on using the USDA etag instead of the full download content hash for data updates.
+
+---
+
 ## Phase 6 — Full silver + gold materialization
 
 **Goal:** unified data model across all five sources.
