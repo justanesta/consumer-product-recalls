@@ -17,12 +17,16 @@ from src.extractors._base import (
     RateLimitError,
     TransientExtractionError,
 )
-from src.extractors.usda import (
+from src.extractors._fsis_headers import (
     _FALLBACK_FIREFOX_UA,
+    _load_user_agent,
+)
+from src.extractors._fsis_headers import (
+    browser_headers as _browser_headers,
+)
+from src.extractors.usda import (
     UsdaDeepRescanLoader,
     UsdaExtractor,
-    _browser_headers,
-    _load_user_agent,
     _parse_http_date,
 )
 from src.schemas.usda import UsdaFsisRecord
@@ -674,49 +678,49 @@ class TestLoadUserAgent:
             '{"user_agents": {"firefox_linux": "Mozilla/5.0 test/1.0", '
             '"chrome_linux": "irrelevant"}}'
         )
-        with patch("src.extractors.usda._USER_AGENTS_PATH", path):
+        with patch("src.extractors._fsis_headers._USER_AGENTS_PATH", path):
             assert _load_user_agent() == "Mozilla/5.0 test/1.0"
 
     def test_falls_back_when_file_missing(self, tmp_path: Any) -> None:
         missing = tmp_path / "does_not_exist.json"
         with (
-            patch("src.extractors.usda._USER_AGENTS_PATH", missing),
+            patch("src.extractors._fsis_headers._USER_AGENTS_PATH", missing),
             structlog.testing.capture_logs() as captured,
         ):
             assert _load_user_agent() == _FALLBACK_FIREFOX_UA
-        assert any(e.get("event") == "usda.user_agents_load_failed" for e in captured)
+        assert any(e.get("event") == "fsis.user_agents_load_failed" for e in captured)
 
     def test_falls_back_when_json_malformed(self, tmp_path: Any) -> None:
         path = tmp_path / "bad.json"
         path.write_text("not json {")
         with (
-            patch("src.extractors.usda._USER_AGENTS_PATH", path),
+            patch("src.extractors._fsis_headers._USER_AGENTS_PATH", path),
             structlog.testing.capture_logs() as captured,
         ):
             assert _load_user_agent() == _FALLBACK_FIREFOX_UA
-        assert any(e.get("event") == "usda.user_agents_load_failed" for e in captured)
+        assert any(e.get("event") == "fsis.user_agents_load_failed" for e in captured)
 
     def test_falls_back_when_key_missing(self, tmp_path: Any) -> None:
         path = tmp_path / "missing_key.json"
         # Valid JSON, but no user_agents.firefox_linux
         path.write_text('{"sources": {}}')
         with (
-            patch("src.extractors.usda._USER_AGENTS_PATH", path),
+            patch("src.extractors._fsis_headers._USER_AGENTS_PATH", path),
             structlog.testing.capture_logs() as captured,
         ):
             assert _load_user_agent() == _FALLBACK_FIREFOX_UA
-        assert any(e.get("event") == "usda.user_agents_load_failed" for e in captured)
+        assert any(e.get("event") == "fsis.user_agents_load_failed" for e in captured)
 
     def test_falls_back_when_ua_empty_string(self, tmp_path: Any) -> None:
         # Defensive: schema present but value is empty — treat as malformed.
         path = tmp_path / "empty_ua.json"
         path.write_text('{"user_agents": {"firefox_linux": ""}}')
         with (
-            patch("src.extractors.usda._USER_AGENTS_PATH", path),
+            patch("src.extractors._fsis_headers._USER_AGENTS_PATH", path),
             structlog.testing.capture_logs() as captured,
         ):
             assert _load_user_agent() == _FALLBACK_FIREFOX_UA
-        assert any(e.get("event") == "usda.user_agents_load_failed" for e in captured)
+        assert any(e.get("event") == "fsis.user_agents_load_failed" for e in captured)
 
 
 class TestBrowserHeaders:

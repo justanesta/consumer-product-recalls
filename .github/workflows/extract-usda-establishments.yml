@@ -1,0 +1,41 @@
+name: Extract USDA FSIS Establishments
+
+# USDA FSIS Establishment Listing extractor (Phase 5b.2). No cron yet — cron
+# turns on in Phase 7. The endpoint has no pagination, no ETag, no incremental
+# cursor (Finding A); every run is a full ~7,945-record dump and bronze
+# content-hash dedup handles idempotency.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
+          [[ -n "$R2_BUCKET_NAME" ]] || (echo "::error::R2_BUCKET_NAME secret is missing" && exit 1)
+          [[ -n "$R2_ACCOUNT_ID" ]] || (echo "::error::R2_ACCOUNT_ID secret is missing" && exit 1)
+          [[ -n "$R2_ACCESS_KEY_ID" ]] || (echo "::error::R2_ACCESS_KEY_ID secret is missing" && exit 1)
+          [[ -n "$R2_SECRET_ACCESS_KEY" ]] || (echo "::error::R2_SECRET_ACCESS_KEY secret is missing" && exit 1)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Run USDA Establishments extractor
+        run: uv run recalls extract usda_establishments
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}

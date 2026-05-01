@@ -109,6 +109,30 @@ def extract(
             f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
         )
 
+    elif source == "usda_establishments":
+        from src.config.settings import Settings
+        from src.extractors.usda_establishment import UsdaEstablishmentExtractor
+
+        settings = Settings()  # type: ignore[call-arg]
+        # No incremental cursor exists (Finding A); --lookback-days has no
+        # effect. Accepted for CLI shape parity but ignored with a notice.
+        if lookback_days is not None:
+            typer.echo(
+                "usda_establishments: --lookback-days has no effect "
+                "(full-dump every run; see Finding A)."
+            )
+        extractor = UsdaEstablishmentExtractor(
+            base_url="https://www.fsis.usda.gov/fsis/api/establishments/v/1",
+            timeout_seconds=60.0,
+            settings=settings,
+        )
+        result = extractor.run()
+        typer.echo(
+            f"usda_establishments: fetched={result.records_fetched} "
+            f"loaded={result.records_loaded} "
+            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
+        )
+
     else:
         typer.echo(f"Unknown source: {source}", err=True)
         raise typer.Exit(code=1)
