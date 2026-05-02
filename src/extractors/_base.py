@@ -179,18 +179,28 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
         status: str,
         result: ExtractionResult | None = None,
         error_message: str | None = None,
+        change_type: str = "routine",
     ) -> None:
-        """Write a row to extraction_runs. Override in concrete extractors that have a DB engine."""
+        """Write a row to extraction_runs. Override in concrete extractors that have a DB engine.
+
+        `change_type` is one of routine / schema_rebaseline / hash_helper_rebaseline /
+        historical_seed (per ADR 0027 + ADR 0028). Default is routine; the CLI's
+        --change-type flag is validated before reaching this point.
+        """
 
     # --- Template orchestration ---
 
-    def run(self) -> ExtractionResult:
+    def run(self, change_type: str = "routine") -> ExtractionResult:
         """
         Execute the full 5-step extraction lifecycle.
 
         Steps 1, 2, and 5 are retried on transient failures.
         Steps 3 and 4 are pure/deterministic — retrying would fail identically.
         Raises ExtractionAbortedError if batch rejection rate exceeds threshold.
+
+        `change_type` flows through to extraction_runs so downstream history
+        models (Phase 6 recall_event_history) can filter parser-driven re-version
+        waves out of edit detection. See ADR 0027 + ADR 0028.
         """
         run_id = str(uuid.uuid4())
         started_at = datetime.now(UTC)
@@ -251,19 +261,21 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
                     rate=result.rejection_rate,
                     threshold=self.rejection_threshold,
                 )
-                self._record_run(run_id, started_at, "aborted", result)
+                self._record_run(run_id, started_at, "aborted", result, change_type=change_type)
                 raise ExtractionAbortedError(
                     self.source_name, result.rejection_rate, self.rejection_threshold
                 )
 
             log.info("extraction.completed", **vars(result))
-            self._record_run(run_id, started_at, "success", result)
+            self._record_run(run_id, started_at, "success", result, change_type=change_type)
             return result
 
         except ExtractionAbortedError:
             raise
         except Exception as exc:
-            self._record_run(run_id, started_at, "failed", error_message=str(exc))
+            self._record_run(
+                run_id, started_at, "failed", error_message=str(exc), change_type=change_type
+            )
             raise
         finally:
             structlog.contextvars.unbind_contextvars("source", "run_id")

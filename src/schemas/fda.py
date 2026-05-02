@@ -43,27 +43,25 @@ def _parse_fda_date(v: Any) -> datetime:
 
 
 def _parse_nullable_fda_date(v: Any) -> datetime | None:
-    """Normalize FDA's dual null sentinels (null and '') before date parsing (finding J)."""
+    """Normalize FDA's dual null sentinels (null and '') before date parsing (finding J).
+
+    Storage-forced (TIMESTAMPTZ NULL cannot hold the empty string), so '' → None
+    stays in bronze per ADR 0027.
+    """
     if v is None or v == "":
         return None
     return _parse_fda_date(v)
 
 
-def _normalize_str(v: Any) -> str | None:
-    """Normalize FDA's dual null sentinels: null → None, '' → None (finding J)."""
-    if v is None or v == "":
-        return None
-    return v
-
-
 # Annotated types used by FdaRecord fields — BeforeValidator runs before strict mode
 # so string-to-int and string-to-datetime coercions happen before Pydantic type-checks.
+# Per ADR 0027, only storage-forced transforms live here. Empty-string-to-None
+# normalization on Optional[str] fields moved to silver staging (nullif(col, '')).
 _FdaInt = Annotated[int, BeforeValidator(_to_int)]
 _FdaNullableInt = Annotated[int | None, BeforeValidator(_to_nullable_int)]
 _FdaStrId = Annotated[str, BeforeValidator(_to_str)]
 _FdaDate = Annotated[datetime, BeforeValidator(_parse_fda_date)]
 _FdaNullableDate = Annotated[datetime | None, BeforeValidator(_parse_nullable_fda_date)]
-_FdaNullableStr = Annotated[str | None, BeforeValidator(_normalize_str)]
 
 
 class FdaRecord(BaseModel):
@@ -78,8 +76,9 @@ class FdaRecord(BaseModel):
     - RECALLEVENTID / RID / FIRMFEINUM come as strings; BeforeValidator coerces to int.
     - PRODUCTID may come as string or number; BeforeValidator normalizes to str.
     - Date fields use MM/DD/YYYY format (finding H); coerced to UTC midnight datetime.
-    - Empty '' normalized to None on all Optional[str] fields — FDA uses both null and ''
-      as null sentinels for the same fields across records (finding J).
+    - Optional[str] fields preserve the source's null/'' representation verbatim.
+      FDA uses both null and '' as null sentinels for the same fields across records
+      (finding J); silver staging normalizes via nullif(col, '') per ADR 0027.
     - strict=True + extra='forbid' catches schema drift at ingest (ADR 0014).
     """
 
@@ -94,11 +93,14 @@ class FdaRecord(BaseModel):
     event_lmd: _FdaDate = Field(validation_alias="EVENTLMD")
     firm_legal_nam: str = Field(validation_alias="FIRMLEGALNAM")
 
-    # Nullable scalars — null and '' both map to None (finding J / finding M-extension)
+    # Nullable scalars — null and '' are preserved verbatim per ADR 0027
+    # (silver staging normalizes via nullif(col, '')). Storage-forced exceptions:
+    # firm_fei_num (INTEGER) and *_dt fields (TIMESTAMPTZ) cannot hold '' so
+    # those validators still convert '' → None.
     firm_fei_num: _FdaNullableInt = Field(default=None, validation_alias="FIRMFEINUM")
-    recall_num: _FdaNullableStr = Field(default=None, validation_alias="RECALLNUM")
-    phase_txt: _FdaNullableStr = Field(default=None, validation_alias="PHASETXT")
-    center_classification_type_txt: _FdaNullableStr = Field(
+    recall_num: str | None = Field(default=None, validation_alias="RECALLNUM")
+    phase_txt: str | None = Field(default=None, validation_alias="PHASETXT")
+    center_classification_type_txt: str | None = Field(
         default=None, validation_alias="CENTERCLASSIFICATIONTYPETXT"
     )
     recall_initiation_dt: _FdaNullableDate = Field(
@@ -112,19 +114,19 @@ class FdaRecord(BaseModel):
         default=None, validation_alias="ENFORCEMENTREPORTDT"
     )
     determination_dt: _FdaNullableDate = Field(default=None, validation_alias="DETERMINATIONDT")
-    initial_firm_notification_txt: _FdaNullableStr = Field(
+    initial_firm_notification_txt: str | None = Field(
         default=None, validation_alias="INITIALFIRMNOTIFICATIONTXT"
     )
-    distribution_area_summary_txt: _FdaNullableStr = Field(
+    distribution_area_summary_txt: str | None = Field(
         default=None, validation_alias="DISTRIBUTIONAREASUMMARYTXT"
     )
-    voluntary_type_txt: _FdaNullableStr = Field(default=None, validation_alias="VOLUNTARYTYPETXT")
-    product_description_txt: _FdaNullableStr = Field(
+    voluntary_type_txt: str | None = Field(default=None, validation_alias="VOLUNTARYTYPETXT")
+    product_description_txt: str | None = Field(
         default=None, validation_alias="PRODUCTDESCRIPTIONTXT"
     )
-    product_short_reason_txt: _FdaNullableStr = Field(
+    product_short_reason_txt: str | None = Field(
         default=None, validation_alias="PRODUCTSHORTREASONTXT"
     )
-    product_distributed_quantity: _FdaNullableStr = Field(
+    product_distributed_quantity: str | None = Field(
         default=None, validation_alias="PRODUCTDISTRIBUTEDQUANTITY"
     )

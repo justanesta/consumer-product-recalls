@@ -391,7 +391,7 @@ uv run pytest tests/integration/test_cpsc_live_cassettes.py
 uv run pytest tests/integration/test_cpsc_live_cassettes.py::test_happy_path_recent
 
 # dbt tests (requires database + dbt-only env vars per "Design rationale" above)
-uv run dbt test --project-dir dbt
+uv run dbt test --project-dir dbt --profiles-dir dbt
 
 # Coverage — the 85% threshold lives in pyproject.toml and is enforced in CI only,
 # but you can reproduce the CI run locally:
@@ -619,6 +619,7 @@ uv run dbt docs serve --project-dir dbt
 - **Model selection syntax.** `+` is downstream, `+model_name` is upstream, `model_name+` is downstream of model_name. `dbt run --select +recall_event` runs everything `recall_event` depends on but not its downstream gold models.
 - **Compile output** lands in `dbt/target/compiled/` after `dbt parse` or `dbt run`. Useful for inspecting the actual SQL when a model surprises you.
 - **Profile target.** `profiles.yml` defines a single `dev` target; production CI overrides via env vars or a separate profile path. Don't add a `prod` target to the committed file unless you mean to.
+- **Skipping the `--project-dir` / `--profiles-dir` flags.** Export `DBT_PROJECT_DIR=$(pwd)/dbt` and `DBT_PROFILES_DIR=$(pwd)/dbt` (in `.envrc` so direnv autoloads them) and dbt picks them up natively — bare `uv run dbt parse` works. Same idea applies to `psql` (libpq `PGHOST` / `PGUSER` / etc.) and `aws` for R2 (`AWS_ENDPOINT_URL`); see [`commands.md` § Shortcuts via env vars](commands.md#shortcuts-via-env-vars) for the table.
 
 ---
 

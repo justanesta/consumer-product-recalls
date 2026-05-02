@@ -153,11 +153,14 @@ class TestFdaRecord:
         record = FdaRecord.model_validate(_REQUIRED)
         assert isinstance(record.recall_event_id, int)
 
-    def test_empty_string_nullable_becomes_none(self) -> None:
+    def test_empty_string_nullable_preserved(self) -> None:
+        # Per ADR 0027 (bronze keeps storage-forced transforms only): nullable
+        # text fields preserve the source's '' representation verbatim.
+        # Silver staging normalizes via nullif(col, '') in stg_fda_recalls.sql.
         row = {**_REQUIRED, "RECALLNUM": "", "PHASETXT": ""}
         record = FdaRecord.model_validate(row)
-        assert record.recall_num is None
-        assert record.phase_txt is None
+        assert record.recall_num == ""
+        assert record.phase_txt == ""
 
     def test_null_nullable_date_stays_none(self) -> None:
         row = {**_REQUIRED, "TERMINATIONDT": None}

@@ -7,8 +7,7 @@ from pydantic import ValidationError
 
 from src.schemas.usda_establishment import (
     UsdaFsisEstablishment,
-    _normalize_false_sentinel,
-    _strip_list_elements,
+    _coerce_false_to_text,
 )
 
 # ---------------------------------------------------------------------------
@@ -35,57 +34,34 @@ _REQUIRED: dict = {
 # ---------------------------------------------------------------------------
 
 
-class TestNormalizeFalseSentinel:
-    """The boolean ``False`` is the missing-value sentinel for geolocation/county."""
+class TestCoerceFalseToText:
+    """The boolean ``False`` is coerced to the string ``"false"`` (ADR 0027 option 3)."""
 
-    def test_literal_false_becomes_none(self) -> None:
-        assert _normalize_false_sentinel(False) is None
+    def test_literal_false_becomes_string_false(self) -> None:
+        # Per ADR 0027 option 3 (decided 2026-05-01): JSON boolean ``false`` →
+        # the literal string ``"false"`` (storage-forced because the bronze
+        # column is TEXT and JSON booleans can't land there). Silver does
+        # nullif(col, 'false') to surface as null.
+        assert _coerce_false_to_text(False) == "false"
 
     def test_real_string_passes_through(self) -> None:
-        assert _normalize_false_sentinel("29.83, -95.47") == "29.83, -95.47"
+        assert _coerce_false_to_text("29.83, -95.47") == "29.83, -95.47"
 
     def test_empty_string_passes_through(self) -> None:
         # '' is NOT the missing sentinel here — only the literal boolean False is.
-        # Keeping '' as-is preserves the distinction so silver can decide what to do.
-        assert _normalize_false_sentinel("") == ""
+        # Keeping '' as-is preserves the distinction.
+        assert _coerce_false_to_text("") == ""
 
     def test_zero_passes_through(self) -> None:
         # 0 is falsy but not the False singleton — must not be mistaken for missing.
-        # (Hypothetical; real API doesn't return 0 here, but the validator's
+        # (Hypothetical; real API doesn't return 0 here, but the coercer's
         # safety property is that only `is False` matches.)
-        assert _normalize_false_sentinel(0) == 0
+        assert _coerce_false_to_text(0) == 0
 
     def test_none_passes_through(self) -> None:
-        # If the API ever returns null directly, normalization happens upstream
-        # via the field's `Optional` type, not this validator.
-        assert _normalize_false_sentinel(None) is None  # passes through; field type allows it
-
-
-class TestStripListElements:
-    """activities/dbas may have leading whitespace on non-first elements."""
-
-    def test_leading_space_stripped(self) -> None:
-        assert _strip_list_elements(["Meat Processing", " Poultry Processing"]) == [
-            "Meat Processing",
-            "Poultry Processing",
-        ]
-
-    def test_empty_list_preserved(self) -> None:
-        assert _strip_list_elements([]) == []
-
-    def test_single_element_unchanged(self) -> None:
-        assert _strip_list_elements(["Meat Processing"]) == ["Meat Processing"]
-
-    def test_trailing_whitespace_also_stripped(self) -> None:
-        assert _strip_list_elements(["Foo ", " Bar "]) == ["Foo", "Bar"]
-
-    def test_none_raises_valueerror(self) -> None:
-        # Per ADR 0013 strict-quarantine posture: null from the API should land in
-        # the rejected table, not become an empty list silently. The explicit
-        # ValueError (rather than a raw TypeError from iteration) is what
-        # Pydantic wraps into ValidationError at the model boundary.
-        with pytest.raises(ValueError, match="expected a list"):
-            _strip_list_elements(None)
+        # If the API ever returns null directly, the coercer passes it through
+        # and downstream strict-mode validation will reject it (intended quarantine).
+        assert _coerce_false_to_text(None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -100,17 +76,21 @@ class TestUsdaFsisEstablishment:
         assert m.establishment_name == "CS Beef Packers, LLC"
         assert m.activities == ["Meat Processing"]
         assert m.dbas == []
-        assert m.county is None
-        assert m.geolocation is None
+        # Per ADR 0027: county/geolocation default to "" when the API omits them
+        # (stayed as TEXT NOT NULL columns; default kicks in for absent keys).
+        assert m.county == ""
+        assert m.geolocation == ""
         assert m.latest_mpi_active_date == datetime(2026, 4, 27, tzinfo=UTC)
 
-    def test_false_sentinel_normalized_for_geolocation(self) -> None:
+    def test_false_sentinel_coerced_for_geolocation(self) -> None:
+        # Per ADR 0027 option 3: JSON `false` → string "false". Silver does
+        # nullif(geolocation, 'false') to surface as null.
         m = UsdaFsisEstablishment.model_validate({**_REQUIRED, "geolocation": False})
-        assert m.geolocation is None
+        assert m.geolocation == "false"
 
-    def test_false_sentinel_normalized_for_county(self) -> None:
+    def test_false_sentinel_coerced_for_county(self) -> None:
         m = UsdaFsisEstablishment.model_validate({**_REQUIRED, "county": False})
-        assert m.county is None
+        assert m.county == "false"
 
     def test_real_geolocation_string_preserved(self) -> None:
         m = UsdaFsisEstablishment.model_validate(
@@ -118,11 +98,13 @@ class TestUsdaFsisEstablishment:
         )
         assert m.geolocation == "29.83860699, -95.47217297"
 
-    def test_activities_whitespace_stripped(self) -> None:
+    def test_activities_whitespace_preserved(self) -> None:
+        # Per ADR 0027: ragged whitespace is preserved verbatim in bronze;
+        # silver staging trims via jsonb_array_elements_text → trim → jsonb_agg.
         m = UsdaFsisEstablishment.model_validate(
             {**_REQUIRED, "activities": ["Meat Processing", " Poultry Processing"]}
         )
-        assert m.activities == ["Meat Processing", "Poultry Processing"]
+        assert m.activities == ["Meat Processing", " Poultry Processing"]
 
     def test_extra_field_rejected(self) -> None:
         # ADR 0014 strict + extra='forbid' contract.
@@ -144,11 +126,10 @@ class TestUsdaFsisEstablishment:
         m = UsdaFsisEstablishment.model_validate({**_REQUIRED, "status_regulated_est": "Inactive"})
         assert m.status_regulated_est == "Inactive"
 
-    def test_empty_string_normalized_to_none_on_optional_strs(self) -> None:
-        # Per the empty-string-to-None follow-up after Phase 5b.2 first
-        # extraction (2026-05-01): all Optional[str] fields use the same
-        # _normalize_str validator as the recall schema, so '' → None at the
-        # bronze boundary instead of leaking empty strings into bronze.
+    def test_empty_string_preserved_on_optional_strs(self) -> None:
+        # Per ADR 0027 (bronze keeps storage-forced transforms only): nullable
+        # text fields preserve '' verbatim. Silver staging will normalize via
+        # nullif(col, '') in stg_usda_fsis_establishments.sql (Phase 5b.2 Step 5).
         m = UsdaFsisEstablishment.model_validate(
             {
                 **_REQUIRED,
@@ -160,9 +141,9 @@ class TestUsdaFsisEstablishment:
                 "circuit": "",
             }
         )
-        assert m.phone is None
-        assert m.duns_number is None
-        assert m.fips_code is None
-        assert m.size is None
-        assert m.district is None
-        assert m.circuit is None
+        assert m.phone == ""
+        assert m.duns_number == ""
+        assert m.fips_code == ""
+        assert m.size == ""
+        assert m.district == ""
+        assert m.circuit == ""

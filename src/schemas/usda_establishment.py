@@ -5,55 +5,42 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
-from src.schemas.usda import _normalize_str, _parse_nullable_usda_date, _parse_usda_date
+from src.schemas.usda import _parse_nullable_usda_date, _parse_usda_date
 
 
-def _normalize_false_sentinel(v: Any) -> str | None:
-    """Normalize the literal boolean ``False`` to ``None``.
+def _coerce_false_to_text(v: Any) -> Any:
+    """Coerce the literal boolean ``False`` to the string ``"false"``.
 
-    USDA FSIS Establishment Listing API uses ``false`` (boolean) as a missing
-    sentinel for `geolocation` and `county` (Finding C in
+    USDA FSIS Establishment Listing API uses ``false`` (JSON boolean) as a
+    missing sentinel for `geolocation` and `county` (Finding C in
     documentation/usda/establishment_api_observations.md) — *not* ``null``,
-    *not* ``""``. The strict identity check ``v is False`` matches only the
-    singleton boolean and not other falsy values like ``""`` or ``0``, which
-    might legitimately appear in other contexts.
+    *not* ``""``. Bronze stores these as TEXT, so the JSON boolean must be
+    coerced to *something* — the destination column type forces a choice.
+
+    Per ADR 0027 §"Storage-type choice for the boolean-false sentinel case"
+    (decided option 3, 2026-05-01), we coerce to the literal string
+    ``"false"`` rather than ``None``. This preserves the source's signal
+    cheaply (silver does ``nullif(col, 'false')``) and lets us detect a
+    future API shift from ``false`` to ``null`` via
+    ``count(*) where geolocation = 'false'``. Pass-through behavior for
+    strings is unchanged.
+
+    The strict identity check ``v is False`` matches only the singleton
+    boolean and not other falsy values like ``""`` or ``0``, which might
+    legitimately appear in other contexts.
     """
     if v is False:
-        return None
+        return "false"
     return v
 
 
-def _strip_list_elements(v: Any) -> list[str]:
-    """Trim leading/trailing whitespace from each list element.
-
-    Per Finding C, the API serializes ``activities`` and ``dbas`` as true JSON
-    arrays where elements after index 0 may carry a leading space (e.g.,
-    ``["Meat Processing", " Poultry Processing"]``). The validator does not
-    accept ``None`` — at the bronze boundary we prefer strict validation +
-    quarantine (ADR 0013) over defensive coercion. If the API ever returns
-    ``null``, the record fails validation and lands in
-    ``usda_fsis_establishments_rejected`` for investigation rather than
-    silently becoming an empty list. The explicit check raises ``ValueError``
-    (which Pydantic wraps into ``ValidationError``) rather than letting a
-    raw ``TypeError`` from list iteration propagate.
-    """
-    if v is None:
-        raise ValueError("expected a list, got None")
-    return [s.strip() for s in v]
-
-
 # Annotated types — BeforeValidator runs before strict-mode type checks so the
-# raw boolean false / ragged-whitespace strings reach our normalizers first.
-_FsisFalseSentinelStr = Annotated[str | None, BeforeValidator(_normalize_false_sentinel)]
-_FsisStrippedStrList = Annotated[list[str], BeforeValidator(_strip_list_elements)]
+# raw boolean false reaches our coercer first. Per ADR 0027, only storage-forced
+# transforms live here. Empty-string normalization on Optional[str] fields and
+# whitespace-strip on list[str] fields moved to silver staging.
+_FsisFalseAsTextStr = Annotated[str, BeforeValidator(_coerce_false_to_text)]
 _UsdaDate = Annotated[datetime, BeforeValidator(_parse_usda_date)]
 _UsdaNullableDate = Annotated[datetime | None, BeforeValidator(_parse_nullable_usda_date)]
-# Empty-string-to-None normalizer, matching the recall schema's posture for
-# Optional[str] fields. Per Finding C and the establishment-extract follow-up
-# on 2026-05-01: the API returns "" (e.g., duns_number) where Pydantic strict
-# would otherwise store the empty string, leaking into bronze and forcing
-# every silver/gold consumer to remember the `nullif(col, '')` dance.
-_FsisNullableStr = Annotated[str | None, BeforeValidator(_normalize_str)]
 
 
 class UsdaFsisEstablishment(BaseModel):
@@ -66,9 +53,14 @@ class UsdaFsisEstablishment(BaseModel):
 
     Validation behaviors specific to this source:
     - `geolocation` and `county` use boolean ``false`` as a missing sentinel
-      (Finding C); normalized to ``None`` by ``_normalize_false_sentinel``.
-    - `activities` and `dbas` are true JSON arrays with ragged leading
-      whitespace on non-first elements (Finding C); each element is trimmed.
+      (Finding C); coerced to the literal string ``"false"`` by
+      ``_coerce_false_to_text`` per ADR 0027 option 3. Silver staging does
+      ``nullif(col, 'false')``.
+    - `activities` and `dbas` are true JSON arrays; ragged leading-whitespace
+      elements are preserved verbatim per ADR 0027 (silver staging trims via
+      ``jsonb_array_elements_text → trim → jsonb_agg``).
+    - Optional[str] fields preserve the source's '' representation verbatim
+      (Finding C) per ADR 0027; silver staging normalizes via nullif(col, '').
     - `latest_mpi_active_date` is 100% populated on all records including
       inactive (Finding G), so it is required.
     - `status_regulated_est` is a two-value enum ('' = active MPI,
@@ -104,23 +96,23 @@ class UsdaFsisEstablishment(BaseModel):
     latest_mpi_active_date: _UsdaDate = Field(validation_alias="LatestMPIActiveDate")
     # Two-value enum: '' = active MPI, 'Inactive' = inactive (Finding C, exhaustive).
     status_regulated_est: str
-    # True JSON arrays with ragged whitespace; never null / never absent on real records.
-    activities: _FsisStrippedStrList
-    dbas: _FsisStrippedStrList
+    # True JSON arrays; ragged whitespace preserved per ADR 0027 (silver trims).
+    # Never null / never absent on real records.
+    activities: list[str]
+    dbas: list[str]
 
     # --- Optional demographics (Finding D nullability rates in comments) ---
-    # All Optional[str] fields use _FsisNullableStr so '' → None at the bronze
-    # boundary, matching the recall schema's pattern (src/schemas/usda.py).
-    phone: _FsisNullableStr = Field(default=None)  # 3.9% empty
-    duns_number: _FsisNullableStr = Field(default=None)  # 85.5% empty
-    fips_code: _FsisNullableStr = Field(default=None)  # 4.3% empty
-    # boolean false sentinel → None
-    county: _FsisFalseSentinelStr = Field(default=None)  # 1.5% empty (false sentinel)
-    geolocation: _FsisFalseSentinelStr = Field(default=None)  # 1.5%+ empty (false sentinel)
+    # Optional[str] fields preserve '' verbatim per ADR 0027; silver does nullif.
+    phone: str | None = Field(default=None)  # 3.9% empty
+    duns_number: str | None = Field(default=None)  # 85.5% empty
+    fips_code: str | None = Field(default=None)  # 4.3% empty
+    # JSON-boolean false sentinel coerced to string "false" (storage-forced —
+    # TEXT column can't hold a JSON boolean). Silver does nullif(col, 'false').
+    county: _FsisFalseAsTextStr = Field(default="")  # 1.5% empty (false sentinel)
+    geolocation: _FsisFalseAsTextStr = Field(default="")  # 1.5%+ empty (false sentinel)
     # Optional date (presence not enumerated in Finding D — treat as nullable).
     grant_date: _UsdaNullableDate = Field(default=None)
-    # Optional administrative metadata; '' on inactive records (per observations
-    # doc Implications section) → None.
-    size: _FsisNullableStr = Field(default=None)
-    district: _FsisNullableStr = Field(default=None)
-    circuit: _FsisNullableStr = Field(default=None)
+    # Optional administrative metadata; '' on inactive records preserved verbatim.
+    size: str | None = Field(default=None)
+    district: str | None = Field(default=None)
+    circuit: str | None = Field(default=None)

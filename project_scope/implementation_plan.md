@@ -415,7 +415,7 @@ Cross-cutting work targeted at specific upcoming phases. Each item is gated to a
 | ADR 0027 bronze storage-forced transforms refactor | **Phase 5b.2 Step 4.5** (already on critical path) | Cross-referenced from §5b.2 |
 | `source_watermarks` seeding fix | **Phase 7 prerequisite** | Pending |
 | FDA firm role reconciliation | **Phase 6 prerequisite** (firm entity resolution) | Pending |
-| Shared annotated types and invariants audit | **Phase 5c prerequisite** | Pending — see TODO grooming |
+| Shared annotated types and invariants audit | **Phase 5c prerequisite** | Resolved 2026-05-01 — documented negative result; see section below |
 | USDA recall ETag re-evaluation | **Phase 7 prerequisite** | Pending |
 
 ### ADR 0012 implementation: source-config loader and registry
@@ -480,11 +480,38 @@ Best landed before Phase 7 cron turn-on so the daily bandwidth profile is settle
 
 ### Shared annotated types and invariants audit — Phase 5c prerequisite
 
-Three sources (CPSC, FDA, USDA recall, USDA establishment) have shipped Pydantic schemas and bronze invariants in isolation, before NHTSA and USCG land. Audit `src/schemas/cpsc.py`, `fda.py`, `usda.py`, `usda_establishment.py` for shared `Annotated[...]` types (e.g., trimmed strings, normalized dates, FEI-number validation) and shared invariants in `src/bronze/invariants.py` for cross-source rules (e.g., `published_at` sanity, null `source_recall_id`).
+**Status: Resolved 2026-05-01 with a documented negative result.**
 
-Extract common patterns into shared types/decorators so NHTSA (Phase 5c) and USCG (Phase 5d) can reuse them rather than each re-implementing the same shape. Originally raised as TODO item 37 (2026-05-01); converted to a Phase 5c prerequisite when this realignment landed.
+Three sources (CPSC, FDA, USDA recall, USDA establishment) have shipped Pydantic schemas and bronze invariants in isolation. The audit looked at `src/schemas/cpsc.py`, `fda.py`, `usda.py`, `usda_establishment.py`, and `src/bronze/invariants.py` for shared patterns worth extracting before NHTSA (Phase 5c) and USCG (Phase 5d) land.
 
-**Acceptance criteria:** at least one shared annotated type extracted (likely a normalized-string or date type); at least one shared invariant identified and centralized in `src/bronze/invariants.py`; the four existing schemas migrated to use the shared types where applicable. The audit may conclude that no useful shared abstraction exists yet, in which case the negative result is documented and the four schemas stay independent.
+**Audit conducted on the post-ADR-0027 codebase** (after value-level normalizers were dropped from bronze schemas in the same PR that filed this resolution). Conducting it after the refactor was deliberate — pre-refactor, the schemas had repeating `_normalize_str` / `_FdaNullableStr` / `_UsdaNullableStr` / `_FsisNullableStr` patterns that *did* look extractable. Those patterns no longer exist; bronze nullable-text fields are now plain `str | None`.
+
+#### What's left in the schemas (post-ADR 0027)
+
+| Source | Storage-forced validators | Annotated types |
+|---|---|---|
+| CPSC | `_coerce_date_string_to_utc_datetime` (calls `_parse_cpsc_date`) | None — only the date validator |
+| FDA | `_to_int`, `_to_nullable_int`, `_to_str`, `_parse_fda_date`, `_parse_nullable_fda_date` | `_FdaInt`, `_FdaNullableInt`, `_FdaStrId`, `_FdaDate`, `_FdaNullableDate` |
+| USDA recall | `_to_bool`, `_to_nullable_bool`, `_parse_usda_date`, `_parse_nullable_usda_date` | `_UsdaBool`, `_UsdaNullableBool`, `_UsdaDate`, `_UsdaNullableDate` |
+| USDA establishment | `_coerce_false_to_text`, reuses `_parse_usda_date` / `_parse_nullable_usda_date` from `usda.py` | `_FsisFalseAsTextStr`, `_UsdaDate`, `_UsdaNullableDate` |
+
+#### Patterns evaluated for extraction
+
+1. **Nullable-parser wrapper.** Each source's `_parse_nullable_<source>_date` is structurally identical: `if v is None or v == "": return None; return _parse_<source>_date(v)`. Could be replaced with a `make_nullable(parser)` higher-order function. **Verdict: rejected.** Adds indirection for ~10 LOC saved across three sources; the explicit per-source named function is more readable.
+2. **Date format parsing.** Different formats per source (FDA `MM/DD/YYYY`, USDA `YYYY-MM-DD`, CPSC `YYYY-MM-DD[THH:MM:SS]`). **Not extractable** — format is the source-specific quirk that requires the validator in the first place.
+3. **Boolean string-to-bool, int coercion, false-sentinel coercion.** Each appears in only one source. **Not extractable.**
+4. **Cross-source business invariants.** Already centralized: `check_null_source_id`, `check_date_sanity` in `src/bronze/invariants.py` are reused across CPSC/FDA/USDA extractors today. `check_usda_bilingual_pairing` is correctly USDA-specific. **No further extraction needed.**
+
+#### Discipline for new sources (NHTSA Phase 5c, USCG Phase 5d, future)
+
+When implementing a new source's Pydantic schema:
+
+- Follow ADR 0027: only storage-forced validators (date string → datetime for `TIMESTAMPTZ`, "True"/"False" → bool for `BOOLEAN`, int coercion for `INTEGER`, etc.). Value-level normalization (empty string → null, whitespace strip, casing) belongs in silver staging models, not bronze schemas.
+- Name validators per-source (e.g., `_parse_nhtsa_date`, not `_parse_date`) so each source's quirks remain readable in isolation. Do not preemptively create a "shared schemas" module — three sources of evidence have shown that the source-specific quirks dominate the would-be shared shape.
+- For cross-source invariants, add to `src/bronze/invariants.py` and reuse from the new extractor's `check_invariants()` method. `check_null_source_id` and `check_date_sanity` are likely applicable to any source.
+- For source-specific invariants (analogous to `check_usda_bilingual_pairing`), keep them in `src/bronze/invariants.py` if they're parameterizable across hypothetical-future similar sources, OR keep them in the source's extractor module if they're fundamentally one-of-a-kind.
+
+If a fourth source's schema reveals a pattern that meaningfully repeats across three or more sources, file a follow-up to revisit this audit and extract at that point. The bar for adding a shared module is "evidence from three sources that the abstraction is real," not "two sources happen to have similar-looking code."
 
 ---
 

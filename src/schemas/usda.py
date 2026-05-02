@@ -31,13 +31,6 @@ def _to_nullable_bool(v: Any) -> bool | None:
     return _to_bool(v)
 
 
-def _normalize_str(v: Any) -> str | None:
-    """Normalize empty-string sentinel to None (Finding C — many fields use '' for missing)."""
-    if v is None or v == "":
-        return None
-    return v
-
-
 def _parse_usda_date(v: Any) -> datetime:
     """Parse YYYY-MM-DD → UTC midnight datetime."""
     if isinstance(v, datetime):
@@ -48,7 +41,11 @@ def _parse_usda_date(v: Any) -> datetime:
 
 
 def _parse_nullable_usda_date(v: Any) -> datetime | None:
-    """Same as _parse_usda_date but treats null and '' as missing (Finding C)."""
+    """Same as _parse_usda_date but treats null and '' as missing.
+
+    Storage-forced (TIMESTAMPTZ NULL cannot hold the empty string), so '' → None
+    stays in bronze per ADR 0027.
+    """
     if v is None or v == "":
         return None
     return _parse_usda_date(v)
@@ -56,9 +53,10 @@ def _parse_nullable_usda_date(v: Any) -> datetime | None:
 
 # Annotated types — BeforeValidator runs before strict mode so the source's
 # string serializations get coerced before Pydantic's type checks reject them.
+# Per ADR 0027, only storage-forced transforms live here. Empty-string-to-None
+# normalization on Optional[str] fields moved to silver staging (nullif(col, '')).
 _UsdaBool = Annotated[bool, BeforeValidator(_to_bool)]
 _UsdaNullableBool = Annotated[bool | None, BeforeValidator(_to_nullable_bool)]
-_UsdaNullableStr = Annotated[str | None, BeforeValidator(_normalize_str)]
 _UsdaDate = Annotated[datetime, BeforeValidator(_parse_usda_date)]
 _UsdaNullableDate = Annotated[datetime | None, BeforeValidator(_parse_nullable_usda_date)]
 
@@ -73,8 +71,9 @@ class UsdaFsisRecord(BaseModel):
     Key validation behaviors:
     - Boolean fields arrive as "True" / "False" strings (Finding L); coerced to bool.
     - Date fields use YYYY-MM-DD format; coerced to UTC midnight datetime.
-    - Empty string '' normalized to None on all Optional[str] fields (Finding C —
-      many fields use '' as a missing-value sentinel rather than omitting the key).
+    - Optional[str] fields preserve the source's '' representation verbatim per ADR
+      0027 (Finding C — many fields use '' as a missing-value sentinel rather than
+      omitting the key); silver staging normalizes via nullif(col, '').
     - langcode is the only enum-like field; Literal catches drift loudly.
     - field_recall_url is undocumented in the PDF (Finding H) but consistently
       returned by the live API; declared Optional[str] to absorb either presence.
@@ -119,29 +118,27 @@ class UsdaFsisRecord(BaseModel):
         default=None, validation_alias="field_related_to_outbreak"
     )
 
-    # --- Optional strings ('' → None per Finding C) ---
-    closed_year: _UsdaNullableStr = Field(default=None, validation_alias="field_closed_year")
-    year: _UsdaNullableStr = Field(default=None, validation_alias="field_year")
-    risk_level: _UsdaNullableStr = Field(default=None, validation_alias="field_risk_level")
-    recall_reason: _UsdaNullableStr = Field(default=None, validation_alias="field_recall_reason")
-    processing: _UsdaNullableStr = Field(default=None, validation_alias="field_processing")
-    states: _UsdaNullableStr = Field(default=None, validation_alias="field_states")
-    establishment: _UsdaNullableStr = Field(default=None, validation_alias="field_establishment")
-    labels: _UsdaNullableStr = Field(default=None, validation_alias="field_labels")
-    qty_recovered: _UsdaNullableStr = Field(default=None, validation_alias="field_qty_recovered")
-    summary: _UsdaNullableStr = Field(default=None, validation_alias="field_summary")
-    product_items: _UsdaNullableStr = Field(default=None, validation_alias="field_product_items")
-    distro_list: _UsdaNullableStr = Field(default=None, validation_alias="field_distro_list")
-    media_contact: _UsdaNullableStr = Field(default=None, validation_alias="field_media_contact")
-    company_media_contact: _UsdaNullableStr = Field(
+    # --- Optional strings — '' preserved verbatim per ADR 0027; silver staging normalizes ---
+    closed_year: str | None = Field(default=None, validation_alias="field_closed_year")
+    year: str | None = Field(default=None, validation_alias="field_year")
+    risk_level: str | None = Field(default=None, validation_alias="field_risk_level")
+    recall_reason: str | None = Field(default=None, validation_alias="field_recall_reason")
+    processing: str | None = Field(default=None, validation_alias="field_processing")
+    states: str | None = Field(default=None, validation_alias="field_states")
+    establishment: str | None = Field(default=None, validation_alias="field_establishment")
+    labels: str | None = Field(default=None, validation_alias="field_labels")
+    qty_recovered: str | None = Field(default=None, validation_alias="field_qty_recovered")
+    summary: str | None = Field(default=None, validation_alias="field_summary")
+    product_items: str | None = Field(default=None, validation_alias="field_product_items")
+    distro_list: str | None = Field(default=None, validation_alias="field_distro_list")
+    media_contact: str | None = Field(default=None, validation_alias="field_media_contact")
+    company_media_contact: str | None = Field(
         default=None, validation_alias="field_company_media_contact"
     )
     # Undocumented field — observed Finding H. Kept Optional[str] in case it is
     # absent on some records (PDF docs do not list it, suggesting late addition).
-    recall_url: _UsdaNullableStr = Field(default=None, validation_alias="field_recall_url")
+    recall_url: str | None = Field(default=None, validation_alias="field_recall_url")
     # Dead fields — 100% / 99.9% empty per Finding C; excluded from content hash
     # by the loader so they cannot trigger spurious "changes" if FSIS ever populates them.
-    en_press_release: _UsdaNullableStr = Field(
-        default=None, validation_alias="field_en_press_release"
-    )
-    press_release: _UsdaNullableStr = Field(default=None, validation_alias="field_press_release")
+    en_press_release: str | None = Field(default=None, validation_alias="field_en_press_release")
+    press_release: str | None = Field(default=None, validation_alias="field_press_release")

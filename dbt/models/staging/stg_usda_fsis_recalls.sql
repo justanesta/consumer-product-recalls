@@ -8,6 +8,11 @@
 --
 -- last_modified_date is 42% null per Finding D; downstream silver coalesces to
 -- recall_date.
+--
+-- nullif(col, '') wrappers per ADR 0027: bronze preserves the source's ''
+-- representation verbatim (Finding C — many fields use '' as a missing-value
+-- sentinel). Silver normalizes empty strings to null so downstream consumers
+-- don't have to remember the dance.
 
 with ranked as (
     select
@@ -27,20 +32,20 @@ select
     closed_date::timestamptz        as closed_at,
     recall_classification           as classification,
     recall_type,
-    risk_level,
+    nullif(risk_level, '')          as risk_level,
     archive_recall,
     active_notice,
     related_to_outbreak,
-    establishment,
-    recall_reason,
-    processing,
-    states,
-    summary,
-    product_items,
-    distro_list,
-    labels,
-    qty_recovered,
-    recall_url                      as url,
+    nullif(establishment, '')       as establishment,
+    nullif(recall_reason, '')       as recall_reason,
+    nullif(processing, '')          as processing,
+    nullif(states, '')              as states,
+    nullif(summary, '')             as summary,
+    nullif(product_items, '')       as product_items,
+    nullif(distro_list, '')         as distro_list,
+    nullif(labels, '')              as labels,
+    nullif(qty_recovered, '')       as qty_recovered,
+    nullif(recall_url, '')          as url,
     content_hash,
     extraction_timestamp,
     raw_landing_path

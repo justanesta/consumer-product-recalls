@@ -189,15 +189,16 @@ class TestValidateRecords:
         assert valid == []
         assert quarantined[0].source_recall_id == "<unknown>"
 
-    def test_false_sentinel_geolocation_normalized(
+    def test_false_sentinel_geolocation_coerced(
         self, extractor: UsdaEstablishmentExtractor
     ) -> None:
         # End-to-end check that the schema's BeforeValidator runs through
-        # the extractor's validate_records path.
+        # the extractor's validate_records path. Per ADR 0027 option 3:
+        # JSON `false` → string "false" (silver does nullif(col, 'false')).
         with_false = {**_VALID_RAW, "geolocation": False, "county": False}
         valid, _ = extractor.validate_records([with_false])
-        assert valid[0].geolocation is None
-        assert valid[0].county is None
+        assert valid[0].geolocation == "false"
+        assert valid[0].county == "false"
 
 
 # ---------------------------------------------------------------------------

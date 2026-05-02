@@ -110,6 +110,7 @@ _extraction_runs = sa.Table(
     sa.Column("run_id", sa.Text),
     sa.Column("error_message", sa.Text),
     sa.Column("raw_landing_path", sa.Text),
+    sa.Column("change_type", sa.Text),
 )
 
 _USDA_SOURCE = "usda"
@@ -487,6 +488,7 @@ class UsdaExtractor(RestApiExtractor[UsdaFsisRecord]):
         status: str,
         result: ExtractionResult | None = None,
         error_message: str | None = None,
+        change_type: str = "routine",
     ) -> None:
         row: dict[str, Any] = {
             "source": _USDA_SOURCE,
@@ -495,6 +497,7 @@ class UsdaExtractor(RestApiExtractor[UsdaFsisRecord]):
             "status": status,
             "run_id": run_id,
             "error_message": error_message,
+            "change_type": change_type,
         }
         if result is not None:
             row["records_extracted"] = result.records_fetched

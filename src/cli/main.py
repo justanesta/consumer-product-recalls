@@ -8,6 +8,28 @@ from src.config.logging import configure_logging
 
 app = typer.Typer(name="recalls", help="Consumer product recalls pipeline CLI")
 
+# Allowed values for extraction_runs.change_type (per ADR 0027 + ADR 0028).
+# DB-level CHECK constraint enforces the same set; the CLI validates here so
+# the operator gets a clear error before the run even starts.
+_ALLOWED_CHANGE_TYPES = {
+    "routine",
+    "schema_rebaseline",
+    "hash_helper_rebaseline",
+    "historical_seed",
+}
+
+
+def _validate_change_type(value: str) -> str:
+    """Return the value or raise typer.Exit with a clear message."""
+    if value not in _ALLOWED_CHANGE_TYPES:
+        allowed = ", ".join(sorted(_ALLOWED_CHANGE_TYPES))
+        typer.echo(
+            f"Invalid --change-type {value!r}; must be one of: {allowed}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return value
+
 
 @app.command()
 def version() -> None:
@@ -22,9 +44,23 @@ def extract(
         int | None,
         typer.Option("--lookback-days", help="Override watermark with N days ago"),
     ] = None,
+    change_type: Annotated[
+        str,
+        typer.Option(
+            "--change-type",
+            help=(
+                "How to label this run in extraction_runs. One of: routine "
+                "(default), schema_rebaseline, hash_helper_rebaseline, "
+                "historical_seed. Required to be set explicitly when re-baselining "
+                "after a schema or hashing-helper change so recall_event_history "
+                "can filter the wave out of edit detection."
+            ),
+        ),
+    ] = "routine",
 ) -> None:
     """Run the incremental extractor for a given source."""
     configure_logging()
+    change_type = _validate_change_type(change_type)
 
     if source == "cpsc":
         from src.config.settings import Settings
@@ -50,7 +86,7 @@ def extract(
                     .values(last_cursor=override_date.isoformat())
                 )
 
-        result = extractor.run()
+        result = extractor.run(change_type=change_type)
         typer.echo(
             f"cpsc: fetched={result.records_fetched} "
             f"loaded={result.records_loaded} "
@@ -79,7 +115,7 @@ def extract(
                     .values(last_cursor=override_date.isoformat())
                 )
 
-        result = extractor.run()
+        result = extractor.run(change_type=change_type)
         typer.echo(
             f"fda: fetched={result.records_fetched} "
             f"loaded={result.records_loaded} "
@@ -102,7 +138,7 @@ def extract(
             timeout_seconds=60.0,
             settings=settings,
         )
-        result = extractor.run()
+        result = extractor.run(change_type=change_type)
         typer.echo(
             f"usda: fetched={result.records_fetched} "
             f"loaded={result.records_loaded} "
@@ -126,7 +162,7 @@ def extract(
             timeout_seconds=60.0,
             settings=settings,
         )
-        result = extractor.run()
+        result = extractor.run(change_type=change_type)
         typer.echo(
             f"usda_establishments: fetched={result.records_fetched} "
             f"loaded={result.records_loaded} "
@@ -149,9 +185,23 @@ def deep_rescan(
         str | None,
         typer.Option("--end-date", help="End date (YYYY-MM-DD); required for FDA"),
     ] = None,
+    change_type: Annotated[
+        str,
+        typer.Option(
+            "--change-type",
+            help=(
+                "How to label this run in extraction_runs. Use historical_seed for "
+                "one-time multi-year backfills (e.g., the CPSC 2005-2024 gap per "
+                "ADR 0028 Mechanism A); leave at routine for periodic edit-detection "
+                "rescans. One of: routine (default), schema_rebaseline, "
+                "hash_helper_rebaseline, historical_seed."
+            ),
+        ),
+    ] = "routine",
 ) -> None:
     """Run a historical / deep-rescan load for a given source over a date window."""
     configure_logging()
+    change_type = _validate_change_type(change_type)
 
     if source == "fda":
         from datetime import date
@@ -172,7 +222,7 @@ def deep_rescan(
             start_date=date.fromisoformat(start_date),
             end_date=date.fromisoformat(end_date),
         )
-        result = loader.run()
+        result = loader.run(change_type=change_type)
         typer.echo(
             f"fda deep-rescan [{start_date} → {end_date}]: "
             f"fetched={result.records_fetched} "
@@ -199,7 +249,7 @@ def deep_rescan(
             timeout_seconds=60.0,
             settings=settings,
         )
-        result = loader.run()
+        result = loader.run(change_type=change_type)
         typer.echo(
             f"usda deep-rescan: "
             f"fetched={result.records_fetched} "

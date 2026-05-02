@@ -6,6 +6,36 @@ Almost every command runs through `uv run` so it picks up the project's pinned P
 
 ---
 
+## Shortcuts via env vars
+
+The verbose forms in the per-tool sections below are kept for clarity (any reader can copy-paste without prior setup). If you've exported the right env vars in `.env` / `.envrc` (autoloaded by direnv), several flags become redundant — the bare command works on its own.
+
+| Tool | Env vars in `.env` / `.envrc` | What gets dropped |
+|---|---|---|
+| **dbt** | `DBT_PROJECT_DIR=$(pwd)/dbt`, `DBT_PROFILES_DIR=$(pwd)/dbt` | `--project-dir dbt --profiles-dir dbt` on every dbt subcommand |
+| **aws** (R2) | `AWS_ENDPOINT_URL=https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com` (plus the standard `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` mapped from your R2 credentials, or `AWS_PROFILE` if you keep them in `~/.aws/credentials`) | `--endpoint-url $R2_ENDPOINT` on every `aws s3 ...` invocation |
+| **psql** | `PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGSSLMODE` (libpq standards — split out of `NEON_DATABASE_URL`) | The `$NEON_DATABASE_URL` argument; bare `psql` connects to the dev branch |
+
+Concrete examples — same command both ways:
+
+```bash
+# dbt — verbose vs. with env vars set
+uv run dbt parse --project-dir dbt --profiles-dir dbt
+uv run dbt parse
+
+# aws (R2) — verbose vs. with env vars set
+aws s3 ls s3://${R2_BUCKET_NAME}/cpsc/2026-04-25/ --endpoint-url $R2_ENDPOINT
+aws s3 ls s3://${R2_BUCKET_NAME}/cpsc/2026-04-25/
+
+# psql — verbose vs. with PG* env vars set
+psql $NEON_DATABASE_URL -c "select 1"
+psql -c "select 1"
+```
+
+**Note on dbt + Settings.** dbt and the application code use different env-var schemes by design. dbt reads `DBT_PROJECT_DIR` / `DBT_PROFILES_DIR` plus its own `NEON_HOST` / `NEON_USER` / `NEON_PASSWORD` / `NEON_DBNAME` (split from `NEON_DATABASE_URL`); the application code's `pydantic-settings` reads `NEON_DATABASE_URL` whole. **The dbt-only vars cannot live in `.env`** — Settings has `extra='forbid'` and would reject any key it doesn't declare. Put dbt-only vars in `.envrc` directly (not via `dotenv .env`), or in a sibling file that pydantic-settings doesn't read. See [`development.md` § Design rationale](development.md#design-rationale--strict-scope-on-env).
+
+---
+
 ## uv — package + venv manager
 
 ```bash
@@ -125,23 +155,23 @@ See also: [`development.md` § Running tests](development.md#running-tests), [`d
 All commands need `--project-dir dbt` since the dbt project is not at repo root.
 
 ```bash
-uv run dbt parse --project-dir dbt                    # compile-only — fast sanity check
-uv run dbt build --project-dir dbt                    # run + test all models
-uv run dbt run --project-dir dbt                      # run only (no tests)
-uv run dbt test --project-dir dbt                     # tests only
-uv run dbt source freshness --project-dir dbt         # bronze freshness check
-uv run dbt docs generate --project-dir dbt            # generate docs catalog
-uv run dbt docs serve --project-dir dbt               # serve docs at localhost:8080
+uv run dbt parse --project-dir dbt --profiles-dir dbt                    # compile-only — fast sanity check
+uv run dbt build --project-dir dbt --profiles-dir dbt                    # run + test all models
+uv run dbt run --project-dir dbt --profiles-dir dbt                      # run only (no tests)
+uv run dbt test --project-dir dbt --profiles-dir dbt                     # tests only
+uv run dbt source freshness --project-dir dbt --profiles-dir dbt         # bronze freshness check
+uv run dbt docs generate --project-dir dbt --profiles-dir dbt            # generate docs catalog
+uv run dbt docs serve --project-dir dbt --profiles-dir dbt               # serve docs at localhost:8080
 ```
 
 ### Model selection
 
 ```bash
-uv run dbt run --project-dir dbt --select stg_cpsc_recalls         # one model
-uv run dbt run --project-dir dbt --select stg_cpsc_recalls+        # model + everything downstream
-uv run dbt run --project-dir dbt --select +recall_event            # model + everything upstream
-uv run dbt run --project-dir dbt --select +recall_event+           # both directions
-uv run dbt run --project-dir dbt --select tag:silver               # by tag
+uv run dbt run --project-dir dbt --profiles-dir dbt --select stg_cpsc_recalls         # one model
+uv run dbt run --project-dir dbt --profiles-dir dbt --select stg_cpsc_recalls+        # model + everything downstream
+uv run dbt run --project-dir dbt --profiles-dir dbt --select +recall_event            # model + everything upstream
+uv run dbt run --project-dir dbt --profiles-dir dbt --select +recall_event+           # both directions
+uv run dbt run --project-dir dbt --profiles-dir dbt --select tag:silver               # by tag
 ```
 
 Compiled SQL output: `dbt/target/compiled/<project>/<path>/<model>.sql`. Inspect when a model surprises you.

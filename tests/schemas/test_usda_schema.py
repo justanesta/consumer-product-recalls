@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from src.schemas.usda import (
     UsdaFsisRecord,
-    _normalize_str,
     _parse_nullable_usda_date,
     _parse_usda_date,
     _to_bool,
@@ -98,17 +97,6 @@ class TestToNullableBool:
         assert _to_nullable_bool("False") is False
 
 
-class TestNormalizeStr:
-    def test_empty_string_to_none(self) -> None:
-        assert _normalize_str("") is None
-
-    def test_none_to_none(self) -> None:
-        assert _normalize_str(None) is None
-
-    def test_pass_through(self) -> None:
-        assert _normalize_str("hello") == "hello"
-
-
 class TestParseUsdaDate:
     def test_yyyy_mm_dd(self) -> None:
         assert _parse_usda_date("2020-05-15") == datetime(2020, 5, 15, tzinfo=UTC)
@@ -180,11 +168,14 @@ class TestUsdaFsisRecord:
         with pytest.raises(ValidationError):
             UsdaFsisRecord.model_validate(row)
 
-    def test_empty_string_optional_str_becomes_none(self) -> None:
+    def test_empty_string_optional_str_preserved(self) -> None:
+        # Per ADR 0027 (bronze keeps storage-forced transforms only): nullable
+        # text fields preserve the source's '' representation verbatim. Silver
+        # staging normalizes via nullif(col, '') in stg_usda_fsis_recalls.sql.
         row = {**_REQUIRED, "field_summary": "", "field_states": ""}
         record = UsdaFsisRecord.model_validate(row)
-        assert record.summary is None
-        assert record.states is None
+        assert record.summary == ""
+        assert record.states == ""
 
     def test_empty_string_optional_date_becomes_none(self) -> None:
         row = {**_REQUIRED, "field_last_modified_date": "", "field_closed_date": ""}
@@ -249,7 +240,9 @@ class TestUsdaFsisRecord:
 
     def test_dead_fields_kept_for_shape(self) -> None:
         # en_press_release / press_release are 100% / 99.9% empty per Finding C
-        # — schema accepts them and normalizes empty string to None.
+        # — schema accepts them; per ADR 0027 the '' is preserved verbatim
+        # and silver staging would normalize via nullif (these fields aren't
+        # consumed by current silver, but the bronze posture is consistent).
         record = UsdaFsisRecord.model_validate(_FULL_ROW)
-        assert record.en_press_release is None
-        assert record.press_release is None
+        assert record.en_press_release == ""
+        assert record.press_release == ""
