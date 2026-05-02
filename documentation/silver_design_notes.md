@@ -1,6 +1,15 @@
-# Bronze-to-Silver Architecture Overview
+# Silver Design Notes — Bronze-to-Silver Mapping
 
-This document covers the design decisions made when extending the CPSC-only silver layer (Phase 4) to include FDA data (Phase 6). It serves as the canonical reference for how the two sources are unified into the shared silver schema.
+**Scope:** this document covers the design decisions made when unifying CPSC and FDA bronze data into the shared silver schema. It is a per-source mapping reference, not a system-wide architecture document. For system-level architecture (medallion layers, data flow, component relationships), see `documentation/architecture.md`. For the canonical schema reference (column types, business keys, glossary), see `documentation/data_schemas.md`.
+
+**Out of scope (yet):**
+- USDA recall + USDA establishment silver mapping — currently only documented in dbt model headers and `documentation/usda/`. Will be folded in once Phase 6 unification work touches them.
+- NHTSA (Phase 5c) and USCG (Phase 5d) silver mapping — these sources haven't shipped extraction yet.
+- Cross-source firm entity resolution (Phase 6) — fuzzy matching across sources, FDA `firmfeinum` as anchor, etc.
+
+This document grows as each source's silver shape stabilizes. New sources should be added once their staging-layer dedup pattern and silver-column-mapping decisions are settled.
+
+> **Renamed 2026-05-01:** previously `architecture_overview.md`. Renamed to better reflect its actual scope (silver-layer mapping decisions, not system architecture). The system-architecture content moved to `documentation/architecture.md`.
 
 ---
 

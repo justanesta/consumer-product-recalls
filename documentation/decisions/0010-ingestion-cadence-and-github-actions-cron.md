@@ -1,6 +1,6 @@
 # 0010 — Ingestion cadence and orchestration via GitHub Actions cron
 
-- **Status:** Accepted; partially superseded by [ADR 0023](0023-fda-deep-rescan-required-archive-migration-detected.md)
+- **Status:** Accepted; partially superseded by [ADR 0023](0023-fda-deep-rescan-required-archive-migration-detected.md); amended 2026-05-01 (CPSC + USDA empirical findings — see "Revision note" at end)
 - **Date:** 2026-04-16
 
 ## Context
@@ -32,9 +32,9 @@ At v1's scale (5 sources, ~15K records/year ingested, no cross-source DAG depend
 
 | Source | Cadence | Strategy |
 |---|---|---|
-| CPSC | daily | Incremental query on `LastPublishDate >= yesterday` |
+| CPSC | daily | Incremental query on `LastPublishDate >= yesterday` (publication-time only — does NOT advance on edits; deep rescan is the edit-detection mechanism — see Revision note) |
 | FDA | daily | Incremental query on `eventlmd >= yesterday` |
-| USDA | daily | Filter on `field_last_modified_date >= yesterday`; cheap when nothing changed |
+| USDA | daily | **Full-dump on every run** (`field_last_modified_date` is not a server-side filter — see Revision note); content-hash dedup makes re-runs cheap |
 | NHTSA | weekly | Full flat file download per ADR 0008, content-hash dedup per ADR 0007 |
 | USCG | weekly | HTML scrape with rate limiting and robots.txt respect |
 
@@ -51,9 +51,9 @@ To guard against this, CPSC and USDA get a **secondary deep-rescan workflow** in
 
 | Source | Primary (daily) | Deep rescan | Rationale |
 |---|---|---|---|
-| CPSC | `LastPublishDate >= yesterday` | Weekly full rescan of last 90 days | Catches silent edits within 7 days |
+| CPSC | `LastPublishDate >= yesterday` | Weekly full rescan of last 90 days — **mandatory** | `LastPublishDate` is publication-time only; edit detection depends on the rescan. See Revision note. |
 | FDA | `eventlmd >= yesterday` | ~~None needed~~ **Weekly rescan added — see ADR 0023** | Archive migration re-touches old records; daily incremental may miss a batch on flake days |
-| USDA | `field_last_modified_date >= yesterday` | Weekly full rescan of last 90 days | Guards against documented-vs-actual gap until Phase 5b empirical verification; may relax or remove if verified reliable |
+| USDA | Full-dump on every run | N/A — the daily operation is already a full snapshot | Server-side date filter does not exist (Phase 5b Finding D); content-hash dedup handles idempotency |
 | NHTSA | Weekly full flat file | N/A — the weekly operation is already a full rescan | Content hashing per ADR 0007 handles all dedup |
 | USCG | Weekly full scrape | N/A — the weekly operation is already a full rescan | Same |
 
@@ -61,7 +61,7 @@ Deep rescans exploit the content hashing defined in ADR 0007: the rescan pulls r
 
 **Rescan workflow files:** one per affected source, `.github/workflows/deep-rescan-<source>.yml`, scheduled for weekends (e.g., Sunday 04:00 UTC) to avoid colliding with daily extraction workflows or the Monday morning transform window.
 
-**Empirical-verification escape hatch:** if Phase 3 (CPSC) or Phase 5b (USDA) empirical verification confirms that the relevant timestamp reliably advances on edits — by observing a known-edited recall across extraction runs, or by modifying a test record where the agency permits — this ADR is re-opened to relax or remove the deep rescan for the verified source. Until then, the rescans stand as a defense-in-depth correctness measure.
+**No escape hatch — both empirical verifications closed.** The original ADR allowed for relaxing or removing rescans if Phase 3 (CPSC) or Phase 5b (USDA) verification proved the timestamps reliable. Both verifications closed in the opposite direction (see Revision note). The deep rescan is now the **primary edit-detection mechanism for CPSC**, not a defense-in-depth net. USDA's deep-rescan section above no longer applies — every USDA run is already a full snapshot.
 
 ## Consequences
 
@@ -72,3 +72,31 @@ Deep rescans exploit the content hashing defined in ADR 0007: the rescan pulls r
 - USDA daily polling is cheap when nothing has changed (single API call returns empty filtered result), so daily cadence costs almost nothing relative to weekly.
 - Re-evaluation triggers for moving off GitHub Actions: (a) any individual workflow runtime exceeds 60 minutes consistently, (b) cross-source DAG dependencies need explicit modeling, (c) sub-hourly cadence is required (cron in GH Actions is not guaranteed to fire on time at high frequency).
 - Public repo is a hard requirement for the unlimited-minutes math; if it ever needs to go private, the orchestration choice gets revisited (likely toward self-hosted runner on Oracle Cloud Always Free).
+
+---
+
+## Revision note — 2026-05-01 (CPSC + USDA empirical findings)
+
+Two pieces of empirical evidence collected during Phases 3 and 5b invalidate the original "deep rescan is a relaxable defense-in-depth net" framing. Both are closed; this revision updates the per-source cadence table and the deep-rescan section to match observed reality.
+
+### CPSC `LastPublishDate` does NOT advance on edits
+
+Phase 3 first-extraction analysis of 1,193 bronze records over 365 days (`documentation/cpsc/last_publish_date_semantics.md`) shows a **bimodal gap distribution** with zero records between 8 days and 5 years. Edits to already-published recalls do not bump `LastPublishDate`. The only mid-life advances observed are the 709 archive-migration records (25-year gaps), which are an upstream re-processing artifact, not edits in the editorial sense.
+
+Consequence: the daily `LastPublishDate >= yesterday` query is a **publication-time cursor only**. Detecting genuine edits to already-published CPSC recalls requires the weekly deep rescan. The rescan is no longer optional — it is the primary edit-detection mechanism for CPSC.
+
+There is also a 20-year (2005–2024) historical gap in CPSC bronze that the incremental strategy will not reach until the upstream archive migration completes (estimated years away at ~2–3 records/day). A one-time deep rescan with `LastPublishDateStart=2005-01-01` is required before Phase 7 cron go-live to populate this. See ADR 0028 (backfill semantics) and `documentation/cpsc/last_publish_date_semantics.md` Section 3.
+
+### USDA `field_last_modified_date` is not a server-side filter
+
+Phase 5b first-extraction probing (`documentation/usda/recall_api_observations.md` Finding D, `documentation/usda/first_extraction_findings.md`) confirms that both naming variants — `field_last_modified_date` and `field_last_modified_date_value` — are silently ignored by the FSIS API and return the full 2,001-record dataset. There is no working incremental cursor on the recall API.
+
+Consequence: USDA is a **full-dump source** on every run, like NHTSA and USCG. Daily cadence is still cheap (~1.6 MB compressed payload, ETag conditional-GET considered but disabled in production due to unreliable Akamai CDN behavior — see Finding N). Content-hash dedup (ADR 0007) handles idempotency. The "deep rescan" concept does not apply — every run is already a full snapshot.
+
+The original deep-rescan-usda.yml workflow exists from Phase 5b but its operational role collapses to "the same thing as the daily incremental run" — kept for symmetry and for one-off operator triggering, but contributes no additional coverage.
+
+### What this changes downstream
+
+- **`implementation_plan.md`** Phase 7 line 500 ("relaxable if empirical verification shows...") — wording corrected by the same realignment that produced this revision.
+- **CPSC historical backfill** is added as a pre-Phase-7 blocker in the implementation plan, formalized by ADR 0028.
+- **USDA daily cadence vs. weekly cadence question** — daily is fine; the bandwidth difference between daily and weekly is small at 1.6 MB/run, and daily preserves a tighter audit trail of the (source_recall_id, langcode) presence set per ADR 0026.

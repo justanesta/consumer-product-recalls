@@ -1,6 +1,6 @@
 # 0016 — Secrets management
 
-- **Status:** Accepted
+- **Status:** Accepted; amended 2026-05-01 (bot-manager fingerprinting — see "Implementation notes" at end)
 - **Date:** 2026-04-16
 
 ## Context
@@ -107,3 +107,20 @@ No "skip this source and continue" behavior. A silently-skipped source is worse 
 - **Password-manager CLI integration patterns.** The direnv + Proton Pass pattern documented in `development.md` is one example; if Proton Pass's CLI evolves or other tools prove more ergonomic, the pattern is easy to swap.
 - **Rotation cadence.** 90 days is a reasonable starting point; may be lengthened or shortened based on incident data (spoiler: there shouldn't be any).
 - **Pre-commit hook choice.** `gitleaks` is the default; swappable with `detect-secrets`, `trufflehog`, or a combination if gaps emerge.
+
+### Implementation notes — bot-manager fingerprinting (added 2026-05-01)
+
+Some sources require browser-like request fingerprints in addition to (or in lieu of) credentials. USDA FSIS endpoints sit behind Akamai Bot Manager (`documentation/usda/recall_api_observations.md` finding O), which scores requests on a multi-signal basis: TLS fingerprint, User-Agent, Accept/Accept-Language/Accept-Encoding consistency, and request rate. A default `python-httpx/...` UA gates the request to a slowloris (HTTP/1.1) or `INTERNAL_ERROR` (HTTP/2) path; `curl/7.81.0` is throttled identically. A Firefox/Linux UA paired with matching Accept headers passes — `200 OK` in 294 ms.
+
+These are **fingerprint values, not secrets** — they are non-rotating, public, and chosen to mimic a real browser. They live in `data/user_agents.json` (vendored, git-tracked) rather than `.env` or GitHub secrets. Refresh cadence is weekly via `.github/workflows/refresh-user-agents.yml`, which pulls the current top User-Agents from a public source and opens a PR if any have changed.
+
+**Generalization for future sources.** Probe every new source's behavior with two profiles before writing the extractor: (1) default `httpx` UA, (2) a Firefox UA + matching Accept headers. If the two diverge, the source has bot-manager protection and the extractor must be configured with browser-like headers. Document the finding in the source's `documentation/<source>/` folder and reference it from the source YAML config.
+
+**Forward-risk roadmap.** The Firefox-UA solution is fragile against escalation. If Akamai or a similar middleware moves to JA3/JA4 TLS fingerprinting on a probed source, the mitigation steps escalate in this order, each documented as a decision when triggered:
+
+1. **Whole-header consistency.** Adopt `browserforge` or equivalent to vendor full coordinated header sets including `Sec-CH-UA*` client hints.
+2. **TLS fingerprint mimicry.** Adopt `curl-cffi` (or `tls-client`) to imitate a real Chrome TLS handshake.
+3. **Egress IP rotation / cooldown.** If an IP is reputation-flagged, run extractions through GitHub Actions' default IP pool with cooldown windows, or add a routing layer.
+4. **Source-specific ADR.** If multiple sources require step-2-or-3 mitigations, file a dedicated ADR rather than continuing to extend this one.
+
+The non-secret nature of these values is what keeps this in the secrets-management ADR rather than a separate document — the threat model parallels rotation, leak prevention, and "what to do when access stops working." Storing UAs alongside credentials in the operator's mental model keeps the rotation runbook consistent.

@@ -1,6 +1,6 @@
 # 0012 — Extractor pattern: custom ABC + per-source subclasses
 
-- **Status:** Accepted
+- **Status:** Accepted; amended 2026-05-01 (multi-response-shape pattern — see "Implementation notes" at end)
 - **Date:** 2026-04-16
 
 ## Context
@@ -139,3 +139,17 @@ The `uv run python -m src.cli ...` entrypoint (extraction dispatch, re-ingest pe
 - `dcpy` uses Typer for the same reasons; the pattern borrowed from dcpy carries through consistently.
 
 The CLI is a thin dispatch layer over the `Extractor` ABC and bronze loader. No business logic lives in CLI modules — each subcommand reads config, instantiates the relevant extractor or re-ingest helper, and delegates. This keeps unit tests focused on the ABC and its subclasses rather than CLI plumbing.
+
+### Implementation notes — multi-response-shape REST sources (added 2026-05-01)
+
+A single REST source may need more than one response parser. FDA iRES is the motivating case: the bulk `POST /recalls/` endpoint (production incremental path) returns an **object-array** (`RESULT` is an array of objects keyed by uppercase column name), while the per-event/per-product `GET /recalls/event/{id}` and `GET /recalls/product/{id}` endpoints (lookup/enrichment path) return the **columnar envelope** documented in the iRES PDF (`RESULT.COLUMNS` + `RESULT.DATA`). See `documentation/fda/api_observations.md` findings D and J for the empirical confirmation.
+
+The extractor reconciles this by carrying two parser methods on the subclass — `_parse_columnar_response()` and `_parse_object_array_response()` — and routing each request to the right one based on HTTP method or endpoint path. The `Extractor.validate()` step is unchanged: it consumes already-parsed records.
+
+**Generalization for future REST sources.** Probe both the documented response shape and the actual one early — PDFs lag behind APIs, and a method-specific shape difference will be a silent footgun if the extractor assumes one parser fits all. If a source needs multiple parsers, name them by shape (not by endpoint), keep them on the subclass (not the ABC — they're source-specific quirks), and document the routing rule in the source's `documentation/<source>/api_observations.md`.
+
+### Implementation notes — source-config loader and registry (deferred)
+
+The `config/sources/*.yaml` files filed as Phase 1 deliverables are not currently loaded by the runtime — `src/cli/main.py` instantiates extractors with hardcoded constructor kwargs. The Pydantic-discriminated-union dispatch and registry described in this ADR's "Decision" section are unimplemented. YAML edits have no runtime effect today.
+
+This is tracked as a deliverable in `project_scope/implementation_plan.md` (Phase 6 or Phase 7 — see plan). It is not a blocker for any current source's correctness, but it is a silent-failure surface: an operator editing `config/sources/usda.yaml` to set `etag_enabled: true` would expect the change to take effect on the next extraction run, and it would not. Best landed before Phase 7 cron turn-on so per-environment config overlays are clean from production day one.

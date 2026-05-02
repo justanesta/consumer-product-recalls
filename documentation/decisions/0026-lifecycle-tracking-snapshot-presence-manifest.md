@@ -1,20 +1,17 @@
 # 0026 — Lifecycle tracking via per-run snapshot-presence manifest
 
-- **Status:** Draft
+- **Status:** Accepted
 - **Date:** 2026-05-01
 - **Supersedes:** —
 - **Superseded by:** —
 
-> **Acceptance criteria** (must be resolved before promoting this ADR to Accepted):
->
-> 1. **Confirm scope** — is this needed for USDA only, or for CPSC and FDA as
->    well? See "Applicability check" below; the answer changes the migration shape.
-> 2. **Pick the manifest representation** — separate table (`extraction_run_identities`)
->    or JSONB column on `extraction_runs`. Both are sketched below.
-> 3. **Decide when this lands** — it isn't a Phase 5b blocker; the natural home
->    is alongside the silver `current_content` / `edit_count` columns in Phase 6,
->    but you may want to land the bronze-side manifest earlier so historical
->    runs start contributing data to the table from day one.
+## Acceptance resolution (2026-05-01)
+
+The three acceptance criteria from the original draft are resolved as follows:
+
+1. **Scope: USDA-only initially.** USDA has the strongest concrete evidence (state-1 through state-4 lifecycle transitions observed within a single 4-hour window in Phase 5b verification, plus the 13.3% bilingual non-atomic-update rate). CPSC and FDA may need the same mechanism eventually, but the empirical signals are weaker (CPSC's archive migration is the only retraction-shaped event observed; FDA shows no retractions in the 134K-record dataset). Adopt USDA-first, extend to other sources when their first-extraction findings present comparable evidence. The bronze loader implementation should be source-parameterized so adding a source is a config change, not a structural one.
+2. **Representation: Option A — separate `extraction_run_identities` table.** Indexable, queryable directly from dbt, scales for the eventual NHTSA case (~80K identities/run if adopted there). The JSONB option is rejected because every silver query would have to expand the array, and the scaling cliff is real for NHTSA.
+3. **Timing: lands in Phase 6 alongside the silver lifecycle dimensions.** The bronze-side manifest write and the silver-side derivations (`first_seen_at`, `last_seen_at`, `is_currently_active`, `was_ever_retracted`, `edit_count`) are the same conceptual change and should ship together. Backfilling pre-ADR runs from R2 raw payloads is deferred — addressed in ADR 0028 (backfill semantics) under historical-load semantics.
 
 ---
 
@@ -145,8 +142,7 @@ Pros: no new table, atomic with the run row, easy to populate.
 Cons: unindexed access patterns are slow (every silver query has to expand the
 array), JSONB scaling cliffs around ~80K entries per row (NHTSA again).
 
-**Recommendation: Option A** if scope includes more than USDA. Option B is
-acceptable if scope is USDA-only and stays under ~5K identities per run.
+**Decided 2026-05-01 (acceptance resolution at top): Option A — separate table.** Even though the initial scope is USDA-only (~2K identities/run, well within Option B's comfort zone), the table is designed to extend to NHTSA later (~80K identities/run scenario) without a migration. Indexable access patterns also keep silver queries simple — no JSONB expansion in every join.
 
 ### Bronze-layer change
 
@@ -241,14 +237,9 @@ own brittleness probably dominates the architectural concerns at that point.
 
 ### Cross-source decision
 
-**Recommended scope:** populate the manifest for all five sources from
-day-one of the implementation, treating "no retractions ever observed" as a
-discovered property rather than an architectural assumption. Cost is small
-(an extra batch insert per run) and the silver dimensions land uniformly.
+**Decided 2026-05-01 (acceptance resolution at top): USDA-only initially.** The original draft recommended populating the manifest for all five sources from day-one, but the empirical evidence is concentrated in USDA. CPSC and FDA's first-extraction findings show no retractions; NHTSA and USCG haven't been extracted yet. Land the mechanism with USDA, then extend to other sources when their findings present a comparable signal.
 
-If cost becomes a concern (NHTSA's 80K+ identities/run scaling), the manifest
-can be made source-conditional via a per-source `track_presence: bool` flag on
-the extractor config.
+The bronze loader implementation must be source-parameterized — adding CPSC or FDA later should be a config change (a per-source `track_presence: bool` on the extractor config), not a structural refactor. The `extraction_run_identities` table schema accommodates all five sources from day one (the `langcode` column is nullable for non-bilingual sources).
 
 ---
 
@@ -360,22 +351,10 @@ Compute the manifest on-demand at silver build time by parsing R2 raw payloads
 
 ---
 
-## Open questions
+## Open questions and implementation choices
 
-- **Q1:** Is the ABC change (thread `run_id` to `load_bronze`) acceptable, or
-  should the manifest write happen *after* `load_bronze` returns, in the
-  template `Extractor.run()`? The latter is less invasive but loses the
-  single-transaction property if any failure occurs between `load_bronze` and
-  the manifest write.
+- **Q1 (open, implementation detail):** Is the ABC change (thread `run_id` to `load_bronze`) acceptable, or should the manifest write happen *after* `load_bronze` returns, in the template `Extractor.run()`? The latter is less invasive but loses the single-transaction property if any failure occurs between `load_bronze` and the manifest write. Resolve at implementation time; both shapes are compatible with this ADR.
 
-- **Q2:** Should the manifest also record records that were *quarantined*?
-  Argument for: a quarantined record is "present at the source," even if we
-  couldn't validate it. Argument against: the manifest is about
-  bronze-table-presence, not response-presence; raw R2 is the source of truth
-  for response-presence. Recommendation: only record records that successfully
-  landed in bronze; raw R2 is the residual log for everything else.
+- **Q2 (resolved 2026-05-01):** Quarantined records do **not** appear in the manifest. The manifest tracks bronze-table-presence; raw R2 is the residual log for what was present in the response. Quarantined-but-not-loaded records are visible via T1 `_rejected` tables (ADR 0013) and the raw R2 payloads (ADR 0004) — those are the right surfaces for that question.
 
-- **Q3:** Should we backfill the manifest for runs that already happened
-  pre-ADR? The data exists in R2; we'd need to write a one-shot job that reads
-  each historical R2 payload and synthesizes manifest rows. Probably worth doing
-  if we believe historical lifecycle data is valuable; cheap to skip if not.
+- **Q3 (resolved 2026-05-01 → ADR 0028):** Manifest backfill from historical R2 payloads is deferred to ADR 0028 (backfill / historical re-extraction semantics), which covers the broader question of how to seed historical state into bronze and silver. The manifest-backfill question is one instance of that pattern.

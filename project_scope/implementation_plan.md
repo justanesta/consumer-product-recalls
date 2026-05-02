@@ -96,7 +96,7 @@ CPSC is chosen first because it has no auth, clean nested JSON, and a stable eve
 - `.github/workflows/extract-cpsc.yml` with `workflow_dispatch` trigger (not yet on cron)
 - `.github/workflows/deep-rescan-cpsc.yml` with `workflow_dispatch` trigger per ADR 0010's deep-rescan addendum (not yet on cron; cron turns on in Phase 7). The workflow calls a **separate method or extractor class** — not `CpscExtractor.extract()` — because the historical-seed code path has no incremental count guard and must handle arbitrarily large result sets. `CpscExtractor.extract()` is the incremental path only; it guards against unexpectedly large responses (`_MAX_INCREMENTAL_RECORDS = 500`) which would fire immediately if used for a full historical pull. See the Phase 5 standing requirement for how this split generalizes to all five sources.
 - First live extraction run, producing real bronze rows
-- **Empirical verification of `LastPublishDate` update semantics:** identify a recall that has been edited by CPSC since first publication (status change, remedy update, recalled-product count revision) and confirm by extraction whether `LastPublishDate` advanced at the edit. Document findings in a short note in `documentation/cpsc/`. If the timestamp reliably advances, file a follow-up to re-open ADR 0010 and relax the CPSC deep rescan; if not, the deep-rescan workflow stands as designed.
+- **Empirical verification of `LastPublishDate` update semantics:** identify a recall that has been edited by CPSC since first publication (status change, remedy update, recalled-product count revision) and confirm by extraction whether `LastPublishDate` advanced at the edit. Document findings in `documentation/cpsc/`. **Closed 2026-05-01:** verification confirmed `LastPublishDate` does NOT advance on edits (bimodal gap distribution over 1,193 records, zero records between 8 days and 5 years). The deep-rescan workflow is now the **primary edit-detection mechanism** for CPSC, not an optional defense-in-depth net. ADR 0010 amended to reflect this. See `documentation/cpsc/last_publish_date_semantics.md`.
 
 **Quality gates:**
 
@@ -180,7 +180,9 @@ Run the extractor against the live source and query the resulting bronze table t
 
 **Step 4 — Cassette suite design and recording**
 
-Design and record VCR cassettes after the first extraction, not before — real data surfaces schema surprises that hand-crafted mocks hide. **The scenarios recorded must be tuned to the source's actual API shape** — there is no universal 4-cassette matrix. The lists below are **starting heuristics, not prescriptions**:
+Design and record **live-recorded** VCR cassettes after the first extraction, not before — real data surfaces schema surprises that hand-crafted mocks hide. Hand-constructed-via-`respx` cassettes for error paths (401/429/500/malformed-record) can land alongside, since those scenarios won't be served on demand by the live API. Phase 3 followed this pattern — live cassettes for happy paths, `respx` for error paths — and it generalizes to all five sources. The "after first extraction" guidance here applies to the live-recorded set; the error-path mocks are not gated by it.
+
+**The scenarios recorded must be tuned to the source's actual API shape** — there is no universal 4-cassette matrix. The lists below are **starting heuristics, not prescriptions**:
 
 - For paginated APIs (e.g., FDA iRES): single-page, multi-page, partial last page, empty.
 - For non-paginated APIs (e.g., CPSC — one GET returns everything): recent, wide window, narrow window, empty. (Pagination-specific scenarios don't apply and recording them is busywork.)
@@ -402,67 +404,68 @@ FDA's FEI per ADR 0002).
 
 ---
 
- ## Architectural follow-ups                                                                                                
-  
-  Cross-cutting work that's in scope for v1 but not gated to a specific phase.                                               
-  File a branch + (in some cases) an ADR when each lands.
-                                                                                                                             
-  - **ADR 0012 implementation: source-config loader and registry.** The                                                      
-    `config/sources/*.yaml` files were filed as Phase 1 deliverables, but the                                                
-    loader, Pydantic-discriminated-union dispatch, and registry described in                                                 
-    ADR 0012 were never implemented. CLI dispatch in `src/cli/main.py`                                                       
-    instantiates extractors with hardcoded constructor kwargs, so YAML edits
-    have no runtime effect. Affects all five sources equally. Surfaced during                                                
-    Phase 5b USDA extraction when an `etag_enabled: false` YAML edit had no
-    effect on the running extractor; see detour L3 in                                                                        
-    `documentation/usda/first_extraction_findings.md` and the header comment in
-    `config/sources/usda.yaml`. Best landed before Phase 7 cron turn-on so                                                   
-    per-environment config overlays are clean from day one of production. Not
-    a Phase 6 blocker.                                                                                                       
-                  
-  - **ADR 0026 implementation: per-run snapshot-presence manifest.** Tracked in                                              
-    `documentation/decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md`.
-    Status: Draft, pending three acceptance criteria (scope, manifest                                                        
-    representation, timing). Best landed in Phase 6 alongside the silver                                                     
-    `current_content` / `edit_count` columns; could land earlier as a bronze-only                                            
-    change if you want historical lifecycle data from day one. 
+## Architectural follow-ups
 
-  - Make a decision on using the USDA etag instead of the full download content hash for data updates.
+Cross-cutting work targeted at specific upcoming phases. Each item is gated to a phase rather than free-floating; the table below keeps the relationships visible.
 
-  - **`source_watermarks` seeding for new sources.** Migration 0001 hardcodes
-    a five-source list (`cpsc/fda/usda/nhtsa/uscg`) and seeds
-    `source_watermarks` with one row per source. `extraction_runs.source` is a
-    FK to that table, so any new source needs a one-row seed migration before
-    its `_record_run` call can succeed (otherwise the FK insert fails silently
-    inside the broad except — surfaced during Phase 5b.2 first extraction
-    when `usda_establishments` warning'd `extraction_run.record_failed` while
-    bronze loaded normally). Two cleaner long-term options: (a) drop the FK in
-    favor of a CHECK constraint listing valid sources, updated as sources are
-    added; (b) drop the constraint entirely and let the application enforce
-    the source enum. Either avoids the per-new-source seed-migration ritual.
-    Also: replicate the diagnostic-logging fix from
-    `src/extractors/usda_establishment.py::_record_run` (capture exception
-    `type` + `message` instead of swallowing) across `cpsc.py`, `fda.py`,
-    `usda.py`. Best landed before Phase 7 cron turn-on.
+| Item | Gated to | Status |
+|---|---|---|
+| ADR 0012 source-config loader and registry | **Phase 6** (preferred) or Phase 7 prerequisite | Pending |
+| ADR 0026 manifest implementation | **Phase 6** (USDA-only initially per accepted ADR) | Pending |
+| ADR 0027 bronze storage-forced transforms refactor | **Phase 5b.2 Step 4.5** (already on critical path) | Cross-referenced from §5b.2 |
+| `source_watermarks` seeding fix | **Phase 7 prerequisite** | Pending |
+| FDA firm role reconciliation | **Phase 6 prerequisite** (firm entity resolution) | Pending |
+| Shared annotated types and invariants audit | **Phase 5c prerequisite** | Pending — see TODO grooming |
 
-  - **ADR 0027 implementation: bronze does storage-forced transforms only.**
-    Tracked in `documentation/decisions/0027-bronze-storage-forced-transforms-only.md`.
-    Status: Draft, pending three acceptance criteria (storage-type choice for
-    boolean-false sentinel, re-baseline strategy, migration ordering
-    confirmation). **Not a free-floating follow-up:** placed on the critical
-    path as Phase 5b.2 Step 4.5 (see section 5b.2 above), gating Phase 5c so
-    NHTSA and USCG inherit the corrected pattern from day one. Listed here
-    as a cross-reference for visibility alongside the other architectural
-    items.
+### ADR 0012 implementation: source-config loader and registry
 
-  - **FDA firm role reconciliation.** `firm.sql` and `recall_event_firm.sql`
-    label FDA's `firm_legal_nam` with `role='manufacturer'`, but semantically
-    that field is the *recalling establishment* (analogous to USDA's
-    `establishment` which uses `role='establishment'`). Relabel FDA to
-    `'establishment'` to align cross-source firm rollups. Best landed in Phase
-    6 alongside firm entity resolution work. Touches the `accepted_values`
-    enum on `recall_event_firm.role` and downstream queries that filter by
-    role.
+The `config/sources/*.yaml` files were filed as Phase 1 deliverables, but the loader, Pydantic-discriminated-union dispatch, and registry described in ADR 0012 were never implemented. CLI dispatch in `src/cli/main.py` instantiates extractors with hardcoded constructor kwargs, so YAML edits have no runtime effect. Affects all five sources equally.
+
+Surfaced during Phase 5b USDA extraction when an `etag_enabled: false` YAML edit had no effect on the running extractor; see detour L3 in `documentation/usda/first_extraction_findings.md` and the header comment in `config/sources/usda.yaml`. ADR 0012 amended 2026-05-01 to document the deferral explicitly.
+
+**Acceptance criteria:** editing `config/sources/usda.yaml` to set `etag_enabled: true` takes effect on the next extractor run without a code change. CLI invokes a registry lookup keyed on the source's `extractor_type` discriminator. Per-environment overlays (dev vs. prod) are clean.
+
+Best landed in Phase 6 alongside silver work — Phase 6 already touches the extractor configuration surface for cross-source firm resolution and benefits from the cleaner config story. Hard deadline is Phase 7 cron turn-on, after which silent YAML drift between expected and actual config behavior compounds.
+
+### ADR 0026 implementation: per-run snapshot-presence manifest
+
+Tracked in `documentation/decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md`. Promoted to Accepted 2026-05-01 with USDA-only initial scope, Option A (separate `extraction_run_identities` table) representation, and Phase 6 timing.
+
+Lands in Phase 6 alongside the silver `recall_event_history` model. Bronze-side change is the new table + a per-run insert in `BronzeLoader.load()`; silver-side change is the `recall_lifecycle.sql` model deriving `first_seen_at`, `last_seen_at`, `is_currently_active`, `was_ever_retracted`, `edit_count` columns.
+
+Manifest backfill from historical R2 payloads is covered by ADR 0028 Mechanism C (`scripts/backfill_manifest.py`).
+
+### ADR 0027 implementation: bronze does storage-forced transforms only
+
+Tracked in `documentation/decisions/0027-bronze-storage-forced-transforms-only.md`. Promoted to Accepted 2026-05-01.
+
+**Not a free-floating follow-up** — placed on the critical path as Phase 5b.2 Step 4.5 (see §5b.2 above), gating Phase 5c so NHTSA and USCG inherit the corrected pattern from day one. Listed here as a cross-reference.
+
+### `source_watermarks` seeding for new sources — Phase 7 prerequisite
+
+Migration 0001 hardcodes a five-source list (`cpsc/fda/usda/nhtsa/uscg`) and seeds `source_watermarks` with one row per source. `extraction_runs.source` is a FK to that table, so any new source needs a one-row seed migration before its `_record_run` call can succeed (otherwise the FK insert fails silently inside the broad except — surfaced during Phase 5b.2 first extraction when `usda_establishments` warning'd `extraction_run.record_failed` while bronze loaded normally).
+
+Two cleaner long-term options:
+- **(a)** Drop the FK in favor of a CHECK constraint listing valid sources, updated as sources are added.
+- **(b)** Drop the constraint entirely and let the application enforce the source enum.
+
+Either avoids the per-new-source seed-migration ritual. Also: replicate the diagnostic-logging fix from `src/extractors/usda_establishment.py::_record_run` (capture exception `type` + `message` instead of swallowing) across `cpsc.py`, `fda.py`, `usda.py`. The current swallowing mode predates the fix and would mask similar failures on the older extractors.
+
+Lands before Phase 7 cron turn-on so `extraction_runs` write-failures during cron are loud, not silent.
+
+### FDA firm role reconciliation — Phase 6 prerequisite
+
+`firm.sql` and `recall_event_firm.sql` label FDA's `firm_legal_nam` with `role='manufacturer'`, but semantically that field is the *recalling establishment* (analogous to USDA's `establishment` which uses `role='establishment'`). Relabel FDA's role to `'establishment'` to align cross-source firm rollups. Touches the `accepted_values` enum on `recall_event_firm.role` and downstream queries that filter by role.
+
+Lands in Phase 6 alongside firm entity resolution work — the resolution logic across CPSC, FDA, and USDA is cleaner if all three agree on the role vocabulary first.
+
+### Shared annotated types and invariants audit — Phase 5c prerequisite
+
+Three sources (CPSC, FDA, USDA recall, USDA establishment) have shipped Pydantic schemas and bronze invariants in isolation, before NHTSA and USCG land. Audit `src/schemas/cpsc.py`, `fda.py`, `usda.py`, `usda_establishment.py` for shared `Annotated[...]` types (e.g., trimmed strings, normalized dates, FEI-number validation) and shared invariants in `src/bronze/invariants.py` for cross-source rules (e.g., `published_at` sanity, null `source_recall_id`).
+
+Extract common patterns into shared types/decorators so NHTSA (Phase 5c) and USCG (Phase 5d) can reuse them rather than each re-implementing the same shape. Originally raised as TODO item 37 (2026-05-01); converted to a Phase 5c prerequisite when this realignment landed.
+
+**Acceptance criteria:** at least one shared annotated type extracted (likely a normalized-string or date type); at least one shared invariant identified and centralized in `src/bronze/invariants.py`; the four existing schemas migrated to use the shared types where applicable. The audit may conclude that no useful shared abstraction exists yet, in which case the negative result is documented and the four schemas stay independent.
 
 ---
 
@@ -496,8 +499,9 @@ FDA's FEI per ADR 0002).
 
 **Deliverables:**
 
-- All five per-source extract workflows on cron per ADR 0010 cadences
-- CPSC and USDA deep-rescan workflows on weekly cron per ADR 0010's deep-rescan addendum (relaxable if Phase 3 / 5b empirical verification shows their timestamps reliably advance on edits)
+- All five per-source extract workflows on cron per ADR 0010 cadences (note: USDA is full-dump on every run per ADR 0010 revision note — no incremental filter exists)
+- CPSC deep-rescan workflow on weekly cron per ADR 0010's deep-rescan addendum — **mandatory**, not optional, because CPSC's `LastPublishDate` does not advance on edits (verification closed 2026-05-01). FDA deep-rescan also on weekly cron per ADR 0023. USDA's daily run is already a full snapshot, so a separate "deep rescan" workflow would be redundant — the dispatch-only `deep-rescan-usda.yml` is retained for operator convenience but contributes no additional coverage.
+- **Pre-cron blocker — CPSC historical seeding (per ADR 0028):** before turning on weekly cron, run `deep-rescan-cpsc.yml` once with `LastPublishDateStart=2005-01-01` and `--change-type=historical_seed` to populate the 20-year (2005–2024) gap currently missing from bronze. This gap exists because the CPSC archive migration cadence (~2–3 records/day) will not reach the 2024 backfill point for years on its own. Documented in `documentation/cpsc/last_publish_date_semantics.md` Section 3 and ADR 0028 Mechanism A.
 - Transform workflow (`dbt build` + `dbt test`) on time-shifted cron per ADR 0018
 - Full PR-check workflow matching ADR 0018 (ruff, pyright, pytest unit + integration, dbt parse, 1–2 e2e smoke)
 - Neon branching via the Neon API for integration-test DBs (per ADR 0015); `test_db_url` fixture in `conftest.py`
@@ -526,7 +530,7 @@ FDA's FEI per ADR 0002).
 
 Rationale for two ADRs rather than one: API design and deployment target are separable concerns, and deployment constraints sometimes drive design choices (e.g., Cloudflare Workers' Python limitations would reshape endpoint design). Keeping them separate also matches this project's pattern of narrow, single-decision ADRs.
 
-*(ADRs 0022 and 0023 were used for FDA revision ADRs filed in Phase 5a.)*
+*(ADRs 0022 and 0023 were used for FDA revision ADRs filed in Phase 5a. ADRs 0026–0029 were filed during the 2026-05-01 architecture realignment — see `documentation/decisions/README.md` for the index.)*
 
 **Deliverables:**
 
@@ -557,7 +561,7 @@ Deferred as a separate decision — depends on framework choice (Observable Fram
 
 **Candidate deliverables (to be scoped at that time):**
 
-- Framework ADR (0026+ — 0024 and 0025 reserved for Phase 8's API design and deployment-target ADRs)
+- Framework ADR (0030+ — 0024 and 0025 are reserved for Phase 8's API design and deployment-target ADRs; 0026–0029 are filed)
 - Dashboard MVP showing recall counts, classifications, firm rollups
 - "Is my product recalled?" search UI
 - Deployment to Cloudflare Pages or Vercel free tier
@@ -569,8 +573,9 @@ Deferred as a separate decision — depends on framework choice (Observable Fram
 - **EPA integration** — deferred per ADR 0001
 - **Statistical drift detection** — needs baseline data; add in v2 per ADR 0015
 - **draw.io diagrams** — separate walkthrough (tracked in `TODO.md`)
-- **Monitoring / alerting beyond GitHub Actions UI** — add if/when pipeline noise warrants
+- **Monitoring / alerting beyond GitHub Actions UI** — formalized as ADR 0029 with named upgrade triggers; add when one fires
 - **Authenticated API tier** — public read-only is sufficient for v1
+- **Silver-layer interpretation of source-side deletions/retractions** — bronze captures the *signal* (record absent from a snapshot) via ADR 0026's manifest, but silver in v1 reports `is_currently_active` only. Modeling deletion as a first-class lifecycle event in silver/gold (e.g., "this recall was withdrawn on date X" rather than "this recall stopped appearing in the response on date X") is a v2 effort. The signal exists; the interpretation is deferred.
 
 ---
 

@@ -1,6 +1,6 @@
 # 0013 — Error handling: retries, idempotency, and quarantine
 
-- **Status:** Accepted
+- **Status:** Accepted; amended 2026-05-01 (FDA HTML-redirect throttling exception — see "Implementation notes" at end)
 - **Date:** 2026-04-16
 
 ## Context
@@ -101,3 +101,18 @@ These parameters are placeholders, not settled science. Explicit review triggers
 - **5% rejection threshold.** A placeholder — should be per-source and based on observed reject rates. USDA's bilingual-timing quirk may push rejects above 5% during normal operation without indicating a real problem.
 - **Business invariant checklist.** The three v1 checks are a starting point. Expect additions as real-world data reveals patterns that shouldn't enter bronze. Future brainstorming is anticipated during fixture-building and early production.
 - **Retry library choice.** `tenacity` is fine for now. If fixture work reveals ergonomic gaps, `backoff` or a custom decorator is an easy swap — the ABC lifecycle boundary is the clean migration seam.
+
+### Implementation notes — FDA HTML-redirect throttling (added 2026-05-01)
+
+The retry-ladder table assumes rate limiting surfaces via standard HTTP status codes (429 with `Retry-After`). FDA iRES is an exception: anti-abuse throttling is a **`302` redirect to `/apology_objects/abuse-detection-apology.html`** (a path that itself returns 404). There is no 429, no `Retry-After`, and the response body is HTML, not the expected JSON envelope. See `documentation/fda/api_observations.md` finding N for the empirical observation.
+
+**Detection.** The extractor must check `response.headers["Content-Type"]` for `text/html` on what should be a JSON response and treat that as the throttle signal. Status code alone is insufficient — `httpx`'s default redirect-following turns the 302 into a 404 from the apology path, which a naive retry decorator would happily retry.
+
+**Routing.** A throttle signal raises a non-retriable `ExtractionError` (not `TransientExtractionError`). Tenacity must NOT retry — additional requests during the cooldown extend the block. Recovery is time-based; ~30 minutes was the minimum observed before the IP was unblocked. The threshold for triggering was ~33 requests/minute sustained; slower cadence did not trigger.
+
+**Operational implications.**
+- Daily incremental (1 POST/run) is well below the threshold and will not trigger this in normal operation.
+- Deep rescan (~27 sequential POSTs to walk the full 134K-record archive at 5,000 rows/page) is the higher-risk workflow. The first production run should be manually monitored, and if the throttle fires the run should be allowed to fail rather than retried — the incremental cron the next day will catch up.
+- USDA's Akamai bot-manager protections (ADR 0016 implementation note) are a separate mechanism with a different signal — both are documented because both look like "the request just hung" if not specifically detected.
+
+**Generalization for future sources.** Government-data APIs increasingly run behind anti-abuse middleware that does not honor RFC 6585 (the 429 spec). Probe each new source for non-standard throttle signals during Phase 5 exploration. Common patterns: 302 redirects to apology pages, 200 responses with HTML bodies, slow-loris hangs, deliberately-malformed JSON.

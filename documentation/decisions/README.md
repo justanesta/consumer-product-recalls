@@ -25,25 +25,29 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0007 — Lineage via bronze snapshots + content hashing](0007-lineage-via-bronze-snapshots-and-content-hashing.md) — unified history derivable across all sources *(partially superseded by 0022)*
 - [0008 — NHTSA: flat file primary, JSON API for live vehicle lookup](0008-nhtsa-flat-file-primary-api-for-vehicle-lookup.md)
 - [0022 — FDA history endpoints empty; snapshot synthesis for all sources](0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) — supersedes ADR 0007's FDA-specific history path
+- [0026 — Lifecycle tracking via per-run snapshot-presence manifest](0026-lifecycle-tracking-snapshot-presence-manifest.md) — closes bronze's retraction gap; USDA-first, separate `extraction_run_identities` table
+- [0027 — Bronze keeps storage-forced transforms only; value-level normalization moves to silver](0027-bronze-storage-forced-transforms-only.md) — bronze hashes change iff the source changed
 
 ### Pipeline, extraction, and transformation
 
-- [0010 — Ingestion cadence and orchestration via GitHub Actions cron](0010-ingestion-cadence-and-github-actions-cron.md) *(partially superseded by 0023)*
+- [0010 — Ingestion cadence and orchestration via GitHub Actions cron](0010-ingestion-cadence-and-github-actions-cron.md) *(partially superseded by 0023; amended 2026-05-01 for CPSC + USDA findings)*
 - [0011 — Transformation framework: dbt-core](0011-transformation-framework-dbt-core.md)
 - [0023 — FDA deep rescan required; archive migration detected](0023-fda-deep-rescan-required-archive-migration-detected.md) — supersedes ADR 0010's FDA no-rescan exemption
-- [0012 — Extractor pattern: custom ABC + per-source subclasses](0012-extractor-pattern-custom-abc-and-per-source-subclasses.md) — adopts patterns from NYC DCP's `dcpy` without the dependency
-- [0013 — Error handling: retries, idempotency, and quarantine](0013-error-handling-retries-idempotency-and-quarantine.md)
+- [0012 — Extractor pattern: custom ABC + per-source subclasses](0012-extractor-pattern-custom-abc-and-per-source-subclasses.md) — adopts patterns from NYC DCP's `dcpy` without the dependency *(amended 2026-05-01: multi-response-shape pattern note)*
+- [0013 — Error handling: retries, idempotency, and quarantine](0013-error-handling-retries-idempotency-and-quarantine.md) *(amended 2026-05-01: FDA HTML-redirect throttling)*
 - [0014 — Schema evolution policy](0014-schema-evolution-policy.md) — `extra='forbid'` + `strict=True` + required-by-default
 - [0020 — Pipeline state tracking](0020-pipeline-state-tracking.md) — Neon watermark + run-metadata tables; Prefect Cloud as future overlay; Dagster deferred
+- [0028 — Backfill and historical re-extraction semantics](0028-backfill-historical-reextraction-semantics.md) — three named mechanisms (deep rescan, R2 replay, manifest backfill) with idempotency and silver-layer rules
 
 ### Tooling and development
 
 - [0015 — Testing strategy](0015-testing-strategy.md) — unit / integration (VCR) / e2e pyramid + dbt tests
-- [0016 — Secrets management](0016-secrets-management.md) — GitHub Actions secrets + `.env` + `pydantic-settings` + optional direnv
+- [0016 — Secrets management](0016-secrets-management.md) — GitHub Actions secrets + `.env` + `pydantic-settings` + optional direnv *(amended 2026-05-01: bot-manager fingerprinting)*
 - [0017 — Package management via uv](0017-package-management-via-uv.md)
 - [0018 — CI posture](0018-ci-posture.md) — workflow triggers, dbt orchestration, pre-commit, branch protection
 - [0019 — License: MIT](0019-license-mit.md)
 - [0021 — Structured logging with structlog](0021-structured-logging.md) — correlation-ID propagation via contextvars, stdlib bridge, JSON to stdout
+- [0029 — Application observability and alerting: v1 stance and upgrade triggers](0029-application-observability-and-alerting.md) — formalizes the v1 deferral with named upgrade triggers
 
 ---
 
@@ -72,6 +76,12 @@ A new ADR is written when someone reading the code six months later would ask "w
 21. [Structured logging with structlog](0021-structured-logging.md)
 22. [FDA history endpoints empty; snapshot synthesis for all sources](0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md)
 23. [FDA deep rescan required; archive migration detected](0023-fda-deep-rescan-required-archive-migration-detected.md)
+24. *(reserved for Phase 8 — Serving-layer API design)*
+25. *(reserved for Phase 8 — API deployment target)*
+26. [Lifecycle tracking via per-run snapshot-presence manifest](0026-lifecycle-tracking-snapshot-presence-manifest.md)
+27. [Bronze keeps storage-forced transforms only; value-level normalization moves to silver](0027-bronze-storage-forced-transforms-only.md)
+28. [Backfill and historical re-extraction semantics](0028-backfill-historical-reextraction-semantics.md)
+29. [Application observability and alerting: v1 stance and upgrade triggers](0029-application-observability-and-alerting.md)
 
 ---
 
@@ -79,8 +89,9 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 When adding a new ADR:
 
-1. Pick the next sequential number (0022, 0023, ...).
+1. Pick the next sequential number. **0024 and 0025 are reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). The next free numbers are 0030+.
 2. File name: `NNNN-kebab-case-title.md`.
 3. Use the standard template (see any existing ADR as a model).
 4. Add an entry under the appropriate topic above **and** in the numeric index.
 5. If the new ADR supersedes a previous one, update the superseded ADR's Status line to `Superseded by ADR NNNN` and add a link.
+6. If the new ADR amends rather than supersedes (e.g., adds an "Implementation notes" section after empirical findings), update the original ADR's Status line to note the amendment date and reference the section, rather than filing a separate ADR. Use supersession when a core decision changes; use amendment when the original decision stands but needs refinement.

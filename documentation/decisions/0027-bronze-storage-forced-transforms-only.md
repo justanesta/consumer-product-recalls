@@ -1,27 +1,18 @@
 # 0027 — Bronze keeps storage-forced transforms only; value-level normalization moves to silver
 
-- **Status:** Draft
+- **Status:** Accepted
 - **Date:** 2026-05-01
 - **Supersedes:** —
 - **Superseded by:** —
 - **Clarifies:** ADR 0007 (extends the hashing-helper "treat as schema migration" rule to all bronze-shape changes); complements ADR 0014 (which only covered source-driven drift, not our-side normalization).
 
-> **Acceptance criteria** (must be resolved before promoting to Accepted):
->
-> 1. ~~**Confirm the storage-forced exception list** for the boolean-false sentinel
->    case in `usda_fsis_establishments_bronze.geolocation` / `.county`.~~
->    **Resolved 2026-05-01: option 3** (convert `false` → string `"false"` in
->    Pydantic; bronze column stays `TEXT`; silver does `nullif(geolocation,
->    'false')`). See "Storage-type choice" section below.
-> 2. ~~**Re-baseline strategy** for the affected sources.~~
->    **Resolved 2026-05-01: full playbook at
->    `documentation/operations/re_baseline_playbook.md`**, summarized as: PR
->    template checkbox + CI guard at detection time; `change_type` column on
->    `extraction_runs` for marking; `recall_event_history` (Phase 6) joins
->    against it to filter parser-driven re-versions out of edit detection;
->    roll-forward only, no rollback.
-> 3. **Migration ordering** — confirm Phase 5b.2 Step 4.5 is the right slot
->    (between cassettes and silver), gating Phase 5c.
+## Acceptance resolution (2026-05-01)
+
+All three original acceptance criteria are resolved:
+
+1. **Storage-forced exception list for the boolean-false sentinel case.** Resolved: option 3 (convert `false` → string `"false"` in Pydantic; bronze column stays `TEXT`; silver does `nullif(geolocation, 'false')`). See "Storage-type choice" section below.
+2. **Re-baseline strategy for affected sources.** Resolved: full playbook at `documentation/operations/re_baseline_playbook.md`. Summary: PR template checkbox + CI guard at detection time; `change_type` column on `extraction_runs` for marking; `recall_event_history` (Phase 6) joins against it to filter parser-driven re-versions out of edit detection; roll-forward only, no rollback.
+3. **Migration ordering.** Confirmed: Phase 5b.2 Step 4.5 (between cassettes and silver) is the right slot. Rationale: the establishment silver staging model is written once with the new pattern rather than rewritten afterward, and NHTSA / USCG inherit the corrected pattern from day one. See `project_scope/implementation_plan.md` §5b.2 Step 4.5.
 
 ---
 
