@@ -1,6 +1,6 @@
 # Development guide
 
-This document covers local setup, environment configuration, and day-to-day development workflow. For architectural rationale behind choices described here, see the ADRs in `documentation/decisions/`. For system architecture and component relationships, see [`architecture.md`](architecture.md).
+This document covers local setup, environment configuration, and day-to-day development workflow. For architectural rationale behind choices described here, see the ADRs in `documentation/decisions/`. For system architecture and component relationships, see [`architecture.md`](architecture.md). For a tool-organized command cheat sheet, see [`commands.md`](commands.md).
 
 ---
 

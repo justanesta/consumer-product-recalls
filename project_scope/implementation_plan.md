@@ -416,6 +416,7 @@ Cross-cutting work targeted at specific upcoming phases. Each item is gated to a
 | `source_watermarks` seeding fix | **Phase 7 prerequisite** | Pending |
 | FDA firm role reconciliation | **Phase 6 prerequisite** (firm entity resolution) | Pending |
 | Shared annotated types and invariants audit | **Phase 5c prerequisite** | Pending — see TODO grooming |
+| USDA recall ETag re-evaluation | **Phase 7 prerequisite** | Pending |
 
 ### ADR 0012 implementation: source-config loader and registry
 
@@ -458,6 +459,24 @@ Lands before Phase 7 cron turn-on so `extraction_runs` write-failures during cro
 `firm.sql` and `recall_event_firm.sql` label FDA's `firm_legal_nam` with `role='manufacturer'`, but semantically that field is the *recalling establishment* (analogous to USDA's `establishment` which uses `role='establishment'`). Relabel FDA's role to `'establishment'` to align cross-source firm rollups. Touches the `accepted_values` enum on `recall_event_firm.role` and downstream queries that filter by role.
 
 Lands in Phase 6 alongside firm entity resolution work — the resolution logic across CPSC, FDA, and USDA is cleaner if all three agree on the role vocabulary first.
+
+### USDA recall ETag re-evaluation — Phase 7 prerequisite
+
+`UsdaExtractor.etag_enabled` was set to `False` during Phase 5b based on Finding N in `documentation/usda/recall_api_observations.md` — Akamai's CDN response was inconsistent enough that conditional-GET (`If-None-Match`) sometimes returned `200` with a full body even when the underlying data was unchanged. That observation predated dialing in the browser-like request fingerprint (Firefox/Linux UA + matching `Accept` / `Accept-Language` / `Accept-Encoding` headers per ADR 0016 amendment). With a stable fingerprint the bot-manager scoring path is more deterministic; the caching tier may now be deterministic too.
+
+Establishment API is **out of scope** for this re-evaluation — Finding A in `documentation/usda/establishment_api_observations.md` confirms no `etag` header is returned (`cache-control: max-age=0, no-cache, no-store`, `x-drupal-dynamic-cache: UNCACHEABLE`). ETag is recall-only.
+
+**Procedure:**
+
+1. Flip `UsdaExtractor.etag_enabled = True` on a branch.
+2. Run the daily extractor for ~5 consecutive days (manual `gh workflow run extract-usda.yml` is fine; no need to wait for cron).
+3. Capture per-request: the `If-None-Match` header sent, the response `status` (200 vs 304), the response `etag` returned, and the size of the response body. Add a log field for this in the extractor's request hook if not already there.
+4. Decision rule:
+   - **≥80% of unchanged-data days return 304** → keep `etag_enabled=True` in production. Bandwidth savings on idle days, smaller `extraction_runs.records_extracted=0` runs.
+   - **Inconsistent (any 200 with identical body when ETag matched)** → revert to `etag_enabled=False`. The full-dump + content-hash pattern (ADR 0007) already handles dedup correctly; the ETag adds risk without commensurate value.
+5. Document the result as a "Finding P" addendum to `documentation/usda/recall_api_observations.md`, regardless of which way the decision goes — empirical disposition of Finding N belongs alongside it.
+
+Best landed before Phase 7 cron turn-on so the daily bandwidth profile is settled before recurring runs accumulate. Cost of re-evaluation is small (~5 manual workflow dispatches over a week + one log-field addition); cost of leaving it ambiguous through cron is recurring 1.6 MB / day downloads on idle days that could have been 304s.
 
 ### Shared annotated types and invariants audit — Phase 5c prerequisite
 

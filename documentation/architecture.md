@@ -6,6 +6,7 @@ This is the reader's-entry-point document. For:
 - **Per-source silver mapping decisions** (column unification, surrogate keys, null-filling) — see [`silver_design_notes.md`](silver_design_notes.md).
 - **Schema reference** (table-by-table column types, business keys, glossary) — see [`data_schemas.md`](data_schemas.md).
 - **Local development** (setup, running tests, debugging) — see [`development.md`](development.md).
+- **Command cheat sheet** (uv, recalls CLI, alembic, ruff, pyright, pytest, dbt, bru, R2, neonctl, psql, gh) — see [`commands.md`](commands.md).
 - **Production operations** (monitoring queries, secret rotation, re-ingestion procedures) — see [`operations.md`](operations.md).
 - **Why a particular choice was made** — see [`decisions/`](decisions/) (Architecture Decision Records).
 
@@ -262,6 +263,7 @@ These are deliberate omissions, each documented in an ADR or in `project_scope/i
 2. This file (`architecture.md`) — system shape.
 3. [`decisions/README.md`](decisions/README.md) — index of every architectural decision.
 4. [`development.md`](development.md) — how to set up locally and run things.
-5. [`data_schemas.md`](data_schemas.md) — when you need to know what a column means.
-6. [`silver_design_notes.md`](silver_design_notes.md) — when you're adding a new source's silver mapping.
-7. [`operations.md`](operations.md) — when you're operating in production.
+5. [`commands.md`](commands.md) — quick-reference cheat sheet, kept open while you work.
+6. [`data_schemas.md`](data_schemas.md) — when you need to know what a column means.
+7. [`silver_design_notes.md`](silver_design_notes.md) — when you're adding a new source's silver mapping.
+8. [`operations.md`](operations.md) — when you're operating in production.
