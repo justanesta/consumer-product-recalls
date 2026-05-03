@@ -46,6 +46,13 @@ The boundaries are not arbitrary — each one is enforced by a different mechani
 
 ---
 
+Succinct mental model of data transformations on each layer:
+- **Landing** = byte-for-byte what is given from source that lands in R2 buckets
+- **Bronze** = parsed and typed source values within column-type constraints (preserves source-verbatim where the column type allows).                                                        
+- **Staging (pre-Silver)** = source-shape normalization (empty strings, sentinels, encoding, dedup, bilingual filter). Per-source cleanup, no cross-source thinking.
+- **Silver** = cross-source unification (surrogate keys, unions, firm dedup, role assignment). The first layer where "give me all recall events across CPSC + FDA + USDA" is one query.       
+- **Gold** = aggregates/reports for dashboards (e.g. recalls_by_month). 
+
 ## End-to-end data flow
 
 ```
