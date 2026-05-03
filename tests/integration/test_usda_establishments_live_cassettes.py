@@ -9,7 +9,9 @@ produce on demand.
 USDA establishment-specific VCR note: same shape as the recall extractor — no
 filter_query_parameters or filter_headers override needed. The endpoint is
 unauthenticated (no auth headers, no signature param) and full-dump-only (no
-pagination, no ETag — Finding A in establishment_api_observations.md).
+pagination). ETag conditional-GET is scaffolded but disabled by default
+(``etag_enabled=False``) per Finding A revision 2026-05-03 — the API DOES
+emit ETag/Last-Modified under browser fingerprint, viability under study.
 
 Cassette inventory:
   Live-recorded (real FSIS responses):
@@ -17,6 +19,8 @@ Cassette inventory:
 
   Hand-constructed (patched _fetch, no YAML):
     test_content_hash_dedup            — repeated full-dump → loader returns 0
+    test_not_modified_304              — 304 → _not_modified path, _touch_freshness
+    test_etag_contradiction_guard      — 304 with advanced last-modified → ExtractionError
     test_transient_500                 — 5xx → TransientExtractionError
     test_rate_limit_429                — HTTP 429 → RateLimitError
     test_malformed_record              — extra forbidden field → quarantine
@@ -47,7 +51,7 @@ import pytest
 import sqlalchemy as sa
 
 from src.config.settings import Settings
-from src.extractors._base import RateLimitError, TransientExtractionError
+from src.extractors._base import ExtractionError, RateLimitError, TransientExtractionError
 from src.extractors.usda_establishment import (
     _MAX_TOTAL_RECORDS,
     UsdaEstablishmentExtractor,
@@ -117,9 +121,21 @@ def vcr_extractor(monkeypatch: pytest.MonkeyPatch) -> UsdaEstablishmentExtractor
         return UsdaEstablishmentExtractor(base_url=_BASE_URL, settings=settings)
 
 
-def _run(extractor: UsdaEstablishmentExtractor) -> Any:
-    """Run the extractor with DB/R2 mocked; HTTP goes through VCR (or a patched _fetch)."""
-    with patch("src.extractors.usda_establishment.BronzeLoader") as mock_loader_cls:
+def _run(
+    extractor: UsdaEstablishmentExtractor,
+    prior_etag: str | None = None,
+    prior_last_modified: str | None = None,
+) -> Any:
+    """Run the extractor with DB/R2 mocked; HTTP goes through VCR (or a patched _fetch).
+
+    ``prior_etag`` / ``prior_last_modified`` patch ``_read_etag_state`` so ETag
+    tests can simulate a populated source_watermarks row. Default None values
+    keep all existing tests behaving as before (cold cache).
+    """
+    with (
+        patch.object(extractor, "_read_etag_state", return_value=(prior_etag, prior_last_modified)),
+        patch("src.extractors.usda_establishment.BronzeLoader") as mock_loader_cls,
+    ):
         mock_loader_cls.return_value.load.return_value = 0
         mock_engine: MagicMock = extractor._engine  # type: ignore[assignment]
         mock_engine.begin.return_value.__enter__ = lambda _: MagicMock()
@@ -162,7 +178,7 @@ def test_happy_path_full_dump(vcr_extractor: UsdaEstablishmentExtractor) -> None
 
 def test_content_hash_dedup(vcr_extractor: UsdaEstablishmentExtractor) -> None:
     payload = [_VALID_RAW]
-    with patch.object(vcr_extractor, "_fetch", return_value=payload):
+    with patch.object(vcr_extractor, "_fetch", return_value=(payload, 200, None, None)):
         result = _run(vcr_extractor)
     assert result.records_fetched == 1
     # The loader is mocked to return 0 by _run; this asserts the wiring, not
@@ -171,7 +187,60 @@ def test_content_hash_dedup(vcr_extractor: UsdaEstablishmentExtractor) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 3: Transient 5xx → TransientExtractionError (retried by base class)
+# Scenario 3: 304 Not Modified — ETag matches, server short-circuits download
+# Mirrors test_not_modified_304 in test_usda_live_cassettes.py — keep in sync.
+# Exercises the _not_modified=True lifecycle: land_raw skips R2, load_bronze
+# calls _touch_freshness (not loader.load). Establishment-side viability of
+# this path is gated on etag_viability.sql per implementation_plan.md
+# § "USDA establishment ETag enablement".
+# ---------------------------------------------------------------------------
+
+
+def test_not_modified_304(vcr_extractor: UsdaEstablishmentExtractor) -> None:
+    _ETAG = '"1777668683"'
+    _LAST_MODIFIED = "Fri, 01 May 2026 20:51:23 GMT"
+    with patch.object(
+        vcr_extractor,
+        "_fetch",
+        return_value=([], 304, _ETAG, _LAST_MODIFIED),
+    ):
+        # Same last-modified in prior state and 304 response → no contradiction
+        result = _run(vcr_extractor, prior_etag=_ETAG, prior_last_modified=_LAST_MODIFIED)
+
+    assert result.records_fetched == 0
+    assert result.records_loaded == 0
+    assert result.rejection_rate == 0.0
+    # R2 land() must not be called when there is no new data to land
+    assert vcr_extractor._r2_client.land.call_count == 0  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Scenario 4: ETag contradiction guard — 304 paired with advanced last-modified
+# Mirrors test_etag_contradiction_guard in test_usda_live_cassettes.py — keep in
+# sync. The CDN returns a stale-positive 304: the ETag matched but the dataset
+# actually changed (last-modified advanced). ExtractionError requires manual
+# watermark repair (NULL source_watermarks.last_etag for usda_establishments
+# and re-run).
+# ---------------------------------------------------------------------------
+
+
+def test_etag_contradiction_guard(vcr_extractor: UsdaEstablishmentExtractor) -> None:
+    _ETAG = '"stale_etag"'
+    _PRIOR_LM = "Wed, 29 Apr 2026 14:29:36 GMT"
+    _CURRENT_LM = "Thu, 30 Apr 2026 00:00:00 GMT"  # advanced → contradiction
+    with (
+        patch.object(
+            vcr_extractor,
+            "_fetch",
+            return_value=([], 304, _ETAG, _CURRENT_LM),
+        ),
+        pytest.raises(ExtractionError),
+    ):
+        _run(vcr_extractor, prior_etag=_ETAG, prior_last_modified=_PRIOR_LM)
+
+
+# ---------------------------------------------------------------------------
+# Scenario 5: Transient 5xx → TransientExtractionError (retried by base class)
 # ---------------------------------------------------------------------------
 
 
@@ -219,7 +288,7 @@ def test_malformed_record(vcr_extractor: UsdaEstablishmentExtractor) -> None:
     # Otherwise ExtractionAbortedError fires before we can assert on the result.
     bad_record = {**_VALID_RAW, "unexpected_field": "boom"}
     payload = [_VALID_RAW] * 20 + [bad_record]
-    with patch.object(vcr_extractor, "_fetch", return_value=payload):
+    with patch.object(vcr_extractor, "_fetch", return_value=(payload, 200, None, None)):
         result = _run(vcr_extractor)
     assert result.records_fetched == 21
     assert result.records_valid == 20
@@ -239,7 +308,7 @@ def test_oversized_response_guard(vcr_extractor: UsdaEstablishmentExtractor) -> 
     # 5x with backoff — patch time.sleep so the retries are instant.
     with (
         patch("time.sleep"),
-        patch.object(vcr_extractor, "_fetch", return_value=oversized),
+        patch.object(vcr_extractor, "_fetch", return_value=(oversized, 200, None, None)),
         pytest.raises(TransientExtractionError, match="exceeds guard"),
     ):
         _run(vcr_extractor)

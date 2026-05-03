@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import abc
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 import structlog.contextvars
 import tenacity
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+
+if TYPE_CHECKING:
+    import httpx
 
 logger = structlog.get_logger()
 
@@ -293,6 +297,34 @@ class RestApiExtractor[T: BaseModel](Extractor[T]):
     base_url: str
     timeout_seconds: float = 30.0
     rate_limit_rps: float | None = None  # None = no rate limiting enforced
+
+    # Response-capture state for the extraction_runs forensic columns added
+    # in migration 0010 — supports the ETag-viability study at
+    # scripts/sql/_pipeline/etag_viability.sql. Populated via _capture_response()
+    # once per run (paginated sources call it only on the first page so the
+    # headers carry conditional-GET semantics). Read by each extractor's
+    # _record_run() when persisting the row.
+    _captured_response_status_code: int | None = PrivateAttr(default=None)
+    _captured_response_etag: str | None = PrivateAttr(default=None)
+    _captured_response_last_modified: str | None = PrivateAttr(default=None)
+    _captured_response_body_sha256: str | None = PrivateAttr(default=None)
+    _captured_response_headers: dict[str, str] | None = PrivateAttr(default=None)
+
+    def _capture_response(self, response: httpx.Response, body: bytes | None = None) -> None:
+        """Stash response metadata for persistence to extraction_runs.
+
+        ``body`` defaults to ``response.content``; pass explicitly when the
+        body has already been consumed (streaming, decoded JSON, etc.) to
+        avoid double-reading. Call exactly once per run, on the first/primary
+        response — multiple invocations within the same run overwrite earlier
+        captures.
+        """
+        body_bytes = body if body is not None else response.content
+        self._captured_response_status_code = response.status_code
+        self._captured_response_etag = response.headers.get("etag")
+        self._captured_response_last_modified = response.headers.get("last-modified")
+        self._captured_response_body_sha256 = hashlib.sha256(body_bytes).hexdigest()
+        self._captured_response_headers = dict(response.headers)
 
 
 class FlatFileExtractor[T: BaseModel](Extractor[T]):

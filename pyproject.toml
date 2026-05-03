@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "consumer-product-recalls"
-version = "0.1.0"
+version = "0.2.0"
 description = "ETL pipeline for US federal consumer product recall data"
 readme = "README.md"
 license = {file = "LICENSE"}

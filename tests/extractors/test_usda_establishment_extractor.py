@@ -95,15 +95,21 @@ class TestFetch:
         response = _make_response(200, json_body=[_VALID_RAW])
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.get.return_value = response
-            records = extractor._fetch()
+            records, status_code, etag, last_modified = extractor._fetch()
         assert records == [_VALID_RAW]
+        assert status_code == 200
+        # Synthesized response in this test has no etag/last-modified headers.
+        assert etag is None
+        assert last_modified is None
 
     def test_200_non_array_returns_empty(self, extractor: UsdaEstablishmentExtractor) -> None:
         # Defensive: if the API ever returns an envelope shape, don't crash.
         response = _make_response(200, json_body={"unexpected": "envelope"})
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.get.return_value = response
-            assert extractor._fetch() == []
+            records, status_code, _etag, _last_modified = extractor._fetch()
+        assert records == []
+        assert status_code == 200
 
     def test_429_raises_rate_limit(self, extractor: UsdaEstablishmentExtractor) -> None:
         response = _make_response(429, text="rate limited", headers={"Retry-After": "30"})
@@ -141,6 +147,111 @@ class TestFetch:
             with pytest.raises(TransientExtractionError, match="network error"):
                 extractor._fetch()
 
+    def test_304_returns_empty_tuple(self, extractor: UsdaEstablishmentExtractor) -> None:
+        # Covers the inline 304 branch in _fetch (empty body, headers preserved).
+        # Distinct from test_not_modified_304 in the cassette suite, which patches
+        # _fetch wholesale; this test exercises the real _fetch routing.
+        response = _make_response(
+            304,
+            headers={"etag": '"unchanged"', "last-modified": "Fri, 01 May 2026 20:51:23 GMT"},
+        )
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.get.return_value = response
+            records, status_code, etag, last_modified = extractor._fetch()
+        assert records == []
+        assert status_code == 304
+        assert etag == '"unchanged"'
+        assert last_modified == "Fri, 01 May 2026 20:51:23 GMT"
+
+    def test_conditional_headers_sent_when_etag_enabled(
+        self, extractor: UsdaEstablishmentExtractor
+    ) -> None:
+        # Covers the etag_enabled branch — verifies If-None-Match and
+        # If-Modified-Since are forwarded to the GET call. Default is OFF, so
+        # this test must enable it explicitly.
+        extractor.etag_enabled = True
+        response = _make_response(304)
+        with patch("httpx.Client") as mock_client:
+            mock_get = mock_client.return_value.__enter__.return_value.get
+            mock_get.return_value = response
+            extractor._fetch(
+                prior_etag='"abc"',
+                prior_last_modified="Fri, 01 May 2026 20:51:23 GMT",
+            )
+        # Inspect the headers kwarg on the captured call.
+        call_kwargs = mock_get.call_args.kwargs
+        assert call_kwargs["headers"]["If-None-Match"] == '"abc"'
+        assert call_kwargs["headers"]["If-Modified-Since"] == "Fri, 01 May 2026 20:51:23 GMT"
+
+    def test_no_conditional_headers_when_etag_disabled(
+        self, extractor: UsdaEstablishmentExtractor
+    ) -> None:
+        # Default state (etag_enabled=False): conditional headers must NOT be
+        # sent even when prior values are passed. Guards against accidental
+        # enablement via leaky watermark state.
+        assert extractor.etag_enabled is False  # sanity
+        response = _make_response(200, json_body=[])
+        with patch("httpx.Client") as mock_client:
+            mock_get = mock_client.return_value.__enter__.return_value.get
+            mock_get.return_value = response
+            extractor._fetch(
+                prior_etag='"abc"',
+                prior_last_modified="Fri, 01 May 2026 20:51:23 GMT",
+            )
+        call_kwargs = mock_get.call_args.kwargs
+        assert "If-None-Match" not in call_kwargs["headers"]
+        assert "If-Modified-Since" not in call_kwargs["headers"]
+
+
+# ---------------------------------------------------------------------------
+# _read_etag_state — source_watermarks lookup
+# ---------------------------------------------------------------------------
+
+
+class TestReadEtagState:
+    def test_returns_none_tuple_when_no_row(self, extractor: UsdaEstablishmentExtractor) -> None:
+        # Defensive: if the source_watermarks row hasn't been seeded for this
+        # source, _read_etag_state returns (None, None) rather than crashing.
+        # This shouldn't happen in production (migration 0008 seeds the row),
+        # but the early-return guard exists for safety.
+        mock_engine: MagicMock = extractor._engine  # type: ignore[assignment]
+        mock_conn = MagicMock()
+        mock_engine.connect.return_value.__enter__ = lambda _: mock_conn
+        mock_engine.connect.return_value.__exit__ = MagicMock(return_value=False)
+        mock_conn.execute.return_value.fetchone.return_value = None
+
+        prior_etag, prior_last_modified = extractor._read_etag_state()
+
+        assert prior_etag is None
+        assert prior_last_modified is None
+
+
+# ---------------------------------------------------------------------------
+# _guard_etag_contradiction — branches not exercised elsewhere
+# ---------------------------------------------------------------------------
+
+
+class TestGuardEtagContradiction:
+    def test_no_op_when_either_is_none(self, extractor: UsdaEstablishmentExtractor) -> None:
+        # First-extract path (no prior state) must not raise.
+        extractor._guard_etag_contradiction(None, "Fri, 01 May 2026 20:51:23 GMT")
+        extractor._guard_etag_contradiction("Fri, 01 May 2026 20:51:23 GMT", None)
+        extractor._guard_etag_contradiction(None, None)
+
+    def test_no_op_when_identical(self, extractor: UsdaEstablishmentExtractor) -> None:
+        # The honest 304 path: server returned 304 with the same Last-Modified
+        # we already had. No contradiction; must not raise.
+        same = "Fri, 01 May 2026 20:51:23 GMT"
+        extractor._guard_etag_contradiction(same, same)
+
+    def test_raises_on_unparseable_dates(self, extractor: UsdaEstablishmentExtractor) -> None:
+        # Headers differ but neither parses as RFC 1123 — treat as suspicious
+        # and raise. Covers the except ValueError branch.
+        from src.extractors._base import ExtractionError
+
+        with pytest.raises(ExtractionError, match="Could not parse"):
+            extractor._guard_etag_contradiction("not a date", "also not a date")
+
 
 # ---------------------------------------------------------------------------
 # extract — count guard
@@ -151,14 +262,14 @@ class TestExtractGuard:
     def test_above_guard_raises(self, extractor: UsdaEstablishmentExtractor) -> None:
         oversized = [_VALID_RAW] * (_MAX_TOTAL_RECORDS + 1)
         with (
-            patch.object(extractor, "_fetch", return_value=oversized),
+            patch.object(extractor, "_fetch", return_value=(oversized, 200, None, None)),
             pytest.raises(TransientExtractionError, match="exceeds guard"),
         ):
             extractor.extract()
 
     def test_at_guard_passes(self, extractor: UsdaEstablishmentExtractor) -> None:
         sized = [_VALID_RAW] * _MAX_TOTAL_RECORDS
-        with patch.object(extractor, "_fetch", return_value=sized):
+        with patch.object(extractor, "_fetch", return_value=(sized, 200, None, None)):
             assert len(extractor.extract()) == _MAX_TOTAL_RECORDS
 
 

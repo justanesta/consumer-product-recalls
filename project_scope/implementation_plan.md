@@ -266,7 +266,10 @@ Phase 6 handles the work that genuinely requires all five sources to be present 
 
 Functionally a sixth source. The FSIS Establishment Listing API
 (`/fsis/api/establishments/v/1`, 7,945 records, weekly Mon/Tue cadence, no
-auth, no pagination, no ETag — see `documentation/usda/establishment_api_observations.md`)
+auth, no pagination; ETag presence under re-investigation — Finding A
+originally claimed absent, but 2026-05-03 production capture observed
+`etag` and `last-modified` populated, see the "USDA recall ETag
+re-evaluation" follow-up below — see `documentation/usda/establishment_api_observations.md`)
 provides demographic + geolocation data for FSIS-regulated establishments.
 Pre-extraction Bruno exploration is complete (collection in
 `bruno/usda/establishment_exploration/`). Steps mirror the standard 5-step
@@ -417,6 +420,7 @@ Cross-cutting work targeted at specific upcoming phases. Each item is gated to a
 | FDA firm role reconciliation | **Phase 6 prerequisite** (firm entity resolution) | Pending |
 | Shared annotated types and invariants audit | **Phase 5c prerequisite** | Resolved 2026-05-01 — documented negative result; see section below |
 | USDA recall ETag re-evaluation | **Phase 7 prerequisite** | Pending |
+| USDA establishment ETag enablement | **Phase 7 prerequisite** (gate-paired with USDA recall) | Code scaffolded 2026-05-03 (`etag_enabled=False`); awaiting viability gate |
 
 ### ADR 0012 implementation: source-config loader and registry
 
@@ -464,19 +468,43 @@ Lands in Phase 6 alongside firm entity resolution work — the resolution logic 
 
 `UsdaExtractor.etag_enabled` was set to `False` during Phase 5b based on Finding N in `documentation/usda/recall_api_observations.md` — Akamai's CDN response was inconsistent enough that conditional-GET (`If-None-Match`) sometimes returned `200` with a full body even when the underlying data was unchanged. That observation predated dialing in the browser-like request fingerprint (Firefox/Linux UA + matching `Accept` / `Accept-Language` / `Accept-Encoding` headers per ADR 0016 amendment). With a stable fingerprint the bot-manager scoring path is more deterministic; the caching tier may now be deterministic too.
 
-Establishment API is **out of scope** for this re-evaluation — Finding A in `documentation/usda/establishment_api_observations.md` confirms no `etag` header is returned (`cache-control: max-age=0, no-cache, no-store`, `x-drupal-dynamic-cache: UNCACHEABLE`). ETag is recall-only.
+**Establishment API status reversed (2026-05-03).** Finding A originally claimed the establishment endpoint returns no `etag` header. The first production extraction with the response-capture columns (migration 0010) directly contradicted this: `etag` and `last-modified` populated on every successful run, identical shape to the recall endpoint. Likely cause: Finding A's Bruno probe sent default headers; Akamai's bot-manager appears to route browser-fingerprinted requests through a different cache tier (same dynamic Finding O documents on the recall side). A/B verification request committed at `bruno/usda/establishment_exploration/get_all_establishments_with_browser_headers.yml`. Finding A pending update after A/B confirms. **Net:** the establishment API is now in scope for the same viability study.
+
+**Mechanism — automated capture (implemented 2026-05-03, supersedes the original manual-logging procedure).** Migration 0010 added five columns to `extraction_runs`:
+
+- `response_status_code`, `response_etag`, `response_last_modified` — promoted forensic columns
+- `response_body_sha256` — ground-truth oracle for "did the data change?" (byte-exact, covers inserts/updates/deletes)
+- `response_headers` (JSONB) — full headers for retroactive cache-layer fingerprinting (X-Cache, Age, Server, Via)
+
+Universal across REST API sources (cpsc/fda/usda/usda_establishments today; future sources inheriting from `RestApiExtractor` get capture for free). NHTSA and USCG inherit from `FlatFileExtractor` / `HtmlScrapingExtractor` respectively and would need a parallel capture path if the same forensic study is wanted there — out of scope for this prerequisite. Every `RestApiExtractor` populates the columns via `_capture_response()` on every successful fetch (paginated sources capture only the first page). The `etag_viability.sql` script at `scripts/sql/_pipeline/etag_viability.sql` reads from these columns and produces the green-light decision via 5 numbered queries (transition verdict, format inspection, origin-vs-CDN, intra-day stability, summary recommendation).
 
 **Procedure:**
 
-1. Flip `UsdaExtractor.etag_enabled = True` on a branch.
-2. Run the daily extractor for ~5 consecutive days (manual `gh workflow run extract-usda.yml` is fine; no need to wait for cron).
-3. Capture per-request: the `If-None-Match` header sent, the response `status` (200 vs 304), the response `etag` returned, and the size of the response body. Add a log field for this in the extractor's request hook if not already there.
-4. Decision rule:
-   - **≥80% of unchanged-data days return 304** → keep `etag_enabled=True` in production. Bandwidth savings on idle days, smaller `extraction_runs.records_extracted=0` runs.
-   - **Inconsistent (any 200 with identical body when ETag matched)** → revert to `etag_enabled=False`. The full-dump + content-hash pattern (ADR 0007) already handles dedup correctly; the ETag adds risk without commensurate value.
-5. Document the result as a "Finding P" addendum to `documentation/usda/recall_api_observations.md`, regardless of which way the decision goes — empirical disposition of Finding N belongs alongside it.
+1. **Accumulate data.** Run the daily extractor (manual `gh workflow run extract-usda.yml` or `recalls extract usda` locally) for **at least 14 days, including ≥1 day with a real upstream update**. Multi-runs-per-day count toward the transition tally and add intra-day stability evidence — encouraged. No code change needed; capture is universal-on by default.
+2. **Inspect verdicts continuously.** `psql -f scripts/sql/_pipeline/etag_viability.sql` (defaults to `usda`; pass `-v src=usda_establishments` to study the establishment endpoint with the same machinery). Watch query 1 for any row tagged `SUSPECT: false-304` — that's a disqualifying observation regardless of how clean the rest looks.
+3. **Decision rule** (query 5 produces the recommendation directly):
+   - `false_304_count = 0` for ≥7 transitions including a real-update day → safe to flip `etag_enabled=True`.
+   - `false_304_count > 0` ever → leave disabled. Period. The full-dump + bronze content-hash pattern (ADR 0007) already handles dedup correctly; ETag would add risk without commensurate value.
+   - `false_200_count > 0` only → safe to enable. You'll over-fetch occasionally; bronze hash absorbs it.
+4. **Document the result** as a "Finding P" addendum to `documentation/usda/recall_api_observations.md` for the recall API, and update Finding A in `documentation/usda/establishment_api_observations.md` for the establishment API. Both record the empirical disposition regardless of which way the decision goes.
 
-Best landed before Phase 7 cron turn-on so the daily bandwidth profile is settled before recurring runs accumulate. Cost of re-evaluation is small (~5 manual workflow dispatches over a week + one log-field addition); cost of leaving it ambiguous through cron is recurring 1.6 MB / day downloads on idle days that could have been 304s.
+Best landed before Phase 7 cron turn-on so the daily bandwidth profile is settled before recurring runs accumulate. Cost of re-evaluation is now near-zero (the capture path runs on every extract automatically; no log-field addition or manual per-request capture needed); cost of leaving it ambiguous through cron is recurring ~1.6 MB / day per affected source on idle days that could have been 304s.
+
+### USDA establishment ETag enablement — Phase 7 prerequisite
+
+The establishment endpoint emits `ETag` and `Last-Modified` under browser fingerprint (Finding A revision 2026-05-03 + A/B verification at `bruno/usda/establishment_exploration/get_all_establishments_with_browser_headers.yml`). The capture path (migration 0010) collects per-run ETag observations alongside the recall endpoint's data; both share the same `etag_viability.sql` machinery.
+
+**Code scaffolded 2026-05-03 with `etag_enabled=False` default.** `UsdaEstablishmentExtractor` now has 1:1 mirrors of `UsdaExtractor`'s `_fetch`, `_read_etag_state`, `_update_watermark_state`, `_touch_freshness`, and `_guard_etag_contradiction` methods (with "Mirrors UsdaExtractor.<method>; keep in sync" comments). The 304 lifecycle (land_raw skip → load_bronze touch_freshness) and the contradiction-guard test cases (`test_not_modified_304` / `test_etag_contradiction_guard`) parallel the recall side. Currently the extractor still issues a plain GET on every run because the flag defaults OFF — no behavior change vs. pre-scaffolding.
+
+**Remaining work to enable** (gated on viability):
+
+1. Verify `etag_viability.sql -v src=usda_establishments` shows the green-light verdict from query 5 (`false_304_count = 0` over ≥7 transitions including a real-update day; 14+ days of capture preferred).
+2. Flip `etag_enabled=True` — either via constructor kwarg in `src/cli/main.py` or by changing the class default in `src/extractors/usda_establishment.py:UsdaEstablishmentExtractor`.
+3. Optionally: do a 1-2 day dev smoke first by setting `etag_enabled=True` on a feature branch, running `recalls extract usda_establishments` repeatedly, and observing `If-None-Match` going out + 304s in `extraction_runs.response_status_code`.
+
+**Decision rule:** the two endpoints share Akamai infrastructure and may exhibit identical ETag reliability, but do not assume so without evidence — they get studied independently. A `false_304_count > 0` for either source is disqualifying for that source regardless of how the other behaves.
+
+Best landed alongside the recall ETag flip if both pass viability simultaneously, or independently if one passes and the other doesn't. Cost of leaving disabled through cron is ~810 KB / day downloads on idle days that could have been 304s. Lands before Phase 7 cron turn-on so the daily bandwidth profile is settled before recurring runs accumulate.
 
 ### Shared annotated types and invariants audit — Phase 5c prerequisite
 

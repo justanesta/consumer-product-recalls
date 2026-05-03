@@ -72,7 +72,7 @@ uv run recalls re-ingest <source> \                       # R2 replay (Phase 6)
 
 Sources: `cpsc`, `fda`, `usda`, `usda_establishments`. NHTSA + USCG land in Phase 5c/5d.
 
-See also: [`development.md` § Running extractors locally](development.md#running-extractors-locally), [`operations.md` § Re-ingestion procedure](operations.md#re-ingestion-procedure-after-schema-change), [ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md).
+See also: [`cli.md`](cli.md) for full flag semantics + per-source quirks, [`development.md` § Running extractors locally](development.md#running-extractors-locally), [`operations.md` § Re-ingestion procedure](operations.md#re-ingestion-procedure-after-schema-change), [ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md).
 
 ---
 
@@ -319,7 +319,7 @@ Then if anything in the snapshot looks off for a specific source, drill in with 
 
 #### What to actually look at in the output
 
-- **`recent_runs.sql` query 1** — every source has a row, all show `status=completed`, `change_type=routine`. If a row is missing, that source didn't run; if status is anything else, look at `error_excerpt`.
+- **`recent_runs.sql` query 1** — every source has a row, all show `status=success`, `change_type=routine`. If a row is missing, that source didn't run; if status is anything else (`aborted` = rejection-rate threshold exceeded, `failed` = exception raised), look at `error_excerpt`.
 - **`recent_runs.sql` query 3** (daily volume) — `total_inserted` per source per day should be small for routine extracts (single digits to low dozens for daily windows). A sudden jump to thousands means the watermark broke.
 - **`quarantine_check.sql` query 1** — `last_24h` and `last_7d` columns. If they were 0 yesterday and >0 today, the source published a record your schema rejected. Drill into query 3 for the actual `failure_reason`.
 - **`watermark_health.sql` query 2** — `watermark_status` column should say "advanced this run" for any source that inserted records. "STUCK — investigate" is the alarm; "stuck (no new records — likely benign)" is fine.
@@ -382,6 +382,7 @@ aws s3 cp s3://${R2_BUCKET_NAME}/<source>/<date>/<key> - --endpoint-url $R2_ENDP
 
 ## See also
 
+- [`cli.md`](cli.md) — deep reference for the `recalls` CLI (flags, change types, per-source quirks)
 - [`development.md`](development.md) — narrative onboarding, environment setup, debugging walkthroughs
 - [`operations.md`](operations.md) — production runbooks, monitoring queries, troubleshooting
 - [`architecture.md`](architecture.md) — system shape and load-bearing invariants

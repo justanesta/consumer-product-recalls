@@ -99,6 +99,11 @@ _extraction_runs = sa.Table(
     sa.Column("error_message", sa.Text),
     sa.Column("raw_landing_path", sa.Text),
     sa.Column("change_type", sa.Text),
+    sa.Column("response_status_code", sa.Integer),
+    sa.Column("response_etag", sa.Text),
+    sa.Column("response_last_modified", sa.Text),
+    sa.Column("response_body_sha256", sa.Text),
+    sa.Column("response_headers", postgresql.JSONB),
 )
 
 _CPSC_SOURCE = "cpsc"
@@ -245,6 +250,7 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
             raise TransientExtractionError(f"CPSC network error: {exc}") from exc
 
         if response.status_code == 200:
+            self._capture_response(response)
             data = response.json()
             return data if isinstance(data, list) else []
         if response.status_code == 429:
@@ -316,6 +322,12 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
                 result.records_rejected_validate + result.records_rejected_invariants
             )
             row["raw_landing_path"] = result.raw_landing_path
+        if self._captured_response_status_code is not None:
+            row["response_status_code"] = self._captured_response_status_code
+            row["response_etag"] = self._captured_response_etag
+            row["response_last_modified"] = self._captured_response_last_modified
+            row["response_body_sha256"] = self._captured_response_body_sha256
+            row["response_headers"] = self._captured_response_headers
         try:
             with self._engine.begin() as conn:
                 conn.execute(_extraction_runs.insert().values(**row))

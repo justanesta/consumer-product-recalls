@@ -50,7 +50,7 @@ select
     sum(records_extracted)          as total_extracted,
     sum(records_inserted)           as total_inserted,
     sum(records_rejected)           as total_rejected,
-    count(*) filter (where status != 'completed') as failed_runs
+    count(*) filter (where status != 'success') as failed_runs
 from extraction_runs
 where started_at > now() - interval '14 days'
 group by 1, 2

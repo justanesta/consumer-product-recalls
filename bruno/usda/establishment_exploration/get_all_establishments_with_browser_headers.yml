@@ -1,0 +1,76 @@
+info:
+  name: Get All Establishments (Browser-Headers A/B Probe)
+  type: http
+  seq: 6
+
+http:
+  method: GET
+  url: "{{establishment_root_uri}}"
+  auth: inherit
+
+headers:
+  User-Agent: "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0"
+  Accept: "application/json,*/*"
+  Accept-Language: "en-US,en;q=0.9"
+  Accept-Encoding: "gzip, deflate"
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("status is 200", function() {
+          expect(res.status).to.equal(200);
+        });
+
+        test("log response headers (caching and identity) — compare against cardinality probe", function() {
+          console.log("=== A/B comparison: this request vs get_all_establishments_cardinality.yml ===");
+          console.log("etag: " + res.headers['etag']);
+          console.log("last-modified: " + res.headers['last-modified']);
+          console.log("cache-control: " + res.headers['cache-control']);
+          console.log("x-drupal-dynamic-cache: " + res.headers['x-drupal-dynamic-cache']);
+          console.log("x-cache: " + res.headers['x-cache']);
+          console.log("age: " + res.headers['age']);
+          console.log("server: " + res.headers['server']);
+          console.log("via: " + res.headers['via']);
+        });
+
+        test("record count sanity check", function() {
+          if (Array.isArray(res.body)) {
+            console.log("record count: " + res.body.length);
+          }
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: |-
+  A/B sibling of `get_all_establishments_cardinality.yml`. The cardinality probe sends Bruno's
+  default headers (no explicit User-Agent / Accept). This request mirrors the production
+  extractor's `browser_headers()` (Firefox/Linux UA + matching Accept / Accept-Language /
+  Accept-Encoding from `src/extractors/_fsis_headers.py`).
+
+  Hypothesis: Akamai's bot-manager scoring routes browser-fingerprinted requests through a
+  different cache tier than Bruno-default requests. On the recall API this is documented as
+  Finding O. The 2026-05-03 production extraction observed `etag` and `last-modified` populated
+  on the establishment endpoint — directly contradicting Finding A's "absent" conclusion. If
+  this request returns those headers and the original cardinality probe still doesn't, the
+  contradiction is explained by request fingerprint, not API behavior change.
+
+  How to use:
+  1. `bru run bruno/usda/establishment_exploration/get_all_establishments_cardinality.yml`
+     — capture the original probe's headers (expect: etag absent).
+  2. `bru run bruno/usda/establishment_exploration/get_all_establishments_with_browser_headers.yml`
+     — this request (expect: etag and last-modified present).
+  3. Compare the logged headers across the two runs.
+
+  Outcomes:
+  - etag/last-modified present in (2), absent in (1) → fingerprint-dependent; Finding A was
+    correct for Bruno-default fingerprint, incorrect for browser fingerprint. Update Finding A
+    to reflect the dependency. Production extractor uses browser headers, so the conditional-
+    GET optimization IS available.
+  - etag/last-modified present in both → API behavior changed since 2026-04-29. Update Finding A.
+  - etag/last-modified absent in both (this request) → re-investigate; maybe the production
+    capture data is anomalous. Revisit migration 0010 capture path.

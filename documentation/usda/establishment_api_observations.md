@@ -35,26 +35,35 @@ The highest-priority unknowns before building the extractor are:
 
 ## Response Shape
 
-### Finding A — Response is a flat JSON array; no pagination; no ETag
+### Finding A — Response shape is fingerprint-dependent; no pagination
 
-Confirmed 2026-04-29 via `establishment_exploration/get_all_establishments_cardinality.yml`.
+Originally confirmed 2026-04-29; revised 2026-05-03 after production capture data and A/B verification reversed the headline ETag conclusion.
 
-Response is a bare flat JSON array — no pagination envelope, no `_links`, `pager`, `meta`, `next`,
-`page_count`, or `total` keys. The entire 7,945-record dataset is returned in one response.
+**No pagination (unchanged).** Response is a bare flat JSON array — no pagination envelope, no `_links`, `pager`, `meta`, `next`, `page_count`, or `total` keys. The entire 7,945-record dataset is returned in one response. Holds across both fingerprints studied below.
 
-**No ETag and no CDN caching** — critical contrast with the recall API:
+**ETag presence is fingerprint-dependent.** The original observation — "no ETag, no CDN caching" — was correct *for the request fingerprint Bruno was using*, but does not reflect the production extractor's behavior:
 
-| Header | Recall API (full dump) | Establishment API |
+| Header | Establishment API (Bruno default UA) | Establishment API (browser fingerprint, prod path) |
 |---|---|---|
-| `etag` | Present (`"1777472976"`) | **Absent** |
-| `cache-control` | `public, max-age=3100` | `max-age=0, no-cache, no-store` |
-| `x-drupal-dynamic-cache` | varies | `UNCACHEABLE (poor cacheability)` |
-| `transfer-encoding` | — | `chunked` (no `content-length`) |
+| `etag` | **Absent** | **Present** (`"1777668683"`) |
+| `last-modified` | **Absent** | **Present** (`Fri, 01 May 2026 20:51:23 GMT`) |
+| `cache-control` | `max-age=0, no-cache, no-store` | `public, max-age=31705` |
+| `x-drupal-cache` | `UNCACHEABLE (request policy)` | `HIT` |
+| `x-drupal-dynamic-cache` | `UNCACHEABLE (poor cacheability)` | `UNCACHEABLE (poor cacheability)` |
+| `transfer-encoding` / `content-length` | `chunked` / absent | — / `809793` |
 
-**The ETag conditional-GET optimization used by `UsdaExtractor` is NOT available here.**
-Every extraction run must download the full dataset. At 7,945 records this is acceptable — the
-recall API's ETag optimization was motivated by its 12 MB payload; the establishment dataset is
-smaller. Content-hash dedup (ADR 0007) handles idempotency on the loader side.
+**Mechanism: Akamai bot-manager scoring.** The establishment endpoint sits behind Akamai on the same `www.fsis.usda.gov` infrastructure as the recall API (Finding O on the recall side). Requests with bot-y fingerprints (Bruno's default UA, no matching Accept headers) score as suspicious and route through Drupal's no-cache "request policy" path, which generates a fresh response without ETag. Requests with browser fingerprints (Firefox UA + matching `Accept` / `Accept-Language` / `Accept-Encoding`) score as benign and get served from Drupal's static page cache, which provides a stable ETag derived from the cached snapshot's timestamp.
+
+The `x-drupal-cache` flip (`UNCACHEABLE (request policy)` → `HIT`) is the smoking gun: Drupal explicitly rejected the Bruno-default request for caching *before* any cache lookup, then accepted the browser-fingerprint request to a cached snapshot. The `(request policy)` qualifier rules out a "uniformly uncacheable response" interpretation — the rejection is request-side, not response-side.
+
+**The ETag conditional-GET optimization IS available** to the production extractor, which uses `browser_headers()` per `src/extractors/_fsis_headers.py`. The original "NOT available" conclusion was based on Bruno-default-fingerprint observations that don't reflect production behavior.
+
+**Verification artifacts:**
+- `bruno/usda/establishment_exploration/get_all_establishments_cardinality.yml` — original Bruno-default probe; still reproduces the no-ETag case.
+- `bruno/usda/establishment_exploration/get_all_establishments_with_browser_headers.yml` — A/B sibling that adds browser headers; observes ETag and Last-Modified populated.
+- `extraction_runs.response_etag` and `response_last_modified` columns (migration 0010) capture per-run ETag values from the production extractor for ongoing viability study via `scripts/sql/_pipeline/etag_viability.sql`.
+
+**Implementation status:** `UsdaEstablishmentExtractor` does NOT yet send `If-None-Match` or `If-Modified-Since` — every run remains a full dump (~810 KB compressed). The conditional-GET enablement is a separate workstream (see `project_scope/implementation_plan.md` § "USDA establishment ETag enablement"), gated on the same multi-day viability evidence as the recall endpoint. Bronze content-hash dedup (ADR 0007) continues to handle idempotency until then.
 
 ---
 

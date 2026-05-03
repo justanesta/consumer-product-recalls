@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from importlib.metadata import version as _pkg_version
 from typing import Annotated
 
 import typer
@@ -34,7 +35,7 @@ def _validate_change_type(value: str) -> str:
 @app.command()
 def version() -> None:
     """Print the current version."""
-    typer.echo("consumer-product-recalls 0.1.0")
+    typer.echo(f"consumer-product-recalls {_pkg_version('consumer-product-recalls')}")
 
 
 @app.command()

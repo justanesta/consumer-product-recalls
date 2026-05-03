@@ -99,6 +99,11 @@ _extraction_runs = sa.Table(
     sa.Column("error_message", sa.Text),
     sa.Column("raw_landing_path", sa.Text),
     sa.Column("change_type", sa.Text),
+    sa.Column("response_status_code", sa.Integer),
+    sa.Column("response_etag", sa.Text),
+    sa.Column("response_last_modified", sa.Text),
+    sa.Column("response_body_sha256", sa.Text),
+    sa.Column("response_headers", postgresql.JSONB),
 )
 
 _FDA_SOURCE = "fda"
@@ -348,6 +353,11 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
             self._capture_error_response(url, response)
             raise TransientExtractionError(f"FDA HTTP {response.status_code}")
 
+        # Capture only the first page: subsequent pages are pagination follow-ups
+        # whose headers don't carry the conditional-GET semantics we're studying.
+        if start == 1:
+            self._capture_response(response)
+
         return self._parse_bulk_post_response(response.json(), url)
 
     def _parse_bulk_post_response(self, body: dict[str, Any], url: str) -> list[dict[str, Any]]:
@@ -458,6 +468,12 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
                 result.records_rejected_validate + result.records_rejected_invariants
             )
             row["raw_landing_path"] = result.raw_landing_path
+        if self._captured_response_status_code is not None:
+            row["response_status_code"] = self._captured_response_status_code
+            row["response_etag"] = self._captured_response_etag
+            row["response_last_modified"] = self._captured_response_last_modified
+            row["response_body_sha256"] = self._captured_response_body_sha256
+            row["response_headers"] = self._captured_response_headers
         try:
             with self._engine.begin() as conn:
                 conn.execute(_extraction_runs.insert().values(**row))
