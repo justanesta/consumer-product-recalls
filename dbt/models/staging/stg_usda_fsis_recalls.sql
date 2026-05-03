@@ -13,6 +13,13 @@
 -- representation verbatim (Finding C — many fields use '' as a missing-value
 -- sentinel). Silver normalizes empty strings to null so downstream consumers
 -- don't have to remember the dance.
+--
+-- HTML-entity decode on `establishment` per
+-- documentation/usda/establishment_join_coverage.md: the recall API returns
+-- names with `&#039;` (apostrophe) and `&amp;` (ampersand), while the
+-- Establishment Listing API returns plain text. Decoding on the recall side
+-- before the silver join lifts the per-distinct-name match rate from 82.85%
+-- to ~97%. Two replaces, no macro — minimal entity surface.
 
 with ranked as (
     select
@@ -36,7 +43,10 @@ select
     archive_recall,
     active_notice,
     related_to_outbreak,
-    nullif(establishment, '')       as establishment,
+    nullif(
+        replace(replace(establishment, '&#039;', E'\''), '&amp;', '&'),
+        ''
+    )                               as establishment,
     nullif(recall_reason, '')       as recall_reason,
     nullif(processing, '')          as processing,
     nullif(states, '')              as states,

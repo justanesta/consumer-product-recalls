@@ -64,6 +64,30 @@ models:
         tests:
           - not_null
 
+  - name: firm_establishment_attributes
+    description: >
+      FSIS-regulated establishment dim with demographic + geolocation +
+      regulatory metadata. Phase 5b.2 Step 5; one row per establishment_id
+      (= FSIS establishment_number, also written to firm.observed_company_ids
+      for USDA-establishment firms).
+    columns:
+      - name: establishment_id
+        tests:
+          - not_null
+          - unique
+      - name: establishment_name
+        tests:
+          - not_null
+      - name: address
+        tests:
+          - not_null
+      - name: state
+        tests:
+          - not_null
+      - name: zip
+        tests:
+          - not_null
+
   - name: recall_event_firm
     description: Many-to-many between recall events and firms with role.
     columns:

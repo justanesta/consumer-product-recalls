@@ -101,3 +101,38 @@ sources:
       - name: usda_fsis_recalls_rejected
         description: Quarantine table for USDA records that failed validation or invariant checks (ADR 0013).
         loaded_at_field: rejected_at
+
+  - name: usda_establishments
+    description: Bronze layer for USDA FSIS Establishment Listing API, loaded by src.extractors.usda_establishment.UsdaEstablishmentExtractor.
+    schema: public
+    tables:
+      - name: usda_fsis_establishments_bronze
+        description: >
+          One row per (source_recall_id, content_hash) landed from the USDA FSIS
+          Establishment Listing API. source_recall_id reuses the bronze identity
+          column convention but holds the FSIS establishment record id, not a
+          recall id. Per-establishment demographic + geolocation snapshot;
+          weekly Mon/Tue source cadence (full dump every run, no incremental
+          filter — see documentation/usda/establishment_api_observations.md).
+        loaded_at_field: extraction_timestamp
+        freshness:
+          # Establishment API publishes weekly Mon/Tue; 14d covers a missed week
+          # plus weekend, 30d flags a real outage. Mirrors usda recalls SLA.
+          warn_after: {count: 14, period: day}
+          error_after: {count: 30, period: day}
+        columns:
+          - name: source_recall_id
+            description: FSIS establishment record id (column name follows the bronze identity convention).
+            tests:
+              - not_null
+          - name: content_hash
+            description: SHA-256 of canonicalized record payload (ADR 0007). Dedup key.
+            tests:
+              - not_null
+          - name: extraction_timestamp
+            description: When the extractor wrote this row.
+            tests:
+              - not_null
+      - name: usda_fsis_establishments_rejected
+        description: Quarantine table for FSIS establishment records that failed validation or invariant checks (ADR 0013).
+        loaded_at_field: rejected_at

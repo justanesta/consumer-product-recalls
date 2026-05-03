@@ -7,8 +7,12 @@
 -- always in the 'manufacturer' role. DISTINCT prevents duplicating the same firm
 -- across multiple products in the same recall event.
 -- USDA contributes a free-text 'establishment' (recalling FSIS-regulated facility)
--- with role='establishment'. company_id is null pending Phase 5b.2 (FSIS
--- Establishment Listing API enrichment will populate it with establishment_id).
+-- with role='establishment'. company_id is populated via a LEFT JOIN against
+-- stg_usda_fsis_establishments matching on normalized establishment_name —
+-- Phase 5b.2 Step 5; covers ~97% of distinct recall names per
+-- documentation/usda/establishment_join_coverage.md (HTML-entity decode applied
+-- on the recall side in stg_usda_fsis_recalls.sql lifts the rate from 82.85%).
+-- Names with no FSIS match keep company_id=null and are unaffected by the join.
 -- Matching by normalized_name enables implicit cross-source firm deduplication:
 -- a firm that appears in multiple sources with the same normalized name will
 -- collapse to a single row with all company IDs in observed_company_ids.
@@ -55,13 +59,15 @@ fda_normalized as (
 
 usda_normalized as (
     select distinct
-        'establishment'              as role,
-        establishment                as raw_name,
-        upper(trim(establishment))   as normalized_name,
-        cast(null as text)           as company_id
-    from {{ ref('stg_usda_fsis_recalls') }}
-    where establishment is not null
-      and trim(establishment) <> ''
+        'establishment'                as role,
+        r.establishment                as raw_name,
+        upper(trim(r.establishment))   as normalized_name,
+        e.establishment_number         as company_id
+    from {{ ref('stg_usda_fsis_recalls') }} r
+    left join {{ ref('stg_usda_fsis_establishments') }} e
+        on upper(trim(r.establishment)) = upper(trim(e.establishment_name))
+    where r.establishment is not null
+      and trim(r.establishment) <> ''
 ),
 
 all_normalized as (

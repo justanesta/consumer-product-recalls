@@ -187,12 +187,50 @@ HTML-decode fall into the fuzzy-match / multi-establishment-split residual.
 
 ---
 
+## Step 5 empirical residual (2026-05-02)
+
+After Step 5 shipped (HTML-entity decode in `stg_usda_fsis_recalls.sql` + silver join in `firm.sql`), the per-distinct-name match rate measured against dev:
+
+| Metric | Pre-Step-5 prediction | Pre-Step-5 actual | Post-Step-5 actual |
+|---|---|---|---|
+| Per-distinct-name match rate | ~97% (lift forecast) | 82.85% (454/548) | **99.27% (543/547)** |
+| Unmatched distinct names | ~17 forecast | 94 | **4** |
+
+The 99.27% beat the ~97% projection — the HTML-decode lift was even cleaner than the heuristic forecast suggested, because nearly all single-name unmatches turned out to carry HTML entities (the projection only sampled the top-20).
+
+The 547 vs 548 distinct-recall-name discrepancy versus the pre-decode count is a result of HTML-decode collapsing one pair (e.g., a recall using `Pilgrim&#039;s Pride Corporation` and another using the plain-text `Pilgrim's Pride Corporation`) into a single normalized name.
+
+### The 4 residual unmatched names — all Finding 3 (multi-establishment fields)
+
+Source query: `scripts/sql/usda_establishments/silver/list_unmatched_recall_names.sql`.
+
+| # | `establishment` value (verbatim) | Distinct firms encoded |
+|---|---|---|
+| 1 | `Ajinomoto Foods North America, Ajinomoto Toyo Frozen Noodle, Inc., Ajinomoto Foods North America` | 2 |
+| 2 | `FreshRealm, FreshRealm, FreshRealm` | 1 |
+| 3 | `Freshrealm, FreshRealm` | 1 |
+| 4 | `Freshrealm, FreshRealm, California Ranch Food Company` | 2 |
+
+**All 4 unmatched residuals are the multi-establishment-field shape from Finding 3 above.** The other failure modes the pre-Step-5 audit anticipated (HTML entities, name-variation drift) were resolved by the HTML-decode and contributed zero residual. Finding 3 — speculated as ~5% of unmatched in the projection — turned out to be 100% of the post-decode residual.
+
+The individual firms encoded in these 4 strings (Ajinomoto Foods North America, Ajinomoto Toyo Frozen Noodle, Inc., FreshRealm, California Ranch Food Company) are all almost certainly present in `firm_establishment_attributes` — a per-firm match rate after splitting these strings would land at essentially 100%. Only the comma-concatenated string can't be matched as a unit.
+
+### Phase 6 hand-off
+
+When firm entity resolution is built (Phase 6 per ADR 0002), the multi-establishment shape needs a split-and-match pass on the recall side. **Mind the embedded comma in entity suffixes** — `Ajinomoto Toyo Frozen Noodle, Inc.` contains a comma inside the firm name, so naive `string_split(establishment, ', ')` produces wrong fragments. Suggested approaches:
+
+- Regex split on `,\s*(?!Inc|Co|LLC|Corp|Ltd|LP)\b` — split only on commas not followed by corporate suffixes.
+- Or: tolerate the false-split risk and rely on fuzzy matching to recover (`Ajinomoto Toyo Frozen Noodle` and `Inc.` would each fuzzy-match, with `Inc.` getting low scores everywhere and dropping out).
+- Or: build a `recall_establishment_link` bridge table at silver where each (recall, establishment) pair is one row, populated by parsing the multi-value field. More invasive but produces clean joins.
+
+The 4 records currently produce `firm` rows with comma-concatenated `canonical_name` values. Those rows are findable in `firm` but won't naturally match cross-source (CPSC/FDA wouldn't write a multi-firm name). Phase 6 firm resolution can either re-collapse these or accept them as v1 noise.
+
+---
+
 ## Open items
 
 - [x] Confirm recall→establishment match rate (Step 3 deliverable) — done.
-- [ ] Apply HTML-decode in `stg_usda_fsis_recalls.sql` (Step 5 work).
-- [ ] Implement the silver join in `firm.sql` to populate `observed_company_ids`
-  with `establishment_id` for matched USDA rows (Step 5 work).
-- [ ] Re-run this probe after the ADR 0027 refactor to confirm the join
-  numbers don't change (they shouldn't — empty-string normalization doesn't
-  affect the `establishment` field which is text, but worth confirming).
+- [x] Apply HTML-decode in `stg_usda_fsis_recalls.sql` (Step 5) — done 2026-05-02.
+- [x] Implement the silver join in `firm.sql` to populate `observed_company_ids` with `establishment_number` for matched USDA rows (Step 5) — done 2026-05-02.
+- [x] Confirm the ADR 0027 refactor didn't change the join numbers — confirmed via dev rebaseline 2026-05-02; bronze representation differences for `establishment` were absent (text field, no `""` sentinel issues).
+- [ ] **Phase 6 follow-up:** handle multi-establishment-field splits to recover the 4 residual unmatched recalls (see "Phase 6 hand-off" above).
