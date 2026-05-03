@@ -100,6 +100,13 @@ def test_extract_unknown_source_exits_with_error() -> None:
     assert "Unknown source" in result.output
 
 
+def test_extract_invalid_change_type_exits_with_error() -> None:
+    result = runner.invoke(app, ["extract", "cpsc", "--change-type", "bogus"])
+    assert result.exit_code == 1
+    assert "Invalid --change-type" in result.output
+    assert "must be one of" in result.output
+
+
 def test_extract_fda_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     for k, v in _REQUIRED_ENV.items():
         monkeypatch.setenv(k, v)

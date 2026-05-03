@@ -19,6 +19,14 @@ next extract for the affected source:
 PRs that don't touch these files cannot re-baseline; this playbook doesn't
 apply.
 
+**Watch for delayed absorption.** A re-baseline-worthy change that ships
+without an immediate re-extract on the affected source will roll forward
+silently and absorb on the *next* extract — possibly bundled with an unrelated
+later change. In that case the wave's apparent cause (the most recent commit)
+will not match its actual cause (the earlier deferred change). Tag the run for
+whichever change_type fits the visible commit; don't try to retroactively
+attribute the wave to its true origin.
+
 ## Step 1 — Detection at PR time
 
 Two gates fire automatically on every PR:
@@ -40,7 +48,8 @@ The PR description must include a "Re-baseline plan" section with:
 - **Affected sources** — which `<source>_recalls_bronze` table(s) re-version.
 - **Estimated wave size** — rough %-of-records prediction with reasoning
   (which fields' values change, what % of records carry those values). Doesn't
-  have to be precise; it has to exist.
+  have to be precise; it has to exist. Note: in practice these estimates have
+  been off by ±5x — rely on Step 4 verification SQL, not the prediction.
 - **Coordination note** — if any other PR in flight depends on the old shape,
   call it out.
 

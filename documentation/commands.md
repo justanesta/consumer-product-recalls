@@ -300,6 +300,35 @@ See also: [`operations.md` § Secret rotation runbooks](operations.md#secret-rot
 
 ## Cross-cutting recipes
 
+### Daily extraction simulation
+
+```bash
+# 1. Routine extracts (no flags — mirrors what cron will do)
+recalls extract cpsc
+recalls extract fda
+recalls extract usda
+recalls extract usda_establishments
+
+# 2. Pipeline-health snapshot
+psql -f scripts/sql/_pipeline/recent_runs.sql
+psql -f scripts/sql/_pipeline/quarantine_check.sql
+psql -f scripts/sql/_pipeline/watermark_health.sql
+```
+
+Then if anything in the snapshot looks off for a specific source, drill in with that source's `verify_schema_rebaseline_wave.sql` (the file works for any run, not just rebaselines — pass the routine run's run_id from the log).
+
+#### What to actually look at in the output
+
+- **`recent_runs.sql` query 1** — every source has a row, all show `status=completed`, `change_type=routine`. If a row is missing, that source didn't run; if status is anything else, look at `error_excerpt`.
+- **`recent_runs.sql` query 3** (daily volume) — `total_inserted` per source per day should be small for routine extracts (single digits to low dozens for daily windows). A sudden jump to thousands means the watermark broke.
+- **`quarantine_check.sql` query 1** — `last_24h` and `last_7d` columns. If they were 0 yesterday and >0 today, the source published a record your schema rejected. Drill into query 3 for the actual `failure_reason`.
+- **`watermark_health.sql` query 2** — `watermark_status` column should say "advanced this run" for any source that inserted records. "STUCK — investigate" is the alarm; "stuck (no new records — likely benign)" is fine.
+
+#### Two things you may notice on day-1
+
+1. **CPSC's watermark is far in the past** (currently `2025-04-21` from your earlier override). Tomorrow's routine run will fetch ~143 records (the buffer-window backfill) plus anything published today. After that one run, the watermark advances to ~today and subsequent days will fetch single digits.
+2. **USDA recalls and USDA establishments will fetch the full payload every run** (~2002 and ~7945 records respectively) regardless of watermark — that's by design per Finding D. The `inserted` count should be tiny (1-10) once bronze is stable; the high `extracted` count is normal.
+
 ### Fresh-clone setup, end to end
 
 ```bash
