@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -16,7 +17,11 @@ runner = CliRunner()
 def test_version_command_prints_expected_string() -> None:
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "consumer-product-recalls 0.1.0" in result.output
+    # Verify the output shape (package name + version-looking suffix) without
+    # pinning to a specific version number — version is read at runtime via
+    # importlib.metadata, so hardcoding "0.1.0" here would force a test edit
+    # on every pyproject.toml bump for no real signal.
+    assert re.match(r"^consumer-product-recalls \d+\.\d+\.\d+", result.output)
 
 
 def test_version_command_exits_with_zero_exit_code() -> None:
