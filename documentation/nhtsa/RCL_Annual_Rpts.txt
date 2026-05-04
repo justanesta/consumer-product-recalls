@@ -1,0 +1,41 @@
+RECALL ANNUAL REPORTS 
+
+The Recall Annual Reports flat file contains Recall Annual Report data:
+  a. The recall must have its 6th quarterly report due on the 3rd quarter of 2021 or later. 
+  b. Within this subset, the recall must have at least 8 successfully submitted quarterly reports and 
+  c. 12 months must have occurred since the reporting period of the 8th successfully submitted quarterly report
+
+File characteristics:
+
+-  All the records are TAB delimited
+-  All dates are in YYYYMMDD format
+
+-  Maximum Record length: 207
+
+Change log:
+1.Field #8, Replaced REPORT_YEAR with RPT_PERIOD November 14, 2023
+
+
+Last Updated April 1, 2023
+Last Updated November 14, 2023
+
+
+FIELDS:
+=======
+
+Field#   Name          Type/Size   Description                      
+------   -----------   ---------   ----------------------------------------
+1        MFGTXT        CHAR(40)    MANUFACTURER NAME 
+2        CAMPNO        CHAR(12)    NHTSA CAMPAIGN NUMBER
+3        MFGCAMPNO     CHAR(20)    MFR CAMPAIGN NUMBER
+4        RCLSUBJ       CHAR(50)    RECALL SUBJECT 
+5        ODATE         CHAR(8)     OWNER NOTIFICATION BEGIN DATE (YYYYMMDD)
+6        ODATEEND      CHAR(8)     OWNER NOTIFICATION END DATE (YYYYMMDD)
+7        RPTNO         NUMBER(9)   REPORT NUMBER 
+8        RPT_PERIOD    CHAR(16)    REPORTING PERIOD (START YEAR-QUARTER to END YEAR-QUARTER)
+9        INVOLVED      NUMBER(9)   INVOLVED POPULATION  
+10       TTLREMEDIED   NUMBER(9)   TOTAL REMEDIED
+11       TTLUNREACH    NUMBER(9)   TOTAL UNREACHABLE 
+12       TTLREMOVED    NUMBER(9)   TOTAL REMOVED                
+13       SUBMDATE      CHAR(8)     SUBMISSION DATE (YYYYMMDD)
+

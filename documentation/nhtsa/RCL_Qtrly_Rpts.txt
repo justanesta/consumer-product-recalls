@@ -1,0 +1,36 @@
+RECALL QUARTERLY REPORTS 
+
+The Recall Quarterly Reports flat file contains Recall Quarterly Report data from Year 2015 Quarter 1 (2015-1) onward.
+
+File characteristics:
+
+-  All the records are TAB delimited
+-  All dates are in YYYYMMDD format
+
+-  Maximum Record length: 200
+
+Change log:
+
+
+Last Updated May 20, 2016
+
+
+FIELDS:
+=======
+
+Field#   Name          Type/Size   Description                      
+------   -----------   ---------   ----------------------------------------
+1        MFGTXT        CHAR(40)    MANUFACTURER NAME 
+2        CAMPNO        CHAR(12)    NHTSA CAMPAIGN NUMBER
+3        MFGCAMPNO     CHAR(20)    MFR CAMPAIGN NUMBER
+4        RCLSUBJ       CHAR(50)    RECALL SUBJECT 
+5        ODATE         CHAR(8)     OWNER NOTIFICATION BEGIN DATE (YYYYMMDD)
+6        ODATEEND      CHAR(8)     OWNER NOTIFICATION END DATE (YYYYMMDD)
+7        RPTNO         NUMBER(9)   REPORT NUMBER 
+8        RPTQTR        CHAR(9)     REPORT QUARTER (YYYY-Q)
+9        INVOLVED      NUMBER(9)   INVOLVED POPULATION  
+10       TTLREMEDIED   NUMBER(9)   TOTAL REMEDIED
+11       TTLUNREACH    NUMBER(9)   TOTAL UNREACHABLE 
+12       TTLREMOVED    NUMBER(9)   TOTAL REMOVED                
+13       SUBMDATE      CHAR(8)     SUBMISSION DATE (YYYYMMDD)
+

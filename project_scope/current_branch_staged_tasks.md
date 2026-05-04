@@ -44,4 +44,24 @@ Then write documentation/nhtsa/flat_file_observations.md capturing:
 - Any schema-drift history visible from prior versions if NHTSA archives them
 - Whether Last-Modified HTTP header on the download is reliable for watermarking                                                                                                                                                                          
                          
-That doc is your Step 1 PR. Step 2 (schema + extractor + migration) builds against the documented shape.
+That doc is your Step 1. Step 2 (schema + extractor + migration) builds against the documented shape.
+
+1. Probe the watermark. Re-run curl -sI on the directory (or 2-3 files) tomorrow and confirm all Last-Modified values      
+advance in lockstep. That nails down the watermark verdict.
+2. Download and inspect. Pull these into data/exploratory/:                                                                
+`cd data/exploratory/`
+```
+for f in FLAT_RCL_POST_2010 FLAT_RCL_PRE_2010 RCL_FROM_2025_2025 RCL_FROM_2025_2026 RCL_FROM_2000_2004; do                 
+    curl -O https://static.nhtsa.gov/odi/ffdd/rcl/${f}.zip                                                                   
+done
+```                                                                                                                 
+3. Confirm column count + encoding. Run the §2 + §3 probes from earlier on FLAT_RCL_POST_2010.zip (the canonical big file).
+Verify it's 29 tab-delimited columns matching RCL.txt and document the encoding verdict.                                  
+4. Confirm the rolling-window naming convention (the 2025_2025 vs 2025_2026 question). This shapes your
+config/sources/nhtsa.yaml.                                                                                                 
+5. Confirm the small year-band files' purpose. If they're stubs, ignore them and document why. If they're real slices, you
+have an even cleaner per-year incremental option.                                                                          
+6. Grab Import_Instructions_Recalls.pdf — it's the official format spec from 2023. RCL.txt is the data dictionary; the PDF
+likely covers parsing rules, escape conventions, and known-edge-cases. Read it once, capture relevant findings into        
+flat_file_observations.md, then drop the PDF (don't commit a 1 MB PDF).
+7. Write up findings. Each of the 6 bullets in the doc gets answered with evidence from these probes.
