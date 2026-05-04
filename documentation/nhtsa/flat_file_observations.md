@@ -1,21 +1,29 @@
 # NHTSA Flat-File Source — Empirical Observations
 
-> **Status: Exploration in progress (Phase 5c Step 1).** Finding A confirmed
-> 2026-05-04. Findings B–C gated on the multi-day watermark study now running
-> via `scripts/nhtsa/probe_watermarks.sh`. Findings D–H pending probe.
-> Evidence accumulates in `documentation/nhtsa/watermark_probes.jsonl`.
+> **Status: Exploration substantially complete (Phase 5c Step 1).**
+> Findings A, B (partial), D, E, F, G, H, I confirmed 2026-05-04.
+> Architecture decision **resolved as Option A (TSV-only)** after Finding I
+> revealed CSV files are a structurally divergent document-attachment index
+> rather than recall data. Only Finding C (multi-day probe of S3
+> wrapper-byte stability and update-cadence) remains pending — gated on
+> ≥7 days of probe accumulation. Evidence accumulates in
+> `documentation/nhtsa/watermark_probes.jsonl` plus Step 2 download
+> artifacts in `data/exploratory/nhtsa/` (gitignored).
 
 ## Background
 
 NHTSA publishes safety-related recall data as flat files served from
 `https://static.nhtsa.gov/odi/ffdd/rcl/`. The directory contains a
-documentation PDF, an inline data dictionary (`RCL.txt`), and a set of
-TSV-inside-ZIP archives organized by year band:
+documentation PDF, an inline data dictionary (`RCL.txt`), and **two
+parallel corpora in different formats** (Finding I):
 
-- `FLAT_RCL_PRE_2010.zip` (~7 MB) — historical 1967–2009
-- `FLAT_RCL_POST_2010.zip` (~14 MB) — historical 2010–present
-- `RCL_FROM_<YYYY>_<YYYY>.zip` — year-band slices, sizes from 1 KB to 6 MB
-- `FLAT_RCL_Annual_Rpts.zip` / `FLAT_RCL_Qrtly_Rpts.zip` — periodic rollups
+- **TSV family** (`.txt` inner, tab-delimited per RCL.txt's documented schema):
+  - `FLAT_RCL_PRE_2010.zip` (~7 MB compressed, 80 MB uncompressed) — 1967–2009
+  - `FLAT_RCL_POST_2010.zip` (~14 MB compressed, 290 MB uncompressed) — 2010–present
+  - `FLAT_RCL_Annual_Rpts.zip` / `FLAT_RCL_Qrtly_Rpts.zip` — periodic rollups
+- **CSV family** (`.csv` inner, undocumented in RCL.txt):
+  - `RCL_FROM_<startYear>_<endYear>.csv` — year-band slices and rolling-current
+    files, sizes from 1.7 KB to 84 MB uncompressed
 
 The source is hosted directly from S3 (no public CDN cache layer
 detectable in HEAD responses — see Finding G for header inventory). The
@@ -35,15 +43,22 @@ The five questions Step 1 must answer per
 
 These are answered across Findings A–H below.
 
-## Source mapping (working hypothesis)
+## Source mapping (decided: Option A)
 
-The eventual `NhtsaExtractor` will need both code paths required by the
-plan's standing architectural requirement (lines 145–152):
+The eventual `NhtsaExtractor` will use the same TSV corpus for both code
+paths required by the plan's standing architectural requirement (lines
+145–152). Options B and C were eliminated by Finding I: the CSV files are
+a document-attachment index, not recall data — they do not carry the
+fields the extractor needs.
 
-| Path | Candidate URL | Size | Confirmed |
-|---|---|---|---|
-| Incremental | `RCL_FROM_2025_2026.zip` | ~90 KB | Pending Finding D |
-| Historical seed | `FLAT_RCL_POST_2010.zip` + `FLAT_RCL_PRE_2010.zip` | ~21 MB total | Pending Finding G |
+| Path | URL | Format | Size | Cadence |
+|---|---|---|---|---|
+| Incremental | `https://static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_POST_2010.zip` | 29-field TSV per RCL.txt | ~14 MB compressed, 290 MB uncompressed | Daily download; bronze content-hash dedup short-circuits idle days (ADR 0007) |
+| Historical seed | `https://static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_PRE_2010.zip` + `FLAT_RCL_POST_2010.zip` | 29-field TSV per RCL.txt | ~21 MB compressed, ~370 MB uncompressed | One-time at seed; weekly defense-in-depth via `deep-rescan-nhtsa.yml` per ADR 0010 |
+
+Combined coverage: 1967ish–present, **~321,800 rows** (81,714 in PRE_2010 +
+240,126 in POST_2010 as of 2026-05-04). Bandwidth tax of ~14 MB/day is
+absorbed cheaply by ADR 0007 content-hashing on idle days.
 
 ---
 
@@ -90,35 +105,59 @@ stops matching ETag, the schema has shifted.
 
 ### Finding B — Last-Modified watermark reliability
 
-> **Status: Pending.** Multi-day probe running since 2026-05-04. Verdict
-> requires ≥7 daily probes, ideally bracketing one observed real upstream
-> content update.
+> **Status: Confirmed unreliable, 2026-05-04 via inner-file mtime
+> evidence from Step 2 download.** Multi-day probe still running for
+> stronger corroboration but not required for the verdict.
 
 **Question:** Does NHTSA's `Last-Modified` header track real content
 changes, or is it re-stamped daily by a regeneration job regardless of
 content?
 
-**Hypothesis (informed by single-probe observation):** Every data file in
-the directory shares `Last-Modified: Mon, 04 May 2026 07:04:23 GMT` while
-`Import_Instructions_Recalls.pdf` retains its true 2023-10-27 stamp. This
-suggests the regen job selectively re-stamps data files but preserves
-documentation PDFs. If the multi-day study confirms data-file
-`Last-Modified` advances daily while ETag and body sha256 remain stable,
-`Last-Modified` is unreliable for `If-Modified-Since` conditional GETs.
+**Result: HTTP `Last-Modified` is unreliable.** The Step 2 download
+preserved each ZIP's inner-file mtime (via `curl --remote-time`), which
+exposed a discrepancy that the wrapper's HTTP `Last-Modified` hides:
 
-**Method:** Run `scripts/nhtsa/probe_watermarks.sh` daily for ≥7 days.
-Then run analysis snippets at the bottom of the script to compare:
+| File | Wrapper HTTP `Last-Modified` | Inner-file mtime |
+|---|---|---|
+| `RCL_FROM_2025_2025.csv` | `Mon, 04 May 2026 07:04:23 GMT` | `2025-12-31 08:02` |
+| `RCL_FROM_2025_2026.csv` | `Mon, 04 May 2026 07:04:23 GMT` | `2026-05-04 07:01` |
+| `FLAT_RCL_POST_2010.txt`  | `Mon, 04 May 2026 07:04:23 GMT` | `2026-05-04 07:02` |
+| Other archives | `Mon, 04 May 2026 07:04:23 GMT` | `2026-05-04 07:01` |
 
-- distinct `last_modified` values per file
-- distinct `etag` values per file
-- distinct `body_sha256` values per file
+`RCL_FROM_2025_2025.csv` was last actually regenerated on 2025-12-31 —
+~125 days ago — but its wrapping ZIP shows today's `Last-Modified`. The
+daily regen job re-stamps wrapper ZIPs without re-generating their
+contents.
 
-If `etag` distinct count = 1 but `last_modified` distinct count > 1 for
-a given file, regen-stamp confirmed.
+**Implications:**
 
-**Result:** Pending.
+- The `NhtsaExtractor` must NOT use `If-Modified-Since` conditional GETs.
+  HTTP `Last-Modified` advances on idle days for files whose contents
+  haven't changed in months.
+- Use bronze content-hash dedup (ADR 0007). Tomorrow's probe will reveal
+  whether the wrapper ZIP bytes themselves change daily (re-archived with
+  a fresh timestamp) or stay stable (metadata-only touch). Either way the
+  content-hash strategy works: stable-bytes files short-circuit at the
+  wrapper hash; daily-rezipped files bypass wrapper hash but get caught
+  at the inner-content level on inspection.
+- The inner-file mtime is a strong watermark candidate by itself. Once
+  the extractor has decompressed the wrapper, it can read the inner mtime
+  via `zipfile.ZipInfo.date_time` and skip extraction work entirely if
+  the value matches the prior run's recorded mtime. Worth implementing as
+  an optimization in `_FlatFileExtractor`.
 
-**Implications (when resolved):**
+**Multi-day corroboration (in flight):** The watermark probe will
+strengthen the verdict from another angle — if `etag` and `body_sha256`
+stay constant across days for `RCL_FROM_2025_2025.zip` while
+`last_modified` advances, the regen-stamp is content-blind on the
+wrapper layer too. Tomorrow's probe is sufficient signal.
+
+**Original method (now redundant but preserved for audit trail):** Run
+`scripts/nhtsa/probe_watermarks.sh` daily for ≥7 days; compare distinct
+`last_modified` vs `etag` vs `body_sha256` values per file via the
+analysis snippets at the bottom of the script.
+
+**Implications (legacy framing):**
 
 - If `Last-Modified` is content-blind: drop conditional-GET via
   `If-Modified-Since`; rely on bronze content-hash dedup (ADR 0007).
@@ -155,36 +194,45 @@ TBD.
 
 ### Finding D — Year-band URL pattern (2025_2025 vs 2025_2026)
 
-> **Status: Pending.** Inspection probe to be run before extractor work.
+> **Status: Confirmed 2026-05-04 via inner-file mtime evidence from
+> Step 2 download.**
 
 **Question:** What is the naming convention for `RCL_FROM_<YYYY>_<YYYY>.zip`,
 and which file is the "current rolling window" that `NhtsaExtractor` should
 hit incrementally?
 
-**Observed shape:** Both `RCL_FROM_2025_2025.zip` (89 KB) and
-`RCL_FROM_2025_2026.zip` (90 KB) coexist in the directory. Plausible
-explanations:
+**Result:** The naming convention is `RCL_FROM_<startYear>_<endYear>.zip`,
+where the file with the highest `endYear` is the **rolling current**.
+Files with `endYear` < current calendar year are **frozen snapshots**:
 
-- 2025_2025 = "calendar year 2025 only" (frozen snapshot once 2025 closed),
-  2025_2026 = rolling window through current year.
-- 2025_2025 is the previous current-window file that NHTSA hasn't
-  deprecated.
+| File | Inner-file mtime | Interpretation |
+|---|---|---|
+| `RCL_FROM_2025_2025.zip` | 2025-12-31 08:02 | Frozen — final 2025 snapshot, regenerated only on year-close |
+| `RCL_FROM_2025_2026.zip` | 2026-05-04 07:01 | Rolling current — regenerated daily as new records arrive |
 
-**Method:**
+The rolling-current file is the incremental candidate (Option B / Option C
+in the source-mapping table). Sizes are similar (~1.3 MB uncompressed each)
+because the rolling file mostly contains 2025 records plus a small 2026 tail.
 
-```bash
-cd data/exploratory/nhtsa/
-curl -O https://static.nhtsa.gov/odi/ffdd/rcl/RCL_FROM_2025_2025.zip
-curl -O https://static.nhtsa.gov/odi/ffdd/rcl/RCL_FROM_2025_2026.zip
-unzip -p RCL_FROM_2025_2025.zip <inner.txt> | wc -l
-unzip -p RCL_FROM_2025_2026.zip <inner.txt> | wc -l
-unzip -p RCL_FROM_2025_2025.zip <inner.txt> | awk -F'\t' '{print $17}' | sort -u | tail
-unzip -p RCL_FROM_2025_2026.zip <inner.txt> | awk -F'\t' '{print $17}' | sort -u | tail
-```
+**Cache-control corroboration (Finding G):** the cache-control max-age
+TTL for `RCL_FROM_2025_2026.zip` is regen-aware (~17.8 hours, expiring
+just after the next 07:04 GMT regen) while `RCL_FROM_2025_2025.zip` has
+the default ~24h TTL — consistent with the frozen-vs-rolling distinction.
 
-(Field 17 is `DATEA`, record creation date YYYYMMDD per RCL.txt.)
+**Open caveat — rotation rule on year transitions:** we cannot tell from
+one observation whether NHTSA will publish `RCL_FROM_2025_2027.zip` in
+January 2027 (start year stays at 2025) or `RCL_FROM_2026_2027.zip` (start
+year advances annually). The `config/sources/nhtsa.yaml` URL must be
+templated to handle whichever pattern emerges, with a fallback probe in
+the extractor for the alternative naming. Reconfirm in early 2027.
 
-**Result:** Pending.
+**Implications:**
+
+- For Option B / Option C architecture: incremental URL is
+  `RCL_FROM_2025_2026.zip` until end of calendar 2026.
+- Year-transition handling: schedule a calendar reminder for late 2026
+  to re-probe the directory and update the YAML once NHTSA's 2027 naming
+  is observable.
 
 **Implications (when resolved):**
 
@@ -193,29 +241,87 @@ unzip -p RCL_FROM_2025_2026.zip <inner.txt> | awk -F'\t' '{print $17}' | sort -u
 
 ---
 
-### Finding E — TSV column count and encoding
+### Finding E — TSV column count, encoding, and embedded HTML
 
-> **Status: Pending.** File inspection to be run before extractor work.
+> **Status: Confirmed 2026-05-04 via direct inspection of
+> `FLAT_RCL_POST_2010.txt`.**
 
 **Question:** Does the live file match RCL.txt's documented 29-field
-shape? What text encoding is used (UTF-8, Windows-1252)?
+shape? What text encoding is used? Are there parser-relevant surprises
+in the field contents?
 
-**Method:**
+**Result:**
 
-```bash
-unzip -p FLAT_RCL_POST_2010.zip <inner.txt> | head -1 | awk -F'\t' '{print NF}'
-unzip -p FLAT_RCL_POST_2010.zip <inner.txt> | head -c 4096 | file -
-unzip -p FLAT_RCL_POST_2010.zip <inner.txt> | iconv -f UTF-8 -t UTF-8 >/dev/null
-unzip -p FLAT_RCL_POST_2010.zip <inner.txt> | iconv -f CP1252 -t UTF-8 >/dev/null
+| Property | Value |
+|---|---|
+| Field count | **29 fields** — matches RCL.txt's documented schema exactly |
+| Delimiter | tab (`\t`) |
+| Header row | **none** — first line is a data record |
+| Encoding | **UTF-8** (NOT CP1252; iconv UTF-8 round-trip succeeds, CP1252 fails) |
+| Line terminator | **CRLF** (Windows-style; `file` heuristic reports CRLF) |
+| Row count (POST_2010) | 240,126 |
+| Row count (PRE_2010) | 81,714 |
+| Field positions | RECORD_ID/CAMPNO/MAKETXT/MODELTXT/YEARTXT/MFGCAMPNO/COMPNAME/MFGNAME/... per RCL.txt — verified via spot-check of the first record (`81715 │ 10V407000 │ DAMON │ INTRUDER │ 2005 │ RC000018 │ EQUIPMENT:RECREATIONAL VEHICLE/TRAILER:LPG SYSTEMS:TANK ASSEMBLY │ THOR MOTOR COACH │ ...`) |
+
+**Embedded HTML in description fields (parser-relevant surprise):**
+
+The narrative fields (`DESC_DEFECT`, `CONEQUENCE_DEFECT`,
+`CORRECTIVE_ACTION`, `NOTES`) contain **inline HTML anchor tags**, e.g.:
+
+```
+DAMON SAFETY RECALL NO. RC000018.OWNERS MAY ALSO CONTACT THE NATIONAL HIGHWAY
+TRAFFIC SAFETY ADMINISTRATION'S VEHICLE SAFETY HOTLINE AT 1-888-327-4236
+(TTY 1-800-424-9153), OR GO TO
+<A HREF=HTTP://WWW.SAFERCAR.GOV>HTTP://WWW.SAFERCAR.GOV</A> .
 ```
 
-**Result:** Pending.
+This tripped `file`'s content-type heuristic (it reported "HTML document"
+on the file because of these tags). The file is plain UTF-8 text with
+embedded HTML fragments inside specific fields — not actual HTML.
 
-**Implications (when resolved):**
+**Schema-design implications (Phase 5c Step 2 input):**
 
-- Encoding determines `_FlatFileExtractor` decode strategy.
-- Column count divergence from RCL.txt's 29 would indicate undocumented
-  schema drift since the May 2025 RCL.txt update.
+- **Bronze layer:** preserve the raw text as-is, including the HTML tags.
+  ADR 0014's `extra='forbid', strict=True` covers shape; preserving
+  embedded markup as bytes-faithful storage matches the bronze-as-raw
+  principle and lets silver decide how to render.
+- **Silver staging (`stg_nhtsa_recalls.sql`):** strip or decode HTML before
+  presenting to downstream consumers. Two approaches:
+  - **Quick fix:** regex-strip `<A HREF=...>...</A>` to bare URLs.
+  - **Robust fix:** call a dbt macro that wraps Postgres `regexp_replace`
+    or a UDF for full HTML decoding (handles entities, malformed tags).
+- **Per ADR 0027:** this is value-level normalization that belongs in
+  staging, not bronze. The bronze schema accepts the field as-is; the
+  silver staging model produces the cleaned version.
+- **Test cassette must include an HTML-bearing record.** The Damon recall
+  shown above is a representative example. Without one in the suite, the
+  parser's HTML handling never gets exercised under test.
+
+**Other field-content observations from the spot-check:**
+
+- Empty fields are **literal empty strings between consecutive tabs**, not
+  any sentinel value. Confirmed for fields 18 (`RPNO`), 19 (`FMVSS`),
+  25-27 (manufacturer-supplied component fields) on the spot-checked
+  record.
+- `DO_NOT_DRIVE` and `PARK_OUTSIDE` (fields 28-29, added May 2025 per
+  RCL.txt) appear as `No` strings, not booleans. The Pydantic schema
+  needs `_to_bool`-style coercion (string-yes/no → Python bool) similar
+  to USDA's pattern in `src/schemas/usda.py`.
+- `RCL_CMPT_ID` (field 24) appears as a fixed-width-style identifier
+  (`000037237000216701000000332`) — looks like concatenated numeric
+  codes. RCL.txt documents it as "Number That Uniquely Identifies A
+  Recalled Component" but the structure (multiple sub-fields?) isn't
+  documented further. Treat as opaque string at bronze, investigate at
+  silver if needed.
+
+**Caveats not yet probed:**
+
+- Whether the description fields contain **literal newlines or tabs**
+  inside their text (which would break naïve line-by-line / column-split
+  parsing). The single record observed appears clean, but RCL.txt's
+  6,000-char field width and free-text origin make this plausible. Either
+  worth probing explicitly OR deferring to the cassette suite (Step 4) to
+  catch via real failures.
 
 ---
 
@@ -292,45 +398,178 @@ surfaces; `x-amz-version-id` is the unique-upload anchor.
 
 ### Finding H — Update cadence and historical coverage
 
-> **Status: Pending.** Update-cadence verdict alongside Finding B.
-> Historical-coverage probe alongside Finding D/E.
+> **Status: Historical coverage fully confirmed 2026-05-04 via refined
+> date-bound probes (DATEA, RCDATE, BGMAN, ODATE). Update cadence still
+> pending the multi-day watermark probe.**
 
 **Question 1 (update cadence):** How often does NHTSA actually publish
 new content vs re-stamp idle data? Daily? Weekly? In bursts?
 
-**Method:** After multi-day probe accumulates, plot `body_sha256`
-change events per file. The interval between content changes is the
-true publication cadence.
+**Result 1:** Pending. The multi-day probe will reveal this once
+accumulated body_sha256 history shows the interval between content
+changes for `FLAT_RCL_POST_2010.zip` (the production extractor's target).
 
-**Question 2 (historical coverage):** Does `FLAT_RCL_PRE_2010.zip` cover
-the full 1967–2009 range RCL.txt claims, or does it have its own floor?
-Are the small `RCL_FROM_2000_2004.zip` (1 KB) and `RCL_FROM_2005_2009.zip`
-(4 KB) files real data slices or stubs?
+**Question 2 (historical coverage):** What is the actual date range and
+total record count of the TSV archive corpus we're committing to?
 
-**Method:**
+**Result 2 (confirmed 2026-05-04):**
 
-```bash
-unzip -p FLAT_RCL_PRE_2010.zip <inner.txt> | awk -F'\t' '{print $17}' | sort -u | head
-unzip -p FLAT_RCL_PRE_2010.zip <inner.txt> | wc -l
-unzip -p RCL_FROM_2000_2004.zip <inner.txt> | wc -l
-unzip -p RCL_FROM_2005_2009.zip <inner.txt> | wc -l
+Total: **321,840 rows** across PRE_2010 (81,714) + POST_2010 (240,126).
+
+Date bounds vary by which date field you measure — DATEA is record-creation
+in NHTSA's database, not the date of the recall event. The most meaningful
+"recall coverage" measure is RCDATE (Part 573 Defect/Noncompliance Report
+Received Date):
+
+| Field (RCL.txt) | PRE_2010 lower bound | PRE_2010 upper bound | Notes |
+|---|---|---|---|
+| `RCDATE` (field 16) | **1966-01-19** | 2009-12-31 | Cleanest proxy for "when did the recall happen." Predates RCL.txt's "since 1967" prose by 11 months. |
+| `BGMAN` (field 9) | 1949-08-01 | 2009-11-12 | Earliest manufacturing date subject to recall — a 1949 vehicle. |
+| `ODATE` (field 13) | 1901-01-01 ⚠️ | 2012-04-24 | Lower bound is a **placeholder/sentinel for unknown notification date**; upper bound exceeds 2010 because owner mailings continue years after Part 573 filing. |
+| `DATEA` (field 17) | 1979-10-12 | (per POST_2010 probe: 20260429) | NHTSA's database started 1979-10-12 with a bulk-load of pre-1979 historical recalls (~11,500 records stamped Oct-Dec 1979). 5 records (0.01%) have null DATEA. |
+
+**Decade distribution (DATEA, PRE_2010 only):**
+
+| Decade | Records | Notes |
+|---|---|---|
+| 1970s | 11,571 | Almost entirely the Oct-Dec 1979 bulk-load of historical data going back to 1966 |
+| 1980s | 8,577 | |
+| 1990s | 16,844 | |
+| 2000s | 44,717 | |
+| (empty) | 5 | 0.01% null — Pydantic schema must allow null DATEA |
+
+**Coverage claim:** the NHTSA recall corpus reaches back to **January 1966**
+by RCDATE, with manufacturer-side build dates as early as 1949. RCL.txt's
+"since 1967" prose is conservative — actual coverage starts with the very
+first Part 573 reports filed under the 1966 National Traffic and Motor
+Vehicle Safety Act.
+
+**Implication for Phase 5c Step 2 schema design (cross-reference Finding E):**
+
+- `DATEA` is nullable (5 records in PRE_2010 confirm).
+- `ODATE` uses **`19010101` as an unknown-date sentinel.** Bronze
+  preserves the literal value per ADR 0027; `stg_nhtsa_recalls.sql` maps
+  `19010101` → NULL during silver normalization.
+- Other date fields likely have their own sentinels — worth probing
+  systematically before locking the schema. Check `BGMAN`, `ENDMAN`,
+  `RCDATE` for analogous outliers (`19010101`, `99999999`, all-zeros).
+- The PRE_2010 archive can contain records with ODATE values past 2010
+  (one record has 2012-04-24). The archive partition is by DATEA, not by
+  any other date field. Don't assume "PRE_2010 → all dates < 2010."
+
+**Question 3 (year-band CSV stubs):** Are the small `RCL_FROM_*.zip`
+files actual recall data slices or different products?
+
+**Result 3 (corrects an earlier hypothesis):** They are **not** stubs —
+they are the **CSV document-attachment index** from a different data
+product entirely (see Finding I). Each row is a `(recall × document ×
+make/model/year)` tuple, not a recall record. The earlier "stub
+hypothesis" (~1.7 KB for 2000-2004 looks suspicious) was correct on the
+size observation but wrong on the cause — the file is small because old
+recalls have few attached documents, not because it's a placeholder.
+
+This question is therefore moot for Option A: we don't use the year-band
+CSVs at all. They're documented under Finding I for completeness.
+
+---
+
+### Finding I — Format heterogeneity (TSV historical vs CSV recent)
+
+> **Status: Confirmed 2026-05-04 via Step 2 download + `unzip -l`
+> inspection.**
+
+**Question:** What inner-file formats does NHTSA publish in this directory?
+RCL.txt documents only the tab-delimited shape — does the live data match?
+
+**Result:** **Two parallel corpora are published in different formats.**
+The directory is heterogeneous, not a single set of size-variant slices.
+
+| File family | Inner extension | Delimiter | Documented in RCL.txt? |
+|---|---|---|---|
+| `FLAT_RCL_PRE_2010.zip`, `FLAT_RCL_POST_2010.zip` | `.txt` | tab | yes |
+| `FLAT_RCL_Annual_Rpts.zip`, `FLAT_RCL_Qrtly_Rpts.zip` | `.txt` (assumed) | tab | yes |
+| `RCL_FROM_<startYear>_<endYear>.zip` (all 7 of them) | `.csv` | comma (quoted) | **no** |
+
+**Evidence — selected `unzip -l` output from Step 2 download:**
+
+```
+FLAT_RCL_POST_2010.zip:  FLAT_RCL_POST_2010.txt   304,822,880 bytes
+FLAT_RCL_PRE_2010.zip:   FLAT_RCL_PRE_2010.txt     83,774,519 bytes
+RCL_FROM_2025_2026.zip:  RCL_FROM_2025_2026.csv     1,299,285 bytes
+RCL_FROM_2020_2024.zip:  RCL_FROM_2020_2024.csv    67,494,751 bytes
+RCL_FROM_2000_2004.zip:  RCL_FROM_2000_2004.csv         1,764 bytes
 ```
 
-**Result:** Pending.
+**Sub-question — CSV-vs-TSV column shape:** does the CSV carry the same
+29-field schema with a different delimiter, or a structurally divergent
+schema?
+
+**Sub-question result (confirmed 2026-05-04 via direct inspection):**
+**Structural fork — the two formats are different products, not delimiter
+variants.**
+
+| Property | TSV (`FLAT_RCL_POST_2010.txt`) | CSV (`RCL_FROM_2025_2026.csv`) |
+|---|---|---|
+| Field count | 29 | 6 |
+| Header row | none | `"NHTSA ID","DOCUMENT NAME","MAKE","MODEL","MODEL YEAR","SUMMARY"` |
+| Row meaning | one row per recall × make × model × year affected | one row per recall × associated PDF document × make × model × year |
+| Row count (POST_2010 / 2025_2026) | 240,126 rows | 8,201 rows |
+| Carries recall data fields | yes (defect description, manufacturer, classification, dates, etc.) | no |
+
+The CSV is a **document-attachment index**. Each row references an
+associated PDF (recall notification letter, dealer service bulletin,
+owner letter, etc.) and the vehicles that PDF covers. The `SUMMARY`
+field describes the *document*, not the recall — sample rows from the
+2000-2004 CSV show `"04014 recall; fuel may leak and may cause engine
+fire; owner outreach mailing"` (describing the mailing event), not the
+defect details that the TSV's `DESC_DEFECT` field carries.
+
+**Implications:**
+
+- **Architecture decision: Option A (TSV-only) is the only viable
+  choice.** The CSV does not contain the recall data fields the
+  extractor needs to populate `cpsc_recalls_bronze`'s analog. Options B
+  and C (which routed the incremental path through CSV) are eliminated.
+- The CSV files are out of scope for the production extractor. They
+  remain documented here for completeness — if a future feature wants
+  to surface "what supporting documents are attached to this recall,"
+  the CSV is where to look. Out of scope for v1.
+- The "stub hypothesis" for the small year-band CSVs (1-4 KB) was wrong
+  on cause but right on observation: those files are small because old
+  recalls have few attached documents, not because they're placeholders.
 
 ---
 
 ## Open items
 
-- **Finding B/C verdict:** awaiting ≥7-day probe accumulation, ideally bracketing one real upstream update.
-- **Finding D resolution:** inspect `RCL_FROM_2025_2025.zip` vs `RCL_FROM_2025_2026.zip` for overlap and naming pattern.
-- **Finding E resolution:** download a representative archive, verify column count and encoding.
-- **Finding H resolution:** verify pre-2010 archive coverage; investigate small year-band files.
+- **Finding C verdict:** still awaiting multi-day probe accumulation —
+  ETag / `x-amz-version-id` / wrapper-byte stability across days. The
+  inner-mtime evidence that closed Finding B does not address whether
+  the wrapper ZIP itself gets a fresh PUT daily (re-archiving identical
+  inner content) or just a metadata-only Last-Modified touch. Tomorrow's
+  probe run is the first opportunity to discriminate.
+- **Finding E follow-up — embedded newlines/tabs in description fields:**
+  the 6,000-char free-text fields could plausibly contain literal
+  newlines or tabs. Either probe explicitly OR defer to cassette suite
+  (Step 4) and let real failures surface it.
+- **Finding H follow-up — sentinel-date discovery in other fields:**
+  ODATE confirmed to use `19010101` as an unknown-date sentinel. Worth a
+  systematic probe of `BGMAN`, `ENDMAN`, `RCDATE` for analogous outliers
+  before locking the Pydantic schema. Quick check:
+  ```bash
+  for field in 9 10 13 16 17; do
+    echo "field $field min:"
+    unzip -p data/exploratory/nhtsa/FLAT_RCL_PRE_2010.zip '*.txt' \
+      | awk -F'\t' -v f=$field '$f != "" {print $f}' | sort -u | head -3
+  done
+  ```
 
 ## Evidence
 
 - **Probe script:** `scripts/nhtsa/probe_watermarks.sh`
 - **Probe data (committed):** `documentation/nhtsa/watermark_probes.jsonl`
+- **Download script:** `scripts/nhtsa/download_archives.sh`
+- **Step 2 download artifacts (gitignored):** `data/exploratory/nhtsa/`
 - **Data dictionary:** `documentation/nhtsa/RCL.txt`
 - **Source directory listing (manual capture):** referenced in conversation
   notes 2026-05-04; not committed.

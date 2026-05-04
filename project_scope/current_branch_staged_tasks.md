@@ -63,5 +63,5 @@ config/sources/nhtsa.yaml.
 have an even cleaner per-year incremental option.                                                                          
 6. Grab Import_Instructions_Recalls.pdf — it's the official format spec from 2023. RCL.txt is the data dictionary; the PDF
 likely covers parsing rules, escape conventions, and known-edge-cases. Read it once, capture relevant findings into        
-flat_file_observations.md, then drop the PDF (don't commit a 1 MB PDF).
+flat_file_observations.md, then drop the PDF (don't commit a 1 MB PDF). --> **UPDATE 2026-05-04**: This is a 12 page instruction file last updated Februrary 2014 of how to upload the data in FLAT_RCL.zip to a Microsoft Access database. Not sure how helpful it will be.
 7. Write up findings. Each of the 6 bullets in the doc gets answered with evidence from these probes.
