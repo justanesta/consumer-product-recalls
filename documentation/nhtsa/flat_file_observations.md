@@ -1,13 +1,14 @@
 # NHTSA Flat-File Source — Empirical Observations
 
-> **Status: Exploration substantially complete (Phase 5c Step 1).**
+> **Status: Step 1 complete (2026-05-05).**
 > Findings A, B, C, D, E, F, G, I confirmed 2026-05-04 / 2026-05-05.
 > Finding J (ZIP wrapper non-determinism) added 2026-05-05.
 > Architecture decision **resolved as Option A (TSV-only)** after Finding I
 > revealed CSV files are a structurally divergent document-attachment index
-> rather than recall data. Only Finding H's update-cadence sub-question
-> remains open and is structurally answerable only by an inner-content
-> probe (the wrapper-level probe is insufficient — see Finding J).
+> rather than recall data. Finding H's update-cadence sub-question is
+> **deferred** — it closes implicitly once `_FlatFileExtractor` lands in
+> Step 2 and starts logging per-run inner-content SHA-256 to
+> `extraction_runs`. None of the open items gate Step 2.
 > Evidence accumulates in `documentation/nhtsa/watermark_probes.jsonl`
 > plus Step 2 download artifacts in `data/exploratory/nhtsa/` (gitignored).
 
@@ -412,23 +413,39 @@ surfaces; `x-amz-version-id` is the unique-upload anchor.
 ### Finding H — Update cadence and historical coverage
 
 > **Status: Historical coverage fully confirmed 2026-05-04 via refined
-> date-bound probes (DATEA, RCDATE, BGMAN, ODATE). Update cadence is
-> structurally unanswerable by the current wrapper-level probe — see
-> Finding J — and needs an inner-content probe to close.**
+> date-bound probes (DATEA, RCDATE, BGMAN, ODATE). Update cadence
+> deferred 2026-05-05 — closes implicitly once `_FlatFileExtractor`
+> lands in Step 2 with inner-content SHA-256 logging.**
 
 **Question 1 (update cadence):** How often does NHTSA actually publish
 new content vs re-stamp idle data? Daily? Weekly? In bursts?
 
-**Result 1:** Wrapper-level probe alone is insufficient. Per Finding J,
-ZIP wrapper bytes shift every day regardless of inner content, so a diff
-on `body_sha256` of `FLAT_RCL_POST_2010.zip` can't separate "real new
-recall records" from "non-deterministic re-zip of identical inner
-content." Closing this question requires extending the probe (or a
-parallel script) to download → decompress → hash the inner `.txt`, then
-diff that across days. Worth doing before locking the extractor's
-incremental-vs-no-op gating logic, OR deferring to the cassette suite
-(Step 4) where real content updates would surface as schema/parser
-diffs.
+**Result 1:** Deferred. The wrapper-level watermark probe cannot answer
+this — per Finding J, ZIP wrapper bytes shift every day regardless of
+inner content, so wrapper-level diffs can't separate "real new recall
+records" from "non-deterministic re-zip of identical inner content."
+
+Closing the question requires inner-content hashing across days, which
+is *exactly* the primitive `_FlatFileExtractor` will run on every
+incremental fetch (per Finding J's mandate that ZIP dedup must operate
+on decompressed inner content). Once Step 2 lands and the extractor
+starts logging `inner_content_sha256` to `extraction_runs`, day-over-day
+diffs on that column close this question as a free side-effect of
+production runs — no separate probe extension needed.
+
+The cadence answer is **operational characterization**, not a Step 2/3
+design input: the schema, extractor lifecycle, watermark strategy, and
+bronze migration shape are fully specified by Findings A–G, I, and J
+regardless of whether NHTSA actually updates content daily, weekly, or
+in bursts. Daily cron is the right cadence either way (ADR 0007's
+content-hash dedup absorbs no-op days at near-zero cost). The eventual
+cadence verdict primarily informs Phase 7 monitoring/alerting baselines
+and a portfolio-narrative bandwidth-vs-staleness tradeoff note — neither
+of which is on the Step 2 critical path.
+
+**Closure target:** ~7 days after Step 3's first extraction, write the
+verdict as a small follow-up edit referencing `extraction_runs`
+inner-hash transition data. No probe-script change required.
 
 **Question 2 (historical coverage):** What is the actual date range and
 total record count of the TSV archive corpus we're committing to?
@@ -613,20 +630,24 @@ choices.
 
 ## Open items
 
-- **Finding H update-cadence sub-question:** needs an inner-content
-  probe to close. Wrapper bytes are non-deterministic across re-archives
-  (Finding J), so wrapper-level diffs can't separate "new recall record"
-  from "re-zip of identical content." Either extend
-  `probe_watermarks.sh` to also `unzip -p` and `sha256sum` the inner
-  `.txt`/`.csv`, OR defer to the Step 4 cassette suite.
+None of these gate Step 2. Each closes during or after Step 2/3 work as
+a side-effect of writing the extractor or running it against live data.
+
+- **Finding H update-cadence sub-question:** deferred to Step 3 as a
+  side-effect of `_FlatFileExtractor` logging `inner_content_sha256` to
+  `extraction_runs`. Day-over-day transitions on that column produce
+  the cadence verdict; no probe-script change needed. Write a small
+  follow-up edit ~7 days after first extraction.
 - **Finding E follow-up — embedded newlines/tabs in description fields:**
   the 6,000-char free-text fields could plausibly contain literal
-  newlines or tabs. Either probe explicitly OR defer to cassette suite
-  (Step 4) and let real failures surface it.
+  newlines or tabs. Defer to the cassette suite (Step 4) — if naïve
+  line-by-line / column-split parsing breaks, the failing test surfaces
+  it against real data.
 - **Finding H follow-up — sentinel-date discovery in other fields:**
   ODATE confirmed to use `19010101` as an unknown-date sentinel. Worth a
   systematic probe of `BGMAN`, `ENDMAN`, `RCDATE` for analogous outliers
-  before locking the Pydantic schema. Quick check:
+  before locking the Pydantic schema. Quick check (run during Step 2
+  schema design, not before):
   ```bash
   for field in 9 10 13 16 17; do
     echo "field $field min:"

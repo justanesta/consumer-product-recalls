@@ -348,7 +348,7 @@ FDA's FEI per ADR 0002).
 > value-level normalization (empty-string sentinels, whitespace, etc.) lives
 > in `stg_nhtsa_recalls.sql`, not in `src/schemas/nhtsa.py`.
 
-**Step 1 — Source exploration** (pending)
+**Step 1 — Source exploration** ✓
 - Direct inspection of the NHTSA recall ZIP download URL before writing the extractor. Key questions: How often does NHTSA release a new ZIP vs update an existing one? Does the file modification date reliably reflect content changes or just re-packaging? Document in `documentation/nhtsa/`.
 
 **Step 2 — Schema, extractor, migration** (pending)
