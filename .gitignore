@@ -59,6 +59,9 @@ dbt/.user.yml
 # Local-only project notes
 CLAUDE.local.md
 
+# Locally downloaded NHTSA and USCG data for testing
+data/exploratory/
+
 # OS / editor
 .DS_Store
 Thumbs.db
