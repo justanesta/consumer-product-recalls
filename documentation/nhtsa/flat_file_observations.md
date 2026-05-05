@@ -1,14 +1,15 @@
 # NHTSA Flat-File Source — Empirical Observations
 
 > **Status: Exploration substantially complete (Phase 5c Step 1).**
-> Findings A, B (partial), D, E, F, G, H, I confirmed 2026-05-04.
+> Findings A, B, C, D, E, F, G, I confirmed 2026-05-04 / 2026-05-05.
+> Finding J (ZIP wrapper non-determinism) added 2026-05-05.
 > Architecture decision **resolved as Option A (TSV-only)** after Finding I
 > revealed CSV files are a structurally divergent document-attachment index
-> rather than recall data. Only Finding C (multi-day probe of S3
-> wrapper-byte stability and update-cadence) remains pending — gated on
-> ≥7 days of probe accumulation. Evidence accumulates in
-> `documentation/nhtsa/watermark_probes.jsonl` plus Step 2 download
-> artifacts in `data/exploratory/nhtsa/` (gitignored).
+> rather than recall data. Only Finding H's update-cadence sub-question
+> remains open and is structurally answerable only by an inner-content
+> probe (the wrapper-level probe is insufficient — see Finding J).
+> Evidence accumulates in `documentation/nhtsa/watermark_probes.jsonl`
+> plus Step 2 download artifacts in `data/exploratory/nhtsa/` (gitignored).
 
 ## Background
 
@@ -105,17 +106,19 @@ stops matching ETag, the schema has shifted.
 
 ### Finding B — Last-Modified watermark reliability
 
-> **Status: Confirmed unreliable, 2026-05-04 via inner-file mtime
-> evidence from Step 2 download.** Multi-day probe still running for
-> stronger corroboration but not required for the verdict.
+> **Status: Confirmed unreliable, 2026-05-04 via inner-file mtime; further
+> corroborated 2026-05-05 via 24-hour probe diff on `RCL.txt`.**
 
 **Question:** Does NHTSA's `Last-Modified` header track real content
 changes, or is it re-stamped daily by a regeneration job regardless of
 content?
 
-**Result: HTTP `Last-Modified` is unreliable.** The Step 2 download
-preserved each ZIP's inner-file mtime (via `curl --remote-time`), which
-exposed a discrepancy that the wrapper's HTTP `Last-Modified` hides:
+**Result: HTTP `Last-Modified` is unreliable.** Two independent lines of
+evidence:
+
+**(1) Inner-file mtime evidence from Step 2 download.** Each ZIP's inner
+mtime (preserved via `curl --remote-time`) reveals a discrepancy that
+the wrapper's HTTP `Last-Modified` hides:
 
 | File | Wrapper HTTP `Last-Modified` | Inner-file mtime |
 |---|---|---|
@@ -125,70 +128,80 @@ exposed a discrepancy that the wrapper's HTTP `Last-Modified` hides:
 | Other archives | `Mon, 04 May 2026 07:04:23 GMT` | `2026-05-04 07:01` |
 
 `RCL_FROM_2025_2025.csv` was last actually regenerated on 2025-12-31 —
-~125 days ago — but its wrapping ZIP shows today's `Last-Modified`. The
-daily regen job re-stamps wrapper ZIPs without re-generating their
-contents.
+~125 days ago — but its wrapping ZIP shows today's `Last-Modified`.
+
+**(2) 24-hour probe diff for `RCL.txt`.** Across 2026-05-04 13:33Z →
+2026-05-05 13:21Z, `Last-Modified` advanced ~23 hours while every
+content fingerprint stayed bit-identical:
+
+| Field | 2026-05-04 | 2026-05-05 |
+|---|---|---|
+| `Last-Modified` | `Mon, 04 May 2026 07:04:23 GMT` | `Tue, 05 May 2026 07:05:14 GMT` |
+| `ETag` | `"436e400b92a4d15deee70feff4fa4d88"` | `"436e400b92a4d15deee70feff4fa4d88"` |
+| `body_sha256` (prefix) | `9ec6414ae51bc633…` | `9ec6414ae51bc633…` |
+| `bytes_observed` | 3053 | 3053 |
+
+Same content, fresh `Last-Modified`. The daily regen job re-stamps
+wrapper metadata regardless of whether content changed.
 
 **Implications:**
 
 - The `NhtsaExtractor` must NOT use `If-Modified-Since` conditional GETs.
-  HTTP `Last-Modified` advances on idle days for files whose contents
-  haven't changed in months.
-- Use bronze content-hash dedup (ADR 0007). Tomorrow's probe will reveal
-  whether the wrapper ZIP bytes themselves change daily (re-archived with
-  a fresh timestamp) or stay stable (metadata-only touch). Either way the
-  content-hash strategy works: stable-bytes files short-circuit at the
-  wrapper hash; daily-rezipped files bypass wrapper hash but get caught
-  at the inner-content level on inspection.
+  `Last-Modified` advances on idle days for files whose contents haven't
+  changed in months.
+- Bronze dedup must rely on content-hash (ADR 0007). For plain-text files
+  (`RCL.txt`, `RCL_Annual_Rpts.txt`, `RCL_Qtrly_Rpts.txt`) the wrapper
+  body_sha256 is itself a stable content fingerprint. **For ZIPs the
+  wrapper is non-deterministic across re-archives — see Finding J — so
+  dedup must hash the *decompressed inner content*, not the wrapper.**
 - The inner-file mtime is a strong watermark candidate by itself. Once
   the extractor has decompressed the wrapper, it can read the inner mtime
   via `zipfile.ZipInfo.date_time` and skip extraction work entirely if
   the value matches the prior run's recorded mtime. Worth implementing as
   an optimization in `_FlatFileExtractor`.
 
-**Multi-day corroboration (in flight):** The watermark probe will
-strengthen the verdict from another angle — if `etag` and `body_sha256`
-stay constant across days for `RCL_FROM_2025_2025.zip` while
-`last_modified` advances, the regen-stamp is content-blind on the
-wrapper layer too. Tomorrow's probe is sufficient signal.
-
-**Original method (now redundant but preserved for audit trail):** Run
-`scripts/nhtsa/probe_watermarks.sh` daily for ≥7 days; compare distinct
-`last_modified` vs `etag` vs `body_sha256` values per file via the
-analysis snippets at the bottom of the script.
-
-**Implications (legacy framing):**
-
-- If `Last-Modified` is content-blind: drop conditional-GET via
-  `If-Modified-Since`; rely on bronze content-hash dedup (ADR 0007).
-- If `Last-Modified` is content-bound: viable as a watermark surface,
-  reducing per-run bandwidth.
-
 ---
 
 ### Finding C — `x-amz-version-id` behavior
 
-> **Status: Pending.** Capture added to probe script 2026-05-04. Verdict
-> alongside Finding B.
+> **Status: Confirmed 2026-05-05 via 24-hour probe diff.**
+> `x-amz-version-id` is the regen-PUT signal, not the content-change
+> signal. Same disqualification as `Last-Modified`.
 
 **Question:** Does NHTSA's S3 mint a new version ID on every regen
 (blind re-upload) or only on real content change?
 
-**Why it matters:** `x-amz-version-id` is the cleanest possible "did
-NHTSA upload today?" signal. It's set by S3 on every PUT regardless of
-content. Combined with `body_sha256`:
+**Result: blind re-upload.** Across 2026-05-04 → 2026-05-05, every
+regen-managed file got a fresh `x-amz-version-id` even when its content
+stayed bit-identical. The static `Import_Instructions_Recalls.pdf`
+serves as a control: it's outside the regen pipeline, so its
+`x-amz-version-id` is stable across days.
 
-| `x-amz-version-id` | `body_sha256` | Interpretation |
-|---|---|---|
-| changes daily | stable | Regen blindly re-uploads identical bytes |
-| changes daily | changes | Real content update |
-| stable | stable | No upload, file genuinely static |
-| stable | changes | Impossible (S3 invariant) |
+| File | bytes Δ | ETag Δ | body_sha256 Δ | `x-amz-version-id` Δ |
+|---|---|---|---|---|
+| `Import_Instructions_Recalls.pdf` (control) | none | none | none | **none** (`JPSw2I…5Pk0` both days) |
+| `RCL.txt` | none | none | none | **changed** (`J1Yxnj…WS08` → `IplECX…X4YM`) |
+| `RCL_FROM_2025_2025.zip` | none (91307 → 91307) | none | none | **changed** (`MYtbvV…9NMl` → `MEi41d…CTQi`) |
 
-**Method:** Multi-day probe data already capturing the field. Analysis
-TBD.
+Mapping back to the decision matrix:
 
-**Result:** Pending.
+| `x-amz-version-id` | `body_sha256` | Interpretation | Observed in |
+|---|---|---|---|
+| changes daily | stable | Regen blindly re-uploads identical bytes | `RCL.txt`, `RCL_FROM_2025_2025.zip` |
+| changes daily | changes | Real content update *or* ZIP non-determinism | All other ZIPs (see Finding J — ambiguous at the wrapper level) |
+| stable | stable | No upload, file genuinely static | `Import_Instructions_Recalls.pdf` |
+| stable | changes | Impossible (S3 invariant) | (not observed) |
+
+**Implications:**
+
+- `x-amz-version-id` is **not** a content-change signal — it answers
+  "did NHTSA's regen pipeline run today" (always yes), which the
+  extractor doesn't need to ask.
+- The signal *is* useful as an audit anchor in bronze: persisting it
+  alongside each fetch records the exact S3 object version we ingested,
+  which lets us replay or compare a future fetch to a specific historical
+  upload. Worth capturing in `bronze.nhtsa_recalls_raw` even though it's
+  not a watermark.
 
 ---
 
@@ -399,15 +412,23 @@ surfaces; `x-amz-version-id` is the unique-upload anchor.
 ### Finding H — Update cadence and historical coverage
 
 > **Status: Historical coverage fully confirmed 2026-05-04 via refined
-> date-bound probes (DATEA, RCDATE, BGMAN, ODATE). Update cadence still
-> pending the multi-day watermark probe.**
+> date-bound probes (DATEA, RCDATE, BGMAN, ODATE). Update cadence is
+> structurally unanswerable by the current wrapper-level probe — see
+> Finding J — and needs an inner-content probe to close.**
 
 **Question 1 (update cadence):** How often does NHTSA actually publish
 new content vs re-stamp idle data? Daily? Weekly? In bursts?
 
-**Result 1:** Pending. The multi-day probe will reveal this once
-accumulated body_sha256 history shows the interval between content
-changes for `FLAT_RCL_POST_2010.zip` (the production extractor's target).
+**Result 1:** Wrapper-level probe alone is insufficient. Per Finding J,
+ZIP wrapper bytes shift every day regardless of inner content, so a diff
+on `body_sha256` of `FLAT_RCL_POST_2010.zip` can't separate "real new
+recall records" from "non-deterministic re-zip of identical inner
+content." Closing this question requires extending the probe (or a
+parallel script) to download → decompress → hash the inner `.txt`, then
+diff that across days. Worth doing before locking the extractor's
+incremental-vs-no-op gating logic, OR deferring to the cassette suite
+(Step 4) where real content updates would surface as schema/parser
+diffs.
 
 **Question 2 (historical coverage):** What is the actual date range and
 total record count of the TSV archive corpus we're committing to?
@@ -540,14 +561,64 @@ defect details that the TSV's `DESC_DEFECT` field carries.
 
 ---
 
+### Finding J — ZIP wrapper bytes are non-deterministic across re-archives
+
+> **Status: Confirmed 2026-05-05 via 24-hour probe diff.** Wrapper-level
+> content hashing is unreliable for `*.zip` files. Plain-text wrappers
+> (`RCL.txt`, `RCL_*_Rpts.txt`) remain reliable.
+
+**Question:** When NHTSA's daily regen blindly re-uploads a ZIP whose
+inner content hasn't changed, do the wrapper bytes stay byte-identical
+(deterministic re-archive) or shift (timestamps in ZIP metadata,
+non-deterministic compression)?
+
+**Result: wrapper bytes shift every day, even when inner content cannot
+have changed.** Across 2026-05-04 → 2026-05-05, multiple historical-only
+year-band ZIPs whose inner content is logically frozen produced
+different ETags and body_sha256s:
+
+| File | bytes 05-04 | bytes 05-05 | ETag changed? | body_sha256 changed? | Inner content can have changed? |
+|---|---|---|---|---|---|
+| `RCL_FROM_2000_2004.zip` | 402 | 402 | yes | yes | no — pre-2005 closed window |
+| `RCL_FROM_2010_2014.zip` | 114,001 | 114,001 | yes | yes | no — closed window |
+| `FLAT_RCL_PRE_2010.zip` | 7,395,562 | **7,378,968** ↓ | yes | yes | no — historical-only archive that *shrank* by 16,594 bytes |
+
+`FLAT_RCL_PRE_2010.zip` is the cleanest proof: a historical-only archive
+covering 1966–2009 cannot have grown new records overnight, yet the
+wrapper *shrank*. The only consistent explanation is that NHTSA re-zips
+every file daily and the resulting wrapper bytes vary because of
+embedded ZIP-metadata timestamps and/or non-deterministic compression
+choices.
+
+**Implications:**
+
+- **Wrapper-level ADR 0007 dedup will essentially never short-circuit
+  for `*.zip` files in this corpus** — every probe will see a fresh
+  ETag/body_sha256 for the wrapper. Bronze dedup for ZIPs must hash the
+  **decompressed inner content** (`unzip -p` → `sha256sum`) rather than
+  the wrapper bytes.
+- Plain-text wrappers (`RCL.txt`, `RCL_Annual_Rpts.txt`,
+  `RCL_Qtrly_Rpts.txt`) remain deterministic — when the text doesn't
+  change, the wrapper bytes don't either. Wrapper-hash dedup works for
+  these files.
+- `_FlatFileExtractor` should record both wrapper-hash and inner-content
+  hash in bronze metadata. The wrapper hash captures "what NHTSA served
+  byte-for-byte today" (useful for audit). The inner-content hash drives
+  "did anything actually change" gating.
+- This finding contradicts an earlier hopeful framing in Finding B
+  ("stable-bytes files short-circuit at the wrapper hash") for the ZIP
+  case. The Finding B implications have been updated accordingly.
+
+---
+
 ## Open items
 
-- **Finding C verdict:** still awaiting multi-day probe accumulation —
-  ETag / `x-amz-version-id` / wrapper-byte stability across days. The
-  inner-mtime evidence that closed Finding B does not address whether
-  the wrapper ZIP itself gets a fresh PUT daily (re-archiving identical
-  inner content) or just a metadata-only Last-Modified touch. Tomorrow's
-  probe run is the first opportunity to discriminate.
+- **Finding H update-cadence sub-question:** needs an inner-content
+  probe to close. Wrapper bytes are non-deterministic across re-archives
+  (Finding J), so wrapper-level diffs can't separate "new recall record"
+  from "re-zip of identical content." Either extend
+  `probe_watermarks.sh` to also `unzip -p` and `sha256sum` the inner
+  `.txt`/`.csv`, OR defer to the Step 4 cassette suite.
 - **Finding E follow-up — embedded newlines/tabs in description fields:**
   the 6,000-char free-text fields could plausibly contain literal
   newlines or tabs. Either probe explicitly OR defer to cassette suite
