@@ -31,5 +31,5 @@ select
     (select count(*) from jsonb_object_keys(response_headers))     as header_count,
     started_at
 from extraction_runs
-where started_at > now() - interval '10 minutes'
+where started_at > now() - interval '30 minutes'
 order by started_at desc;
