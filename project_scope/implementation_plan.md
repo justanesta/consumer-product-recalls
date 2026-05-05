@@ -421,6 +421,7 @@ Cross-cutting work targeted at specific upcoming phases. Each item is gated to a
 | Shared annotated types and invariants audit | **Phase 5c prerequisite** | Resolved 2026-05-01 — documented negative result; see section below |
 | USDA recall ETag re-evaluation | **Phase 7 prerequisite** | Pending |
 | USDA establishment ETag enablement | **Phase 7 prerequisite** (gate-paired with USDA recall) | Code scaffolded 2026-05-03 (`etag_enabled=False`); awaiting viability gate |
+| `extraction_runs` source-specific column sparsity | **Phase 7 prerequisite** (after USCG forensics shape is known) | Pending |
 
 ### ADR 0012 implementation: source-config loader and registry
 
@@ -506,6 +507,25 @@ The establishment endpoint emits `ETag` and `Last-Modified` under browser finger
 
 Best landed alongside the recall ETag flip if both pass viability simultaneously, or independently if one passes and the other doesn't. Cost of leaving disabled through cron is ~810 KB / day downloads on idle days that could have been 304s. Lands before Phase 7 cron turn-on so the daily bandwidth profile is settled before recurring runs accumulate.
 
+### `extraction_runs` source-specific column sparsity — Phase 7 prerequisite
+
+`extraction_runs` is shaping up as a wide table where some forensic columns apply to only a subset of sources. Migration 0010 added five universal columns (`response_status_code`, `response_etag`, `response_last_modified`, `response_body_sha256`, `response_headers`) populated by every `RestApiExtractor` and `FlatFileExtractor`. Migration 0011 added `response_inner_content_sha256` populated only by flat-file sources (NHTSA today; USCG-adjacent later if its scrape produces an archive shape). The sparsity is structural: REST sources have no wrapper to decompress, so the column will be NULL for all CPSC / FDA / USDA / USDA establishment rows in perpetuity (~99% of `extraction_runs` rows by volume long-term).
+
+Phase 5d may add more source-specific forensic columns (HTTP cache headers from the scraper, scrape-delay metadata, polite-scraper retry counts) which would extend the sparsity pattern further. Designing the split shape now would be premature — the right time is after USCG's forensics surface, so both flat-file and HTML-scraping needs inform the split.
+
+**Design alternatives to evaluate when this lands:**
+
+1. **Status quo — wide table with NULLable source-specific columns.** Simple; one query joins everything. Cost: column count grows monotonically as sources add quirks; semantics not self-documenting from the schema alone.
+2. **Per-source-type extension tables — `extraction_runs` keeps universal columns; `extraction_runs_flat_file_forensics` (1:1 to runs) holds flat-file-only columns; `extraction_runs_html_forensics` for HTML scraping.** Clean separation; only applicable columns per row. Cost: forensic queries need joins; one migration per new operation type.
+3. **JSONB `source_specific_forensics` blob.** Zero migration churn for new fields. Cost: indexing degrades; no type constraints; analytical SQL becomes verbose.
+4. **Materialized per-source views over the wide table.** Zero schema change; ergonomic for ad-hoc query. Cost: doesn't fix the underlying width — just hides it.
+
+**Recommended direction (subject to revision when the data lands):** Approach 2 — per-source-type extension tables. Scales naturally as new operation types arrive; FK 1:1 to `extraction_runs.id` makes joins predictable; matches the existing `Extractor → RestApiExtractor / FlatFileExtractor / HtmlScrapingExtractor` operation-type hierarchy in `src/extractors/_base.py` and `_flat_file.py`. The split would be roughly: universal columns (status, ETag, Last-Modified, response body SHA, full headers) stay on `extraction_runs`; `response_inner_content_sha256` and any other future flat-file-only columns move to `extraction_runs_flat_file_forensics`.
+
+**Acceptance criteria:** forensic queries that span all sources still work via a single LEFT JOIN per source-type table. No NULL sentinel from missing source-type rows is mistaken for "not captured" — captured-but-not-applicable distinguishes from genuinely missing.
+
+Best landed before Phase 7 cron turn-on so the production schema crystallizes before regular runs accumulate large amounts of sparse data. After cron is on, restructuring the table requires data migration in addition to DDL.
+
 ### Shared annotated types and invariants audit — Phase 5c prerequisite
 
 **Status: Resolved 2026-05-01 with a documented negative result.**
@@ -576,6 +596,7 @@ If a fourth source's schema reveals a pattern that meaningfully repeats across t
 - All five per-source extract workflows on cron per ADR 0010 cadences (note: USDA is full-dump on every run per ADR 0010 revision note — no incremental filter exists)
 - CPSC deep-rescan workflow on weekly cron per ADR 0010's deep-rescan addendum — **mandatory**, not optional, because CPSC's `LastPublishDate` does not advance on edits (verification closed 2026-05-01). FDA deep-rescan also on weekly cron per ADR 0023. USDA's daily run is already a full snapshot, so a separate "deep rescan" workflow would be redundant — the dispatch-only `deep-rescan-usda.yml` is retained for operator convenience but contributes no additional coverage.
 - **Pre-cron blocker — CPSC historical seeding (per ADR 0028):** before turning on weekly cron, run `deep-rescan-cpsc.yml` once with `LastPublishDateStart=2005-01-01` and `--change-type=historical_seed` to populate the 20-year (2005–2024) gap currently missing from bronze. This gap exists because the CPSC archive migration cadence (~2–3 records/day) will not reach the 2024 backfill point for years on its own. Documented in `documentation/cpsc/last_publish_date_semantics.md` Section 3 and ADR 0028 Mechanism A.
+- **Pre-cron blocker — deep-rescan validation across all sources:** before turning on weekly cron AND before any production historical-seed run, exercise each source's `deep-rescan-<source>.yml` workflow at least once on the dev Neon branch. The deep-rescan code path is structurally distinct from the incremental path (separate method or extractor class per the Phase 5 standing requirement), has no count guard, and is exercised less frequently — silent breakage typically surfaces only on a real seed run, which is expensive to redo. Validation criteria per source: (a) workflow_dispatch run completes successfully; (b) bronze rows land with `change_type=historical_seed` recorded in `extraction_runs`; (c) `source_watermarks` is NOT advanced by the deep-rescan path (incremental owns the watermark exclusively); (d) row counts match expectations from each source's empirical findings (CPSC ~9k + 20-year backfill, FDA ~current API total, USDA ~2k full dump, NHTSA ~322k via PRE_2010 + POST_2010, USCG TBD). Note: USDA's deep-rescan is functionally identical to its incremental path (full dump every run) so this is largely formality for that source; for CPSC / FDA / NHTSA / USCG the validation is load-bearing. Document the validation result per source in `documentation/<source>/` for the audit trail.
 - Transform workflow (`dbt build` + `dbt test`) on time-shifted cron per ADR 0018
 - Full PR-check workflow matching ADR 0018 (ruff, pyright, pytest unit + integration, dbt parse, 1–2 e2e smoke)
 - Neon branching via the Neon API for integration-test DBs (per ADR 0015); `test_db_url` fixture in `conftest.py`

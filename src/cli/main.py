@@ -58,10 +58,28 @@ def extract(
             ),
         ),
     ] = "routine",
+    since: Annotated[
+        str | None,
+        typer.Option(
+            "--since",
+            help=(
+                "NHTSA only: drop rows whose RCDATE is earlier than YYYY-MM-DD. "
+                "Intended for free-tier-aware dev workflows on the Neon dev "
+                "branch — production historical seed uses the deep-rescan path "
+                "which has no --since filter and lands the full corpus. "
+                "Ignored for non-NHTSA sources."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run the incremental extractor for a given source."""
     configure_logging()
     change_type = _validate_change_type(change_type)
+
+    if since is not None and source != "nhtsa":
+        typer.echo(
+            f"{source}: --since is only honored for nhtsa; ignored.",
+        )
 
     if source == "cpsc":
         from src.config.settings import Settings
@@ -170,6 +188,44 @@ def extract(
             f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
         )
 
+    elif source == "nhtsa":
+        from datetime import date
+
+        from src.config.settings import Settings
+        from src.extractors.nhtsa import NhtsaExtractor
+
+        settings = Settings()  # type: ignore[call-arg]
+        # NHTSA is a flat-file full-dump every run; --lookback-days has no
+        # effect (Findings B + C — the Last-Modified and x-amz-version-id
+        # watermark surfaces are disqualified). Accepted for CLI shape
+        # parity but ignored with a notice.
+        if lookback_days is not None:
+            typer.echo(
+                "nhtsa: --lookback-days has no effect "
+                "(flat-file full-dump every run; see Findings B + C)."
+            )
+        since_date: date | None = None
+        if since is not None:
+            try:
+                since_date = date.fromisoformat(since)
+            except ValueError:
+                typer.echo(
+                    f"nhtsa: --since must be YYYY-MM-DD; got {since!r}",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from None
+            typer.echo(
+                f"nhtsa: --since {since_date.isoformat()} active — "
+                "dev-mode RCDATE filter; bronze will be a date-bounded subset."
+            )
+        extractor = NhtsaExtractor(settings=settings, since=since_date)
+        result = extractor.run(change_type=change_type)
+        typer.echo(
+            f"nhtsa: fetched={result.records_fetched} "
+            f"loaded={result.records_loaded} "
+            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
+        )
+
     else:
         typer.echo(f"Unknown source: {source}", err=True)
         raise typer.Exit(code=1)
@@ -253,6 +309,31 @@ def deep_rescan(
         result = loader.run(change_type=change_type)
         typer.echo(
             f"usda deep-rescan: "
+            f"fetched={result.records_fetched} "
+            f"loaded={result.records_loaded} "
+            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
+        )
+
+    elif source == "nhtsa":
+        from src.config.settings import Settings
+        from src.extractors.nhtsa import NhtsaDeepRescanLoader
+
+        # NHTSA's deep-rescan path pulls BOTH FLAT_RCL_PRE_2010.zip and
+        # FLAT_RCL_POST_2010.zip (~322k total rows, dating back to
+        # 1966-01-19 by RCDATE per Finding H Q2). No date window — the
+        # archives are partitioned by DATEA at the source. Used for
+        # one-time historical seeding (--change-type=historical_seed)
+        # and Phase 7 weekly defense-in-depth.
+        if start_date is not None or end_date is not None:
+            typer.echo(
+                "nhtsa: --start-date / --end-date are ignored "
+                "(archives partitioned by DATEA at the source; see Finding H Q2)."
+            )
+        settings = Settings()  # type: ignore[call-arg]
+        loader = NhtsaDeepRescanLoader(settings=settings)
+        result = loader.run(change_type=change_type)
+        typer.echo(
+            f"nhtsa deep-rescan: "
             f"fetched={result.records_fetched} "
             f"loaded={result.records_loaded} "
             f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"

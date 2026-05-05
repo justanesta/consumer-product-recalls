@@ -1,0 +1,68 @@
+name: Deep Rescan NHTSA Flat-File Recalls
+
+# NHTSA's deep-rescan path differs from the incremental path in two ways:
+#   1. Pulls BOTH FLAT_RCL_PRE_2010.zip AND FLAT_RCL_POST_2010.zip (~322k
+#      total rows, dating back to 1966-01-19 by RCDATE per Finding H Q2).
+#      The incremental path pulls POST_2010 only.
+#   2. Never updates source_watermarks — the incremental extractor owns the
+#      watermark exclusively. Deep rescan is purely additive to bronze;
+#      content-hash dedup absorbs duplicate rows naturally.
+#
+# Used in two modes:
+#   - One-time historical seed: dispatch with --change-type=historical_seed
+#     when first standing up the bronze table (populates the pre-2010
+#     records that the incremental path can never reach).
+#   - Weekly defense-in-depth: dispatch (or Phase 7 weekly cron) with the
+#     default --change-type=routine to detect any back-dated edits NHTSA
+#     might apply to historical records.
+#
+# No --start-date / --end-date inputs: NHTSA's archives are partitioned by
+# DATEA at the source (PRE_2010 / POST_2010), not by user-specified date
+# windows. Date-window deep rescans are not meaningful for this source.
+# No NHTSA auth secrets — public source served directly from S3.
+
+on:
+  workflow_dispatch:
+    inputs:
+      change_type:
+        description: "Run label for extraction_runs (default: routine)"
+        required: false
+        default: routine
+        type: choice
+        options:
+          - routine
+          - historical_seed
+          - schema_rebaseline
+          - hash_helper_rebaseline
+
+jobs:
+  deep-rescan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
+          [[ -n "$R2_BUCKET_NAME" ]] || (echo "::error::R2_BUCKET_NAME secret is missing" && exit 1)
+          [[ -n "$R2_ACCOUNT_ID" ]] || (echo "::error::R2_ACCOUNT_ID secret is missing" && exit 1)
+          [[ -n "$R2_ACCESS_KEY_ID" ]] || (echo "::error::R2_ACCESS_KEY_ID secret is missing" && exit 1)
+          [[ -n "$R2_SECRET_ACCESS_KEY" ]] || (echo "::error::R2_SECRET_ACCESS_KEY secret is missing" && exit 1)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Run NHTSA deep rescan
+        run: uv run recalls deep-rescan nhtsa --change-type "${{ github.event.inputs.change_type }}"
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}

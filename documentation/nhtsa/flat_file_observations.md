@@ -485,6 +485,11 @@ Vehicle Safety Act.
 **Implication for Phase 5c Step 2 schema design (cross-reference Finding E):**
 
 - `DATEA` is nullable (5 records in PRE_2010 confirm).
+- `RCDATE` is **also nullable** (5 PRE_2010 records — almost certainly the
+  same cohort as the empty-DATEA records, from the 1979 bulk-load of
+  pre-1979 historical recalls). Surfaced by the 2026-05-05 sentinel
+  probe; schema relaxed accordingly. Marking required would quarantine
+  real recall records over a missing date field.
 - `ODATE` uses **`19010101` as an unknown-date sentinel.** Bronze
   preserves the literal value per ADR 0027; `stg_nhtsa_recalls.sql` maps
   `19010101` → NULL during silver normalization.
@@ -494,6 +499,45 @@ Vehicle Safety Act.
 - The PRE_2010 archive can contain records with ODATE values past 2010
   (one record has 2012-04-24). The archive partition is by DATEA, not by
   any other date field. Don't assume "PRE_2010 → all dates < 2010."
+
+**Sentinel-date probe results (2026-05-05) — Finding H follow-up closure:**
+
+The systematic probe of fields 9, 10, 13, 16, 17 (BGMAN/ENDMAN/ODATE/RCDATE/DATEA)
+plus boolean fields 28/29 and FMVSS (field 19) ran via
+`scripts/nhtsa/probe_date_sentinels.sh`. Three categories of finding:
+
+*Step 2 schema-blocking (resolved by relaxing required → nullable):*
+
+| Field | Issue | Count | Archive | Resolution |
+|---|---|---|---|---|
+| `RCDATE` | empty values | 5 | PRE_2010 | Schema relaxed to `_NhtsaNullableDate`; migration 0011 column relaxed to `nullable=True` |
+
+*New silver-staging sentinels discovered (bronze parses cleanly; map to NULL in `stg_nhtsa_recalls.sql`):*
+
+| Field | Sentinel | Count | Archive | Notes |
+|---|---|---|---|---|
+| `ODATE` | `11111111` | 67 rows | POST_2010 | Second ODATE sentinel pattern — parses to 1111-11-11 |
+| `ODATE` | `19010101` | 7 rows | PRE_2010 | Original Finding H sentinel |
+| `BGMAN` | `19000101` | 7 rows | POST_2010 | Manufacturing-date "unknown" sentinel |
+| `ENDMAN` | `19000101` | 7 rows | POST_2010 | Same — likely paired with BGMAN sentinel rows |
+
+*Wild manufacturing dates in POST_2010 (NOT sentinels — data-entry errors that parse via `strptime("%Y%m%d")`):*
+
+- `BGMAN` range: `00220729` (year 22 CE!) to `30190514` (year 3019)
+- `ENDMAN` range: `00240102` (year 24 CE) to `30190430` (year 3019)
+
+These pass the validator because `strptime` validates only the *shape*,
+not year reasonableness. Per ADR 0027 the bronze schema preserves them
+as-is; silver staging needs a date-sanity filter:
+```sql
+case when extract(year from bgman) between 1900 and extract(year from now()) + 1
+     then bgman else null end as bgman
+```
+
+*Confirmed clean (no schema change needed):*
+
+- Boolean fields 28/29 (DO_NOT_DRIVE / PARK_OUTSIDE): only `Yes` / `No` / empty observed
+- FMVSS: all values are 0, 2, or 3 chars (length-0 are empty strings); no width drift
 
 **Question 3 (year-band CSV stubs):** Are the small `RCL_FROM_*.zip`
 files actual recall data slices or different products?
@@ -643,18 +687,14 @@ a side-effect of writing the extractor or running it against live data.
   newlines or tabs. Defer to the cassette suite (Step 4) — if naïve
   line-by-line / column-split parsing breaks, the failing test surfaces
   it against real data.
-- **Finding H follow-up — sentinel-date discovery in other fields:**
-  ODATE confirmed to use `19010101` as an unknown-date sentinel. Worth a
-  systematic probe of `BGMAN`, `ENDMAN`, `RCDATE` for analogous outliers
-  before locking the Pydantic schema. Quick check (run during Step 2
-  schema design, not before):
-  ```bash
-  for field in 9 10 13 16 17; do
-    echo "field $field min:"
-    unzip -p data/exploratory/nhtsa/FLAT_RCL_PRE_2010.zip '*.txt' \
-      | awk -F'\t' -v f=$field '$f != "" {print $f}' | sort -u | head -3
-  done
-  ```
+- ~~**Finding H follow-up — sentinel-date discovery in other fields:**~~
+  **Closed 2026-05-05** via `scripts/nhtsa/probe_date_sentinels.sh`.
+  Surfaced one Step-2 blocker (RCDATE 5 empty rows — schema relaxed to
+  nullable + migration column relaxed) and three new silver-staging
+  sentinels (ODATE `11111111`, BGMAN `19000101`, ENDMAN `19000101`).
+  Plus identified wild manufacturing dates in POST_2010 (year 22 to
+  year 3019) that pass `strptime` shape validation and need a silver
+  date-sanity filter. Full results documented in Finding H above.
 
 ## Evidence
 

@@ -327,16 +327,6 @@ class RestApiExtractor[T: BaseModel](Extractor[T]):
         self._captured_response_headers = dict(response.headers)
 
 
-class FlatFileExtractor[T: BaseModel](Extractor[T]):
-    """
-    Base for extractors that download and parse flat files (NHTSA ZIP + TSV).
-    Longer default timeout to accommodate large file downloads.
-    """
-
-    file_url: str
-    timeout_seconds: float = 120.0
-
-
 class HtmlScrapingExtractor[T: BaseModel](Extractor[T]):
     """
     Base for extractors that scrape HTML pages (USCG).

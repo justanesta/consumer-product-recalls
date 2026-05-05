@@ -1,0 +1,15 @@
+# Test fixtures are byte-exact representations of upstream sources and
+# must not have their line endings rewritten by Git.
+#
+# - NHTSA's POST_2010 / PRE_2010 .txt files use CRLF (Finding E in
+#   documentation/nhtsa/flat_file_observations.md). The fixture
+#   sample_recalls.zip + drift_30col.tsv mirror that line-ending shape
+#   so tests exercise the real parser path. Without `-text` here, Git's
+#   autocrlf would silently rewrite CRLF → LF in the working copy and
+#   break tests/fixtures/nhtsa/build_fixture.py's reproducibility
+#   guarantee (the script always writes CRLF; Git would round-trip it
+#   to LF on checkout).
+# - .zip files are binary; flagged explicitly so a future autocrlf
+#   misconfiguration can't corrupt them.
+tests/fixtures/** -text
+*.zip binary

@@ -1,0 +1,52 @@
+# NOTE — As of Phase 5c (2026-05-05), this file is NOT loaded by any code path.
+# It exists as documented intent per ADR 0012 (declarative-source-config pattern,
+# adopted from NYC DCP's dcpy). The YAML loader, Pydantic-discriminated-union
+# dispatch, and registry described in ADR 0012 have not yet been implemented; CLI
+# dispatch in `src/cli/main.py` instantiates `NhtsaExtractor` with hardcoded
+# constructor kwargs (mostly class defaults) instead. Tracked as a follow-up: the
+# loader/registry refactor affects all sources equally and merits its own branch
+# + ADR.
+#
+# Until that wiring lands, treat the values below as "what the loaded config will
+# look like" — i.e. documentation, not configuration.
+
+source_name: nhtsa
+# First flat-file source — introduces a new source_type discriminator. USCG
+# (Phase 5d, html_scraping) will follow this pattern.
+source_type: flat_file
+# Per Source mapping table in documentation/nhtsa/flat_file_observations.md:
+# Option A (TSV-only). Incremental path = POST_2010 only; deep-rescan path
+# concatenates PRE_2010 + POST_2010 to cover the full 1966-present corpus.
+file_url: https://static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_POST_2010.zip
+historical_seed_urls:
+  - https://static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_PRE_2010.zip
+  - https://static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_POST_2010.zip
+# Generous timeout — POST_2010.zip is ~14 MB compressed; on a cold-cache
+# CloudFront miss the chunked download can take 30-60s.
+timeout_seconds: 120.0
+rate_limit_rps: null
+# Findings B + C: Last-Modified and x-amz-version-id are both re-stamped daily
+# regardless of content change. NHTSA has no usable cursor and no working
+# server-side filter; every run is a full dump. ADR 0007 content-hash dedup
+# (over the decompressed inner TSV per Finding J) is the change-detection
+# mechanism.
+incremental_filter_param: null
+incremental_filter_format: null
+default_lookback_days: null
+format_param: null
+credentials: null
+# Finding J: ZIP wrapper bytes are non-deterministic across NHTSA's daily
+# re-archive job (different metadata timestamps and/or non-deterministic
+# compression). Conditional GET via If-None-Match would always return 200,
+# so the optimization is unavailable for the ZIP wrappers regardless of
+# config. The plain-text wrappers (RCL.txt etc.) ARE deterministic but are
+# not part of the production extractor's path.
+etag_enabled: false
+# Inner TSV shape — locked at 29 fields per RCL.txt's documented schema.
+# A 30th column from the next NHTSA drift event triggers
+# FlatFileFieldCountError → quarantine per row, not a run abort.
+expected_field_count: 29
+# Inner-content SHA-256 captured to extraction_runs.response_inner_content_sha256
+# (migration 0011) is the authoritative "did the data change?" oracle. Closes
+# Finding H Q1 (cadence) over ~7 days of accumulated history.
+inner_content_hash_column: response_inner_content_sha256

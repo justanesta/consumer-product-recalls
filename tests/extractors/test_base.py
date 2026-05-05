@@ -477,7 +477,13 @@ def test_rest_api_extractor_defaults() -> None:
 
 
 def test_flat_file_extractor_defaults() -> None:
-    from src.extractors._base import FlatFileExtractor
+    # FlatFileExtractor moved out of _base.py in Phase 5c (Step 2) — its
+    # implementation grew too large for the operation-type stub list and
+    # now lives in its own module alongside the helpers (download,
+    # decompress, parse, capture). Tests of the helpers themselves are in
+    # tests/extractors/test_flat_file.py; this remains as a sanity check
+    # that the Extractor-ABC field defaults still apply.
+    from src.extractors._flat_file import FlatFileExtractor
 
     class ConcreteFlatFile(FlatFileExtractor[_FakeSchema]):
         source_name: str = "flatfile"
