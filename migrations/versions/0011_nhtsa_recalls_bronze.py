@@ -140,7 +140,7 @@ def upgrade() -> None:
     # NHTSA ID and the natural unit of "this is one recall." A single CAMPNO
     # produces many TSV rows (one per affected make × model × year) so this
     # is not unique. Indexed for downstream silver joins.
-    op.execute("CREATE INDEX ix_nhtsa_recalls_bronze_campno " "ON nhtsa_recalls_bronze (campno)")
+    op.execute("CREATE INDEX ix_nhtsa_recalls_bronze_campno ON nhtsa_recalls_bronze (campno)")
 
     op.create_table("nhtsa_recalls_rejected", *rejected_table_columns())
 
