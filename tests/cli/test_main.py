@@ -340,3 +340,156 @@ def test_extract_usda_establishments_lookback_days_warns_but_does_not_fail(
 
     assert result.exit_code == 0
     assert "no effect" in result.output
+
+
+# ---------------------------------------------------------------------------
+# NHTSA dispatch — extract (incremental) and deep-rescan
+# ---------------------------------------------------------------------------
+
+
+def test_extract_nhtsa_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result(fetched=240126, loaded=240126)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.nhtsa.NhtsaExtractor", return_value=mock_extractor),
+    ):
+        result = runner.invoke(app, ["extract", "nhtsa"])
+
+    assert result.exit_code == 0
+    assert "nhtsa:" in result.output
+    assert "fetched=240126" in result.output
+    assert "loaded=240126" in result.output
+
+
+def test_extract_nhtsa_lookback_days_warns_but_does_not_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NHTSA is a flat-file full-dump every run (Findings B + C);
+    --lookback-days has no effect but should be accepted with a notice
+    for CLI shape parity with the API-backed sources."""
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result(fetched=240126, loaded=0)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.nhtsa.NhtsaExtractor", return_value=mock_extractor),
+    ):
+        result = runner.invoke(app, ["extract", "nhtsa", "--lookback-days", "7"])
+
+    assert result.exit_code == 0
+    assert "no effect" in result.output
+
+
+def test_extract_nhtsa_with_valid_since_prints_dev_mode_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid --since YYYY-MM-DD must surface a dev-mode notice so the
+    operator can't miss that bronze will be a date-bounded slice (an
+    intentional ADR 0027 deviation for free-tier-aware dev workflows)."""
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result(fetched=10, loaded=10)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.nhtsa.NhtsaExtractor", return_value=mock_extractor) as mock_cls,
+    ):
+        result = runner.invoke(app, ["extract", "nhtsa", "--since", "2024-01-01"])
+
+    assert result.exit_code == 0
+    assert "--since 2024-01-01 active" in result.output
+    assert "dev-mode" in result.output
+    # The parsed date is forwarded to the extractor as a datetime.date.
+    from datetime import date as _date
+
+    assert mock_cls.call_args.kwargs["since"] == _date(2024, 1, 1)
+
+
+def test_extract_nhtsa_with_invalid_since_exits_with_error() -> None:
+    """An unparseable --since exits 1 BEFORE the extractor is constructed,
+    so the operator gets a clear error rather than a far-downstream stack
+    trace from inside extract()."""
+    result = runner.invoke(app, ["extract", "nhtsa", "--since", "not-a-date"])
+    assert result.exit_code == 1
+    assert "must be YYYY-MM-DD" in result.output
+
+
+def test_extract_non_nhtsa_with_since_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--since`` is NHTSA-only; using it on cpsc/fda/usda must surface
+    an "ignored" notice so the operator doesn't silently lose the filter
+    they thought they applied."""
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result()
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.cpsc.R2LandingClient"),
+        patch("sqlalchemy.create_engine"),
+        patch("src.extractors.cpsc.CpscExtractor", return_value=mock_extractor),
+    ):
+        result = runner.invoke(app, ["extract", "cpsc", "--since", "2024-01-01"])
+
+    assert result.exit_code == 0
+    assert "--since is only honored for nhtsa" in result.output
+
+
+def test_deep_rescan_nhtsa_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_loader = MagicMock()
+    mock_loader.run.return_value = _fake_run_result(fetched=322000, loaded=322000)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.nhtsa.NhtsaDeepRescanLoader", return_value=mock_loader),
+    ):
+        result = runner.invoke(app, ["deep-rescan", "nhtsa"])
+
+    assert result.exit_code == 0
+    assert "nhtsa deep-rescan" in result.output
+    assert "fetched=322000" in result.output
+    assert "loaded=322000" in result.output
+
+
+def test_deep_rescan_nhtsa_ignores_date_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unlike FDA, NHTSA's deep-rescan archives are partitioned by DATEA
+    at the source (Finding H Q2); --start-date/--end-date are accepted
+    for CLI shape parity but ignored with a notice."""
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_loader = MagicMock()
+    mock_loader.run.return_value = _fake_run_result(fetched=322000, loaded=0)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.extractors.nhtsa.NhtsaDeepRescanLoader", return_value=mock_loader),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "deep-rescan",
+                "nhtsa",
+                "--start-date",
+                "2026-01-01",
+                "--end-date",
+                "2026-04-26",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "ignored" in result.output

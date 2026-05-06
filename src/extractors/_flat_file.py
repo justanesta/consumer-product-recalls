@@ -184,14 +184,22 @@ class FlatFileExtractor[T: BaseModel](Extractor[T]):
         responsibility — it can compare ``len(fields)`` to its expected
         width, raise ``FlatFileFieldCountError`` on drift, and route the
         offending row to quarantine without abandoning the rest of the
-        file. CRLF and LF line terminators are both handled by
-        ``str.splitlines``.
+        file.
+
+        Line splitting handles CRLF and LF only — deliberately narrower
+        than ``str.splitlines()``, which also splits on form feed,
+        vertical tab, NEL, and the Unicode line/paragraph separators.
+        Cells in some flat-file sources can legitimately contain those
+        characters; treating them as row boundaries would silently split
+        one row into two.
 
         Empty trailing lines (common in Windows-generated TSVs) are
         skipped silently.
         """
         text = content.decode(encoding)
-        for row_index, line in enumerate(text.splitlines()):
+        # Normalize CRLF → LF, then split on LF. Equivalent to handling
+        # both terminators without inheriting splitlines()'s broader set.
+        for row_index, line in enumerate(text.replace("\r\n", "\n").split("\n")):
             if not line:
                 continue
             yield row_index, line, line.split("\t")

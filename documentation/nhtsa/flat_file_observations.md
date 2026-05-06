@@ -272,7 +272,7 @@ in the field contents?
 | Delimiter | tab (`\t`) |
 | Header row | **none** — first line is a data record |
 | Encoding | **UTF-8** (NOT CP1252; iconv UTF-8 round-trip succeeds, CP1252 fails) |
-| Line terminator | **CRLF** (Windows-style; `file` heuristic reports CRLF) |
+| Line terminator | **CRLF** (Windows-style; `file` heuristic reports CRLF). Parser splits on `\r\n` and `\n` only — narrower than `str.splitlines()`, so cells containing form feed / vertical tab / NEL / Unicode line-paragraph separators are preserved as cell content rather than treated as row boundaries. Tightened in `_iter_tab_delimited` 2026-05-06 after a hypothesis test surfaced the broader-than-documented behavior; relevant for any future flat-file source whose cells legitimately contain those characters. |
 | Row count (POST_2010) | 240,126 |
 | Row count (PRE_2010) | 81,714 |
 | Field positions | RECORD_ID/CAMPNO/MAKETXT/MODELTXT/YEARTXT/MFGCAMPNO/COMPNAME/MFGNAME/... per RCL.txt — verified via spot-check of the first record (`81715 │ 10V407000 │ DAMON │ INTRUDER │ 2005 │ RC000018 │ EQUIPMENT:RECREATIONAL VEHICLE/TRAILER:LPG SYSTEMS:TANK ASSEMBLY │ THOR MOTOR COACH │ ...`) |

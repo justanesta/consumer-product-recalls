@@ -15,6 +15,8 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import BaseModel
 
 from src.extractors._base import (
@@ -26,6 +28,7 @@ from src.extractors._base import (
 from src.extractors._flat_file import (
     FlatFileExtractor,
     FlatFileFieldCountError,
+    inner_content_stream,
 )
 
 _FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "nhtsa"
@@ -139,6 +142,18 @@ class TestDownloadToTemp:
 
     def test_401_raises_authentication_error(self, extractor: _DummyFlatFile) -> None:
         response = _make_response(401)
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.get.return_value = response
+            with pytest.raises(AuthenticationError):
+                extractor._download_to_temp("https://example.test/dummy.zip")
+
+    def test_403_raises_authentication_error(self, extractor: _DummyFlatFile) -> None:
+        # Same branch as 401 — both are auth failures per the source's tuple
+        # check. Covered separately because the two status codes carry
+        # different operator semantics (403 = present-but-forbidden, often a
+        # bot-block; 401 = credential failure) and we want a regression to
+        # surface if someone narrows the tuple to just one.
+        response = _make_response(403)
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.get.return_value = response
             with pytest.raises(AuthenticationError):
@@ -297,3 +312,80 @@ class TestCaptureFlatfileResponse:
             extractor._captured_response_body_sha256
             != extractor._captured_response_inner_content_sha256
         )
+
+
+# ---------------------------------------------------------------------------
+# inner_content_stream — file-like adapter for future flat-file sources
+# ---------------------------------------------------------------------------
+
+
+class TestInnerContentStream:
+    def test_returns_seekable_bytesio(self) -> None:
+        # The adapter exists for callers (e.g., csv.reader) that want a
+        # file-like view of the inner bytes. Verify it round-trips and is
+        # seekable — both behaviors a streaming consumer relies on.
+        content = b"row1\trow1b\r\nrow2\trow2b\r\n"
+        stream = inner_content_stream(content)
+        assert stream.read() == content
+        stream.seek(0)
+        assert stream.read(4) == b"row1"
+
+
+# ---------------------------------------------------------------------------
+# _iter_tab_delimited — property-based roundtrip
+# ---------------------------------------------------------------------------
+#
+# The iterator is a simple parser; example-based tests above pin its
+# happy paths and edge cases (CRLF/LF, empty trailing lines, drift width,
+# UTF-8). These properties target the broader invariant: for any
+# tab-delimited body we hand it, what comes back must equal what we put
+# in (modulo the documented "skip empty lines" rule). A property test is
+# the natural fit — the parser's contract is universal across inputs,
+# not tied to specific examples.
+
+# Cells exclude only the structural delimiters of the parser: tab
+# (separates fields) and the LF / CR pair (separate rows). Surrogate
+# code points (``Cs``) are valid Python ``str`` but invalid UTF-8 source
+# bytes — the test's ``body.encode('utf-8')`` step would trip on them
+# before the iterator ever runs. NUL is excluded as a defensive choice
+# (decode surprises in the wild).
+_FIELD_TEXT = st.text(
+    alphabet=st.characters(
+        blacklist_categories=("Cs",),
+        blacklist_characters="\t\n\r\x00",
+    ),
+    min_size=0,
+    max_size=20,
+)
+_ROW = st.lists(_FIELD_TEXT, min_size=1, max_size=10)
+_ROWS = st.lists(_ROW, min_size=0, max_size=15)
+
+
+@given(rows=_ROWS)
+@settings(max_examples=50, deadline=None)
+def test_iter_tab_delimited_roundtrips_arbitrary_tsv(rows: list[list[str]]) -> None:
+    """For any well-formed TSV body, the iterator yields back rows whose
+    fields, re-joined with ``\\t``, equal the original line; and whose
+    count equals the number of non-empty input lines.
+
+    Hypothesis explores the input space — empty rows, single-cell rows,
+    rows of empty strings, mixed widths — surfacing edge cases that
+    example-based tests would have to enumerate by hand.
+    """
+    extractor = _DummyFlatFile()
+    body_lines = ["\t".join(fields) for fields in rows]
+    body = ("\n".join(body_lines)).encode("utf-8")
+
+    out = list(extractor._iter_tab_delimited(body))
+
+    # The iterator skips empty lines (per its own contract — "Empty
+    # trailing lines (common in Windows-generated TSVs) are skipped
+    # silently"). Mirror that here when computing expectations.
+    expected_lines = [line for line in body_lines if line]
+    assert len(out) == len(expected_lines)
+
+    # Each yielded tuple's `line` and `fields` are consistent with each
+    # other and with the original input.
+    for (_row_index, line, fields), expected_line in zip(out, expected_lines, strict=True):
+        assert line == expected_line
+        assert "\t".join(fields) == expected_line
