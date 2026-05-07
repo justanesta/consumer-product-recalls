@@ -351,7 +351,7 @@ FDA's FEI per ADR 0002).
 **Step 1 — Source exploration** ✓
 - Direct inspection of the NHTSA recall ZIP download URL before writing the extractor. Key questions: How often does NHTSA release a new ZIP vs update an existing one? Does the file modification date reliably reflect content changes or just re-packaging? Document in `documentation/nhtsa/`.
 
-**Step 2 — Schema, extractor, migration** (pending)
+**Step 2 — Schema, extractor, migration** ✓
 - `src/extractors/_flat_file.py` — `FlatFileExtractor` operation-type subclass of the `Extractor` ABC (deferred from Phase 2 to its first use here). Shape is informed by NHTSA: ZIP download → stream-decompress → row-by-row parse → bronze load. Unit-tested in isolation before `NhtsaExtractor` lands on top of it.
 - `NhtsaExtractor(FlatFileExtractor)` per ADR 0008
 - Pydantic schema for 29-field tab-delimited row
