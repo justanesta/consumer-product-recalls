@@ -39,7 +39,10 @@ column names (``record_id``, ``campno``, ``maketxt``, ...). Pydantic
 field names match the bronze column names — most are identical to the
 input keys, except ``source_recall_id`` which absorbs ``record_id`` via
 ``validation_alias`` (mirrors USDA's
-``field_recall_number → source_recall_id`` pattern).
+``field_recall_number → source_recall_id`` pattern). Note that despite
+the cross-source naming, ``source_recall_id`` is NOT load-bearing for
+NHTSA dedup — see the ``source_recall_id`` field comment below and ADR
+0030 for the composite-identity scheme NHTSA uses instead.
 """
 
 from __future__ import annotations
@@ -140,11 +143,21 @@ class NhtsaRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
-    # --- Identity (RCL.txt field 1) ---
-    # validation_alias absorbs the extractor's lowercase RCL.txt key into
-    # the canonical bronze column name (mirrors USDA's
-    # field_recall_number → source_recall_id pattern). RECORD_ID is
-    # documented in RCL.txt as a stable per-row natural key.
+    # --- Audit-only identifier (RCL.txt field 1) ---
+    # RCL.txt field 1 description: "Running Sequence Number, Which Uniquely
+    # Identifies The Record" — the "Running Sequence Number" prefix is
+    # load-bearing: this is a counter assigned at file-generation time, NOT
+    # a stable per-row natural key. NHTSA reassigns RECORD_ID on each file
+    # rebuild (Finding K) and the TSV emits byte-identical duplicate rows
+    # that differ only in this field (Finding L). Per ADR 0030,
+    # source_recall_id is stored on bronze rows for audit/lineage but is
+    # excluded from content_hash via hash_exclude_fields and is NOT part
+    # of identity_fields. Bronze dedup uses the 7-tuple (campno, maketxt,
+    # modeltxt, yeartxt, compname, rcl_cmpt_id, mfr_comp_ptno) configured
+    # on BronzeLoader in src/extractors/nhtsa.py:load_bronze.
+    #
+    # validation_alias absorbs the extractor's lowercase RCL.txt key
+    # ("record_id") into the canonical bronze column name.
     source_recall_id: str = Field(validation_alias="record_id")
 
     # --- Required campaign/vehicle identifiers (RCL.txt fields 2-8, 11-12, 15) ---

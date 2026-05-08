@@ -7,7 +7,11 @@ import pytest
 from pydantic import BaseModel
 from sqlalchemy import Column, DateTime, MetaData, String, Table
 
-from src.bronze.loader import BronzeLoader, filter_new_records
+from src.bronze.loader import (
+    BronzeLoader,
+    WithinBatchIdentityCollisionError,
+    filter_new_records,
+)
 from src.extractors._base import QuarantineRecord
 
 # ---------------------------------------------------------------------------
@@ -95,6 +99,7 @@ def _make_loader(
     rejected_name: str = "rejected_cpsc",
     hash_exclude_fields: frozenset[str] = frozenset(),
     identity_fields: tuple[str, ...] = ("source_recall_id",),
+    within_batch_dedup: bool = False,
 ) -> tuple[BronzeLoader, MagicMock, MagicMock]:
     bronze = _make_table(bronze_name)
     rejected = _make_table(rejected_name)
@@ -103,6 +108,7 @@ def _make_loader(
         rejected_table=rejected,
         hash_exclude_fields=hash_exclude_fields,
         identity_fields=identity_fields,
+        within_batch_dedup=within_batch_dedup,
     )
     return loader, bronze, rejected
 
@@ -704,3 +710,155 @@ def test_hash_exclude_fields_still_detects_change_in_non_excluded_field() -> Non
     assert count == 1
     rows_inserted = conn.execute.call_args[0][1]
     assert rows_inserted[0]["source_recall_id"] == "FDA-001"
+
+
+# ---------------------------------------------------------------------------
+# BronzeLoader.within_batch_dedup — opt-in collapse of (identity, hash)
+# duplicates within a single batch (NHTSA per ADR 0030)
+# ---------------------------------------------------------------------------
+
+
+def test_within_batch_dedup_collapses_byte_duplicate_records() -> None:
+    """Two records with the same identity AND same content hash collapse to one insert."""
+    loader, _, _ = _make_loader(within_batch_dedup=True)
+    conn = _make_conn()
+
+    # Two records with identical fields → identical identity AND identical hash.
+    rec_a = SimpleRecord(source_recall_id="CPSC-001", title="Recall A", count=5)
+    rec_b = SimpleRecord(source_recall_id="CPSC-001", title="Recall A", count=5)
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={}):
+        count = loader.load(
+            conn,
+            records=[rec_a, rec_b],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    assert count == 1
+    rows_inserted = conn.execute.call_args[0][1]
+    assert len(rows_inserted) == 1
+    assert rows_inserted[0]["source_recall_id"] == "CPSC-001"
+
+
+def test_within_batch_dedup_keeps_distinct_records_unchanged() -> None:
+    """Records with different identities all pass through dedup."""
+    loader, _, _ = _make_loader(within_batch_dedup=True)
+    conn = _make_conn()
+
+    rec_a = SimpleRecord(source_recall_id="CPSC-001", title="Recall A")
+    rec_b = SimpleRecord(source_recall_id="CPSC-002", title="Recall B")
+    rec_c = SimpleRecord(source_recall_id="CPSC-003", title="Recall C")
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={}):
+        count = loader.load(
+            conn,
+            records=[rec_a, rec_b, rec_c],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    assert count == 3
+    rows_inserted = conn.execute.call_args[0][1]
+    assert {r["source_recall_id"] for r in rows_inserted} == {"CPSC-001", "CPSC-002", "CPSC-003"}
+
+
+def test_within_batch_dedup_raises_on_identity_collision_with_different_hash() -> None:
+    """Same identity with different content hashes is the defensive-error case.
+
+    Per ADR 0030, the expected NHTSA dedup case leaves all colliding rows
+    byte-identical post-RECORD_ID-exclusion. A within-batch identity collision
+    with *different* content indicates a source-format change or extractor bug
+    — surface loudly rather than silently keeping one variant.
+    """
+    loader, _, _ = _make_loader(within_batch_dedup=True)
+    conn = _make_conn()
+
+    # Same source_recall_id (= same identity tuple), different title (= different hash).
+    rec_a = SimpleRecord(source_recall_id="CPSC-001", title="Original")
+    rec_b = SimpleRecord(source_recall_id="CPSC-001", title="Different")
+
+    with (
+        patch.object(loader, "_fetch_existing_hashes", return_value={}),
+        pytest.raises(WithinBatchIdentityCollisionError) as exc_info,
+    ):
+        loader.load(
+            conn,
+            records=[rec_a, rec_b],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    # Error message should include the colliding identity for diagnosability.
+    assert "CPSC-001" in str(exc_info.value)
+    conn.execute.assert_not_called()
+
+
+def test_within_batch_dedup_default_false_preserves_old_behavior() -> None:
+    """With the flag off (default), the loader does not dedup within-batch.
+
+    Two records with identical fields both reach the existing-check; both pass
+    (no existing hash); both insert. This is the pre-ADR-0030 behavior — kept
+    intact for sources that don't need within-batch dedup (CPSC, FDA, USDA).
+    """
+    loader, _, _ = _make_loader()  # within_batch_dedup defaults to False
+    conn = _make_conn()
+
+    rec_a = SimpleRecord(source_recall_id="CPSC-001", title="Recall A", count=5)
+    rec_b = SimpleRecord(source_recall_id="CPSC-001", title="Recall A", count=5)
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={}):
+        count = loader.load(
+            conn,
+            records=[rec_a, rec_b],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    # Both records insert — no within-batch dedup happened.
+    assert count == 2
+
+
+def test_within_batch_dedup_with_hash_exclude_fields_collapses_record_id_only_dupes() -> None:
+    """The NHTSA-realistic scenario: composite identity excluding RECORD_ID,
+    plus hash_exclude_fields excluding source_recall_id, plus within_batch_dedup=True.
+
+    Two records that differ ONLY in source_recall_id (NHTSA's regen-unstable
+    counter) must collapse to one bronze row. This is the configuration ADR
+    0030 specifies for NHTSA, exercised end-to-end in BronzeLoader.
+    """
+    # composite identity — source_recall_id is intentionally NOT in identity_fields
+    loader, _, _ = _make_loader(
+        identity_fields=("title",),  # stand-in for NHTSA's 7-tuple
+        hash_exclude_fields=frozenset({"source_recall_id"}),
+        within_batch_dedup=True,
+    )
+    conn = _make_conn()
+
+    # Two records with same identity (title) and same content (count) but
+    # different source_recall_id — exact analog to NHTSA's NISSAN/ACHILLES
+    # byte-duplicate rows where RECORD_ID is the only differing field.
+    rec_a = SimpleRecord(source_recall_id="record-100", title="Same Identity", count=7)
+    rec_b = SimpleRecord(source_recall_id="record-200", title="Same Identity", count=7)
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={}):
+        count = loader.load(
+            conn,
+            records=[rec_a, rec_b],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    # Byte-duplicate after RECORD_ID exclusion → collapsed to one insert.
+    assert count == 1
+    rows_inserted = conn.execute.call_args[0][1]
+    assert len(rows_inserted) == 1
+    # The kept record's source_recall_id is whichever was first-seen
+    # (arbitrary by ADR 0030 design — both are byte-equivalent on the
+    # hashed surface).
+    assert rows_inserted[0]["source_recall_id"] in {"record-100", "record-200"}

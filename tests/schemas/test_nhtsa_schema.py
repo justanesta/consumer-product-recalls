@@ -177,8 +177,14 @@ class TestNhtsaRecord:
 
     def test_source_recall_id_aliased_from_record_id(self) -> None:
         """Pydantic's validation_alias maps the dict key `record_id` →
-        the schema attribute `source_recall_id`. The bronze loader's
-        identity_fields=("source_recall_id",) then dedups on this value.
+        the schema attribute `source_recall_id`. Note that despite the
+        name, source_recall_id is NOT the bronze identity for NHTSA —
+        per ADR 0030, identity is the 7-tuple (campno, maketxt,
+        modeltxt, yeartxt, compname, rcl_cmpt_id, mfr_comp_ptno) and
+        source_recall_id (= RECORD_ID) is excluded from content_hash
+        because it's a regen-time counter (Findings K, L). The field
+        remains on bronze rows for audit/lineage; this test pins the
+        alias plumbing only.
         """
         record = NhtsaRecord.model_validate(_REQUIRED)
         assert record.source_recall_id == _REQUIRED["record_id"]

@@ -658,6 +658,13 @@ class TestLoadBronze:
         ``_touch_freshness``. Deep-rescan owns neither of those — see
         ``TestDeepRescan.test_load_bronze_skips_watermark_advance`` for
         the contrast.
+
+        Also pins the ADR 0030 BronzeLoader configuration: 7-tuple
+        composite identity (RECORD_ID is regen-unstable per Finding K),
+        ``hash_exclude_fields={"source_recall_id"}`` (so RECORD_ID
+        instability doesn't pollute content_hash), and
+        ``within_batch_dedup=True`` (collapses NHTSA's TSV-shipped
+        byte-duplicate rows per Finding L).
         """
         with (
             patch("src.extractors.nhtsa.BronzeLoader") as mock_loader_cls,
@@ -671,9 +678,27 @@ class TestLoadBronze:
 
         assert count == 7
         mock_loader_cls.assert_called_once()
-        # identity_fields=("source_recall_id",) per the source — RECORD_ID
-        # is unique across the corpus (TSV field 1).
-        assert mock_loader_cls.call_args.kwargs["identity_fields"] == ("source_recall_id",)
+        kwargs = mock_loader_cls.call_args.kwargs
+        # ADR 0030: NHTSA bronze identity is the 7-tuple composite. Each
+        # tuple component is independently justified by Findings K and L
+        # plus the field-stability checks in
+        # scripts/sql/nhtsa/bronze/verify_six_tuple_identity.sql + investigate_tire_collision.sql.
+        assert kwargs["identity_fields"] == (
+            "campno",
+            "maketxt",
+            "modeltxt",
+            "yeartxt",
+            "compname",
+            "rcl_cmpt_id",
+            "mfr_comp_ptno",
+        )
+        # source_recall_id (= RECORD_ID) is regen-unstable; excluding it
+        # from the hash means same logical row → same hash across daily
+        # extracts. Stored on bronze rows for audit but not load-bearing.
+        assert kwargs["hash_exclude_fields"] == frozenset({"source_recall_id"})
+        # NHTSA TSV ships byte-duplicate rows for ~0.7% of records
+        # (Finding L); within-batch dedup collapses them at extract time.
+        assert kwargs["within_batch_dedup"] is True
         mock_loader_cls.return_value.load.assert_called_once_with(
             mock_conn, [], [], "nhtsa/abc.zip"
         )

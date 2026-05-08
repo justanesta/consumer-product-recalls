@@ -19,6 +19,20 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 
+class WithinBatchIdentityCollisionError(ValueError):
+    """Raised when within-batch dedup encounters the same identity tuple
+    paired with two different content hashes.
+
+    Used by sources that opt into ``within_batch_dedup=True`` (NHTSA per
+    ADR 0030). The expected dedup case is ``(identity, hash)`` byte-duplicate
+    rows produced by the source — same identity, same hash, collapse to one.
+    Same identity with *different* hashes indicates either a source-format
+    change (a previously-constant field now varies within a duplicate set)
+    or an extractor bug; either way it requires investigation rather than
+    silent loss of one of the variants.
+    """
+
+
 def filter_new_records(
     hashed: list[tuple[tuple[str, ...], str, BaseModel]],
     existing_hashes: dict[tuple[str, ...], str],
@@ -76,6 +90,7 @@ class BronzeLoader:
         rejected_table: Table,
         hash_exclude_fields: frozenset[str] = frozenset(),
         identity_fields: tuple[str, ...] = ("source_recall_id",),
+        within_batch_dedup: bool = False,
     ) -> None:
         if not identity_fields:
             raise ValueError("identity_fields must contain at least one column name")
@@ -83,10 +98,53 @@ class BronzeLoader:
         self._rejected = rejected_table
         self._hash_exclude_fields = hash_exclude_fields
         self._identity_fields = identity_fields
+        self._within_batch_dedup = within_batch_dedup
 
     def _identity_columns(self) -> list[Any]:
         """Return SQLAlchemy column objects for each identity field on the bronze table."""
         return [getattr(self._bronze.c, f) for f in self._identity_fields]
+
+    def _dedup_within_batch(
+        self,
+        hashed: list[tuple[tuple[str, ...], str, BaseModel]],
+    ) -> list[tuple[tuple[str, ...], str, BaseModel]]:
+        """Collapse ``(identity, content_hash)`` duplicates within a single batch.
+
+        Same ``(identity, hash)`` pair → keep first occurrence and discard the
+        rest. Records sharing both identity and hash are byte-equivalent (post
+        ``hash_exclude_fields`` filtering), so the choice of which to keep is
+        arbitrary. This is the case ADR 0030 documents for NHTSA's TSV-shipped
+        byte-duplicate rows (~0.7% of the corpus per Finding L).
+
+        Same identity with *different* hashes → raise
+        ``WithinBatchIdentityCollisionError``. The expected NHTSA dedup case
+        leaves all colliding rows byte-identical post-RECORD_ID-exclusion;
+        a hash mismatch means the source changed shape (a field that used to
+        be constant within a duplicate set now varies) or the extractor has a
+        bug. Surface loudly rather than silently picking one variant.
+
+        Pure function on the input list — no DB access. Caller controls
+        whether this runs via ``within_batch_dedup`` flag at construction.
+        """
+        seen: dict[tuple[str, ...], str] = {}
+        deduped: list[tuple[tuple[str, ...], str, BaseModel]] = []
+        for item in hashed:
+            identity, hash_value, _record = item
+            existing_hash = seen.get(identity)
+            if existing_hash is None:
+                seen[identity] = hash_value
+                deduped.append(item)
+            elif existing_hash == hash_value:
+                # Genuine byte-duplicate (per ADR 0030 / Finding L) — collapse.
+                continue
+            else:
+                raise WithinBatchIdentityCollisionError(
+                    f"Within-batch identity collision with different content hashes: "
+                    f"identity={identity!r}, hashes={existing_hash!r} vs {hash_value!r}. "
+                    f"Indicates either a source-format change (a previously-constant "
+                    f"field now varies within a duplicate set) or an extractor bug."
+                )
+        return deduped
 
     def _fetch_existing_hashes(
         self,
@@ -186,6 +244,18 @@ class BronzeLoader:
                 else row_data
             )
             hashed.append((identity_key, content_hash(hash_input), record))
+
+        # --- Within-batch dedup (opt-in per source; NHTSA per ADR 0030) ---
+        if self._within_batch_dedup:
+            pre_dedup_count = len(hashed)
+            hashed = self._dedup_within_batch(hashed)
+            if len(hashed) != pre_dedup_count:
+                log.debug(
+                    "bronze_loader.within_batch_dedup",
+                    pre_dedup=pre_dedup_count,
+                    post_dedup=len(hashed),
+                    collapsed=pre_dedup_count - len(hashed),
+                )
 
         # --- Fetch latest existing hashes for this batch ---
         existing = self._fetch_existing_hashes(conn, [item[0] for item in hashed])
