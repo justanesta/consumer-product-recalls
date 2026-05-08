@@ -679,10 +679,13 @@ class TestLoadBronze:
         assert count == 7
         mock_loader_cls.assert_called_once()
         kwargs = mock_loader_cls.call_args.kwargs
-        # ADR 0030: NHTSA bronze identity is the 7-tuple composite. Each
-        # tuple component is independently justified by Findings K and L
-        # plus the field-stability checks in
-        # scripts/sql/nhtsa/bronze/verify_six_tuple_identity.sql + investigate_tire_collision.sql.
+        # ADR 0030 (amended after TSV-level analysis): NHTSA bronze identity
+        # is an 11-tuple composite. The first 7 fields are the original
+        # ADR 0030 set; the last 4 (mfr_comp_desc, mfr_comp_name, endman,
+        # bgman) were added after scripts/nhtsa/tsv_analysis/identity_search.py
+        # surfaced an 822-anomaly residue across the full POST_2010 corpus
+        # that the bronze-narrow-scope diagnostics missed. Two POST_2010
+        # regenerations converge identically to this 11-tuple.
         assert kwargs["identity_fields"] == (
             "campno",
             "maketxt",
@@ -691,14 +694,23 @@ class TestLoadBronze:
             "compname",
             "rcl_cmpt_id",
             "mfr_comp_ptno",
+            "mfr_comp_desc",
+            "mfr_comp_name",
+            "endman",
+            "bgman",
         )
         # source_recall_id (= RECORD_ID) is regen-unstable; excluding it
         # from the hash means same logical row → same hash across daily
         # extracts. Stored on bronze rows for audit but not load-bearing.
         assert kwargs["hash_exclude_fields"] == frozenset({"source_recall_id"})
-        # NHTSA TSV ships byte-duplicate rows for ~0.7% of records
+        # NHTSA TSV ships byte-duplicate rows for ~0.4% of POST_2010 records
         # (Finding L); within-batch dedup collapses them at extract time.
         assert kwargs["within_batch_dedup"] is True
+        # Four of the 11 identity fields (bgman, endman, mfr_comp_desc,
+        # mfr_comp_name) are legitimately empty for many rows. The flag
+        # treats empty strings as a valid identity bucket rather than
+        # raising "missing required field" — see ADR 0030 amendment.
+        assert kwargs["allow_null_identity"] is True
         mock_loader_cls.return_value.load.assert_called_once_with(
             mock_conn, [], [], "nhtsa/abc.zip"
         )

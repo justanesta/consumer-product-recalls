@@ -1,10 +1,19 @@
 # 0030 — NHTSA bronze identity: composite tuple + within-batch dedup (RECORD_ID regen-unstable; TSV ships byte-duplicate rows)
 
-- **Status:** Accepted
-- **Date:** 2026-05-07
+- **Status:** Accepted (amended 2026-05-08 after TSV-level analysis + implementation)
+- **Date:** 2026-05-07; amendments 2026-05-08
 - **Supersedes:** —
 - **Superseded by:** —
 - **Clarifies:** ADR 0007 (extends `hash_exclude_fields` use beyond FDA's RID position counter); ADR 0012 (concrete `identity_fields` choice for NHTSA); ADR 0014 (RECORD_ID is not a per-row natural key despite RCL.txt's "uniquely identifies the record" wording).
+
+## Amendment summary (2026-05-08)
+
+After this ADR's initial 7-tuple proposal landed, two additional rounds of empirical work shifted the decision:
+
+1. **TSV-level analysis widened the identity tuple from 7 to 11 fields.** The original bronze-side diagnostics (May 7 snapshot, post-2024 slice) found a 477-row residue and characterized it as byte-duplicate via spot-checked NISSAN + ACHILLES samples. Subsequent full-corpus analysis via `scripts/nhtsa/tsv_analysis/identity_search.py` against both POST_2010 regenerations (May 7 SHA `c955c37153d1` + older SHA `f11119e4d864`) revealed an 822-anomaly residue across the full TSV that the bronze-narrow scope had missed (the bronze data was `--since 2024-01-01` filtered, but the deep-rescan path needs the full corpus). Iterative widening converged identically on both regenerations to four additional fields: `mfr_comp_desc`, `mfr_comp_name`, `endman`, `bgman`. The widened 11-tuple is the actual identity.
+2. **Loader implementation surfaced two unrelated SQL-level issues that needed fixes for the architecture to work end-to-end on real data**, both described under Decision below: type-canonical IN comparison (to handle empty-string binding into `TIMESTAMPTZ` parameter slots, which `bgman`/`endman` introduce), and chunked existing-hash lookup (to stay under Postgres' bind-parameter ceiling and planner-memory limits at 65k+ row batches).
+
+Empirical end-to-end validation: post-amendment, `recalls extract nhtsa --since 2024-01-01` loads 65,732 rows on a fresh run; a re-run with `--since 2023-12-01` adds 6,343 rows (genuinely-new December 2023 records, the post-2024 slice deduplicates correctly). The 11-tuple is row-unique on what landed (`scripts/sql/nhtsa/bronze/verify_eleven_tuple_row_unique.sql` returns `excess_rows=0`).
 
 ## Context
 
@@ -41,32 +50,42 @@ What `identity_fields`, `hash_exclude_fields`, and within-batch dedup behavior s
 
 ## Decision
 
-**NHTSA bronze uses a composite 7-tuple identity, excludes `source_recall_id` from the content hash, and deduplicates `(identity, hash)` pairs within each extract batch before insert.**
+**NHTSA bronze uses a composite 11-tuple identity, excludes `source_recall_id` from the content hash, deduplicates `(identity, hash)` pairs within each extract batch before insert, and accepts empty/null values as valid identity-bucket components.**
 
-### Identity fields
+### Identity fields (11-tuple, amended 2026-05-08)
 
 ```python
 # src/extractors/nhtsa.py BronzeLoader configuration
 identity_fields=(
-    "campno",         # NHTSA recall ID (e.g., 24V930000) — public, stable
-    "maketxt",        # Vehicle/equipment make
-    "modeltxt",       # Vehicle/equipment model
-    "yeartxt",        # Vehicle model year (or "9999" unknown/N/A)
-    "compname",       # NHTSA component taxonomy node
-    "rcl_cmpt_id",    # NHTSA per-(COMPNAME, recall) component ID
-    "mfr_comp_ptno",  # Manufacturer-supplied part number
+    "campno",          # NHTSA recall ID (e.g., 24V930000) — public, stable
+    "maketxt",         # Vehicle/equipment make
+    "modeltxt",        # Vehicle/equipment model
+    "yeartxt",         # Vehicle model year (or "9999" unknown/N/A)
+    "compname",        # NHTSA component taxonomy node
+    "rcl_cmpt_id",     # NHTSA per-(COMPNAME, recall) component ID
+    "mfr_comp_ptno",   # Manufacturer-supplied part number
+    "mfr_comp_desc",   # Manufacturer-supplied component description
+    "mfr_comp_name",   # Manufacturer-supplied component name
+    "endman",          # End of manufacturing date range (TIMESTAMPTZ)
+    "bgman",           # Begin of manufacturing date range (TIMESTAMPTZ)
 )
 ```
 
-Empirical row-uniqueness within a single TSV (May 7 snapshot, `investigate_tire_collision.sql` Q3): 65,601 distinct 7-tuples across 66,078 rows. The 477-row residue is byte-duplicate rows handled by within-batch dedup (below).
+The first 7 fields were the original ADR proposal (2026-05-07). Fields 8–11 were added 2026-05-08 after `scripts/nhtsa/tsv_analysis/identity_search.py` surfaced 822 anomaly groups against the full POST_2010 corpus that the bronze-narrow analysis missed. The widening was identity-iterative: each additional field resolved the most anomaly groups in the residue (`mfr_comp_desc`: 689/822, then `mfr_comp_name`: 128/145 of remainder, then `endman`: 10/17, then `bgman`: 7/7 → 0). Two POST_2010 regenerations converge identically to this 11-tuple.
+
+Empirical row-uniqueness across the full POST_2010 TSV: 239,036 distinct 11-tuples across 240,158 rows; the 1,122-row residue is byte-duplicates (987 collision groups) handled by within-batch dedup. PRE_2010 has zero collisions at any tuple width — the additional 4 fields are constant-empty for all pre-2010 rows, so the wider tuple is harmless there.
 
 Stability across regenerations:
 
-- `campno`, `maketxt`, `modeltxt`, `yeartxt`, `compname` — invariant by definition of the recall. NHTSA cannot renumber `campno` without breaking external references (news articles, manufacturer notices, NHTSA's own consumer-facing site).
-- `rcl_cmpt_id` — empirically stable across the May 5 ↔ May 7 regenerations (`investigate_tire_collision.sql` Q2): 16,263 5-tuples present in both snapshots, 0 set-mismatches under array-equality comparison.
-- `mfr_comp_ptno` — empirically stable across the same regenerations (`verify_six_tuple_identity.sql` Q2): 16,263 5-tuples, 0 mismatches.
+- `campno`, `maketxt`, `modeltxt`, `yeartxt`, `compname` — invariant by definition of the recall. NHTSA cannot renumber `campno` without breaking external references.
+- `rcl_cmpt_id` — empirically stable (`investigate_tire_collision.sql` Q2: 16,263 5-tuples, 0 set-mismatches across May 5 ↔ May 7 regenerations).
+- `mfr_comp_ptno` — empirically stable (`verify_six_tuple_identity.sql` Q2: 16,263 5-tuples, 0 mismatches).
+- `mfr_comp_desc`, `mfr_comp_name`, `endman`, `bgman` — stability inferred from the convergence of two `identity_search.py` runs (May 7 c955c37 + older f11119e SHAs) producing identical iteration logs and identical collision counts. Direct cross-regen field-stability testing for these four fields is deferred to `cross_regen_stability.py` (a planned tier-3 script in `scripts/nhtsa/tsv_analysis/`); a daily-extract-rerun against the same corpus produces 0 false-positive inserts (verified 2026-05-08), which is the load-bearing operational property.
 
-Null-rate caveat: `MFR_COMP_PTNO` was added to the TSV on 2020-03-23 per RCL.txt change-log entry 4. Within the post-2024 dev scope it has 0% null rate (`verify_six_tuple_identity.sql` Q3), but the historical-seed path (Phase 7, deep-rescan covering 1966–2009 via `FLAT_RCL_PRE_2010.zip`) will encounter widespread NULL values. Postgres groups NULLs together in `GROUP BY`, so identity collisions in pre-2020 records will collapse — acceptable since the historical seed runs once and pre-2020 records are not edited.
+Null-rate caveat:
+
+- `mfr_comp_ptno`, `mfr_comp_desc`, `mfr_comp_name` were added 2020-03-23 per RCL.txt change-log entry 4. Pre-2020 rows have empty strings for all three; the post-2024 dev scope has 0% null rate.
+- `bgman`, `endman` are populated for vehicle (V) recalls and frequently empty for equipment (E), tire (T), and child-seat (C) recalls. The empty-value handling is what makes `allow_null_identity=True` (below) load-bearing.
 
 ### Hash exclusion
 
@@ -84,9 +103,31 @@ Excluding `source_recall_id` (= `RECORD_ID`) from the content hash means:
 
 ### Within-batch dedup
 
-`NhtsaExtractor.extract()` (or `validate_records()`) deduplicates on `(identity_tuple, content_hash)` before handing records to `BronzeLoader.load()`. Without this, the loader's existing-hash check is against bronze, not within-batch — so all 4 NISSAN-style byte-duplicate rows would land on first extract.
+```python
+within_batch_dedup=True
+```
 
-Implementation: after Pydantic validation, group records by `(identity_tuple, content_hash)` and emit one record per group. The choice of which record to keep is arbitrary because the records are byte-equivalent post-hash-exclusion.
+`BronzeLoader._dedup_within_batch()` (a new method, ADR-0030-introduced) deduplicates on `(identity_tuple, content_hash)` before the loader's existing-hash check against bronze. Without this, the loader's check is against bronze only, not within-batch — so 4 NISSAN-style byte-duplicate rows would all land on first extract.
+
+Implementation: after Pydantic validation and identity/hash computation, group records by `(identity_tuple, content_hash)` and keep the first occurrence per group. Same identity with *different* content_hash is the defensive-error case (`WithinBatchIdentityCollisionError`); not observed in NHTSA data after the 11-tuple lock-in.
+
+### Allow-null-identity (added 2026-05-08)
+
+```python
+allow_null_identity=True
+```
+
+Four of the eleven identity fields (`bgman`, `endman`, `mfr_comp_desc`, `mfr_comp_name`) are legitimately empty for many rows. `BronzeLoader`'s default behavior raises `ValueError` when an identity-component value is `None` or `""` — useful safety check for sources where every identity field is always populated (CPSC, FDA, USDA), but wrong for NHTSA. The flag relaxes the check: empty strings and `None` both normalize to `""` and contribute that "" sentinel as a valid identity-bucket component. Two rows with `bgman=None` deduplicate together; a row with `bgman=None` and a row with `bgman=2024-01-01` have distinct identities.
+
+### Implementation-side: text-canonical IN + chunked existing-hash lookup (added 2026-05-08)
+
+Two non-obvious SQL-level fixes were required for the 11-tuple identity to work at production scale. Both live in `src/bronze/loader.py`; both apply to any future source whose `identity_fields` includes typed (datetime, integer, etc.) columns and/or runs at high record volume.
+
+**Text-canonical IN comparison** (`_identity_text_expr`). With the 11-tuple, `identity_fields` includes `bgman`/`endman` `TIMESTAMPTZ` columns. The loader's identity-value normalization produces strings (`""` for empty, ISO-8601-Z for populated). When `tuple_(*cols).in_(identity_keys)` compiles, SQLAlchemy types each bind parameter from the corresponding column's type — empty string binds as TIMESTAMPTZ → Postgres returns `DataError: invalid input syntax for type timestamp with time zone: ""`. Fix: cast both sides of the IN comparison to text (datetime columns via `to_char(col AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')` to match Pydantic's serialization; other columns via `cast(col, Text)`); coalesce NULL → `""`. Empty strings bind cleanly as TEXT regardless of underlying type.
+
+**Chunked existing-hash lookup** (`_PG_PARAM_SAFETY_LIMIT`). The composite `tuple_(*cols).in_(identity_keys)` clause contributes `len(identity_fields) × len(identity_keys)` parameters. NHTSA's 11-tuple at 65k records = ~723k parameters, over Postgres' ~65,535 wire-protocol cap and stressing planner memory on small Neon free-tier compute (observed empirically as `OperationalError`). Fix: chunk `identity_keys` at `60_000 // n_cols` per query (~5,400 keys per chunk for the 11-tuple), run the existing query per chunk, merge result dicts. Per-row dedup is unaffected — each identity tuple appears in exactly one chunk's result.
+
+Both fixes are necessary and orthogonal: text-canonical IN solves type-mismatch (would still fire on empty values even with chunking); chunking solves size (would still fire on large batches even with text-canonical IN).
 
 ## Consequences
 
@@ -112,7 +153,9 @@ Implementation: after Pydantic validation, group records by `(identity_tuple, co
 
 ## Empirical evidence
 
-The reasoning above cites diagnostic queries; their full output is captured in `project_scope/current_branch_staged_tasks.md` (this branch's notes). The load-bearing artifacts:
+The load-bearing artifacts split into two layers — bronze-side diagnostics that surfaced the original 7-tuple proposal, and TSV-level diagnostics that widened it to 11.
+
+### Bronze-side (initial 2026-05-07 evidence — post-2024 slice)
 
 | Source | What it shows |
 |---|---|
@@ -120,9 +163,23 @@ The reasoning above cites diagnostic queries; their full output is captured in `
 | `scripts/sql/nhtsa/bronze/verify_natural_key_candidate.sql` Q-A | Same Vermeer recall, each row's RECORD_ID changes across regenerations (e.g., Lug Nut: 255795 → 267221) |
 | `scripts/sql/nhtsa/bronze/investigate_tire_collision.sql` Q2 | rcl_cmpt_id stability across regenerations: 16,263 5-tuples, 0 mismatches |
 | `scripts/sql/nhtsa/bronze/verify_six_tuple_identity.sql` Q2 | mfr_comp_ptno stability across regenerations: 16,263 5-tuples, 0 mismatches |
-| `scripts/sql/nhtsa/bronze/investigate_tire_collision.sql` Q3 | 7-tuple uniqueness: 65,601 / 66,078 rows distinct (~99.3%); 477 residue |
-| `scripts/sql/nhtsa/bronze/investigate_residual_collisions.sql` Q1/Q2 | 477-row residue is byte-identical except RECORD_ID + content_hash (NISSAN 4 dups, ACHILLES 5 dups) |
+| `scripts/sql/nhtsa/bronze/investigate_tire_collision.sql` Q3 | 7-tuple uniqueness on the post-2024 slice: 65,601 / 66,078 rows distinct (~99.3%); 477-row residue |
+| `scripts/sql/nhtsa/bronze/investigate_residual_collisions.sql` Q1/Q2 | 477-row residue is byte-identical except RECORD_ID + content_hash on the spot-checked NISSAN 4-row + ACHILLES 5-row groups |
 | `scripts/nhtsa/verify_collisions_raw_tsv.sh` against May 7 R2 wrapper | Inner-TSV SHA `c955c37153d1…` matches `extraction_runs.response_inner_content_sha256`; the bronze duplicates are NHTSA-shipped, not parsing artifacts |
+
+### TSV-level (amended 2026-05-08 evidence — full POST_2010 + PRE_2010 corpora)
+
+| Source | What it shows |
+|---|---|
+| `scripts/nhtsa/tsv_analysis/identity_search.py --zip may7-bronze.zip` | Iterative identity search converges 7→11 tuple over POST_2010: iter 0 has 822 anomalies, +mfr_comp_desc → 145, +mfr_comp_name → 17, +endman → 7, +bgman → 0. 987 byte-duplicate groups remain (handled by within_batch_dedup). |
+| `scripts/nhtsa/tsv_analysis/identity_search.py --zip FLAT_RCL_POST_2010.zip` (older f11119e SHA) | Identical iteration log on the older POST_2010 regeneration: same 11 fields, same anomaly counts at each iteration, same 987 byte-duplicate groups. Cross-regen evidence for the tuple's stability. |
+| `scripts/nhtsa/tsv_analysis/identity_search.py --zip FLAT_RCL_PRE_2010.zip` | PRE_2010: 0 collisions on the original 7-tuple → 11-tuple is over-specified (4 added fields are constant-empty for pre-2010 rows) but harmless. Same loader config works for both incremental and historical-seed paths. |
+| `scripts/sql/nhtsa/bronze/verify_eleven_tuple_row_unique.sql` after 11-tuple landed | `excess_rows = 0` on bronze post-extraction → 11-tuple is row-unique on what landed. Validates dedup-on-rerun: re-extract against existing bronze inserts only the genuinely-new records (e.g., 65,732 new + 19 dedup-skipped on the second `--since 2024-01-01` run). |
+
+### Source-side acknowledgments
+
+| Source | What it shows |
+|---|---|
 | `documentation/nhtsa/RCL.txt` line 30 | NHTSA documents RECORD_ID as "Running Sequence Number" — a counter, by their own description |
 | `documentation/nhtsa/Import_Instructions_Recalls.pdf` step 17 | NHTSA tells MS Access importers to auto-generate a synthetic primary key — official acknowledgment that no field is row-natural |
 
@@ -130,19 +187,40 @@ Findings K (RECORD_ID is regenerated per file build) and L (TSV ships byte-dupli
 
 ## Implementation
 
-Phase 5c Step 2 is revised to incorporate this ADR. Three changes in `src/extractors/nhtsa.py`:
+Phase 5c Step 2's "Post-bronze identity-and-dedup revision" subsection in `project_scope/implementation_plan.md` tracks the implementation work. Final shape (as of 2026-05-08):
 
-1. `BronzeLoader` instantiation in `load_bronze()` changes from `identity_fields=("source_recall_id",)` to the 7-tuple, with `hash_exclude_fields=frozenset({"source_recall_id"})` added.
-2. Within-batch dedup step in `NhtsaExtractor.extract()` (or as a new transform in `validate_records()`) groups records by `(identity_tuple, content_hash)` and emits one per group.
-3. Schema docstring (`src/schemas/nhtsa.py:148`) and extractor docstring (`src/extractors/nhtsa.py:414-416`) rewritten to reflect empirical reality and reference this ADR.
+**`src/bronze/loader.py`** (generic, applies beyond NHTSA):
+1. `BronzeLoader.__init__` accepts `within_batch_dedup: bool = False` and `allow_null_identity: bool = False` (defaults preserve CPSC/FDA/USDA behavior).
+2. `_dedup_within_batch()` method collapses `(identity, hash)` duplicates within a batch; raises `WithinBatchIdentityCollisionError` on same-identity-different-hash (defensive).
+3. `_identity_text_expr()` method returns text-canonical SQL expressions for identity columns — `to_char` with ISO-Z format for datetime types, `cast → text` with NULL coalesce for others. Used by `_fetch_existing_hashes` so the IN comparison is uniformly text-vs-text and empty-string binding works for `TIMESTAMPTZ` columns.
+4. `_fetch_existing_hashes()` chunks `identity_keys` at `_PG_PARAM_SAFETY_LIMIT // n_cols` per query (60_000 // 11 = ~5_454 per chunk for NHTSA), running the existing query per chunk via `_fetch_existing_hashes_chunk()` and merging dicts.
 
-Tests in `tests/unit/extractors/test_nhtsa.py` (or equivalent) verify:
+**`src/extractors/nhtsa.py`**:
+1. `load_bronze()` instantiates `BronzeLoader` with the 11-tuple `identity_fields`, `hash_exclude_fields=frozenset({"source_recall_id"})`, `within_batch_dedup=True`, `allow_null_identity=True`. Updated docstring spells out each piece.
+2. Module-level "Identity:" docstring paragraph rewritten to reflect the 11-tuple and reference the TSV-analysis suite that determined it.
 
+**`src/schemas/nhtsa.py`**:
+1. `source_recall_id` field comment rewritten to reflect Findings K/L: stored for audit/lineage, not load-bearing for dedup.
+2. Module docstring's field-naming note updated.
+
+**Tests** (`tests/bronze/test_loader.py`, `tests/extractors/test_nhtsa_extractor.py`):
 - Byte-duplicate input rows produce one bronze row.
-- Same logical row across two regenerations (same identity, RECORD_ID-changed) produces no new insert on the second extract.
-- Hard error on within-batch identity collision with *different* content (a defensive check; not observed in production but worth pinning down so a future NHTSA format change surfaces loudly).
+- Cross-regeneration dedup: same logical row (same identity, RECORD_ID-changed) produces no new insert on second extract — verified in production via spot-check SQL.
+- `WithinBatchIdentityCollisionError` raised on same-identity-different-hash (defensive — not observed for NHTSA).
+- `allow_null_identity=False` (default) raises on empty identity component (regression guard for CPSC/FDA/USDA).
+- `allow_null_identity=True` accepts empty identity component.
+- NHTSA extractor's `BronzeLoader` config asserted at all four pieces: 11-tuple, hash_exclude_fields, within_batch_dedup, allow_null_identity.
 
-Bronze-table cleanup: `truncate table nhtsa_recalls_bronze` and `truncate table nhtsa_recalls_rejected` on dev before re-extracting. The polluted 132,135 rows from the May 5 + May 7 loads are discarded; `extraction_runs` history is retained for audit per the action-plan in `project_scope/current_branch_staged_tasks.md`.
+**TSV-level analysis suite** (`scripts/nhtsa/tsv_analysis/`):
+- `_lib.py` — shared helpers (TSV streaming, SHA-256 prefix, group-by, differing-fields).
+- `identity_search.py` — iterative identity-tuple widening (load-bearing for the 11-tuple decision).
+- `uniqueness_at_tuple.py` — single-tuple uniqueness check for ad-hoc spot-checks.
+- `find_differentiator.py` — column-by-column distinct-count for chosen group keys with optional row filter.
+- (Tier-3 deferred: `null_rate.py`, `cross_regen_stability.py`, `analyze_tsv.sh` runner, `documentation/nhtsa/tsv_analysis_guide.md`.)
+
+**Bronze-table cleanup procedure used during the rollout:**
+
+`truncate table nhtsa_recalls_bronze, nhtsa_recalls_rejected` on dev before re-extracting. The polluted 132,135 rows from the May 5 + May 7 loads (under the original `source_recall_id`-as-identity scheme that conflated different recalls under the same key) were discarded. `extraction_runs` history was retained for audit. Subsequent extracts repopulated bronze with the 11-tuple identity scheme; verification via `scripts/sql/nhtsa/bronze/verify_eleven_tuple_row_unique.sql` confirmed `excess_rows = 0`.
 
 ## Cross-source implications
 

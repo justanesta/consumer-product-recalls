@@ -29,12 +29,18 @@ per-row natural key in the TSV — RCL.txt field 1 RECORD_ID is a
 reassigned on each regen), and the TSV ships byte-duplicate rows for
 some recalls. ``source_recall_id`` maps to RECORD_ID and is stored
 on bronze rows for audit/lineage, but bronze dedup uses a composite
-7-tuple ``(campno, maketxt, modeltxt, yeartxt, compname,
-rcl_cmpt_id, mfr_comp_ptno)`` configured on ``BronzeLoader`` in
-``load_bronze`` below, with ``hash_exclude_fields={"source_recall_id"}``
-and within-batch dedup enabled. CAMPNO (the public recall ID) is one
-component of the composite — one campaign produces multiple TSV
-rows, one per affected (make × model × year × component × part).
+11-tuple ``(campno, maketxt, modeltxt, yeartxt, compname,
+rcl_cmpt_id, mfr_comp_ptno, mfr_comp_desc, mfr_comp_name, endman,
+bgman)`` configured on ``BronzeLoader`` in ``load_bronze`` below,
+with ``hash_exclude_fields={"source_recall_id"}``, within-batch dedup
+enabled, and ``allow_null_identity=True`` (four of the eleven fields
+are legitimately empty for many rows). The tuple was determined by
+iterative widening over the full POST_2010 corpus
+(``scripts/nhtsa/tsv_analysis/identity_search.py``) — see the
+``load_bronze`` docstring for the full rationale. CAMPNO (the public
+recall ID) is one component of the composite — one campaign produces
+multiple TSV rows, one per affected (make × model × year × component
+× manufacturer-component-metadata).
 
 Quarantine routing: field-count drift (a row with !=29 fields per
 Finding F's history of right-edge column additions) is caught per row
@@ -417,26 +423,40 @@ class NhtsaExtractor(FlatFileExtractor[NhtsaRecord]):
     ) -> int:
         """Write valid records to bronze; route quarantine to rejected table.
 
-        Identity scheme per ADR 0030, driven by Findings K and L in
-        ``documentation/nhtsa/flat_file_observations.md``:
+        Identity scheme per ADR 0030 (amended after TSV-level analysis via
+        ``scripts/nhtsa/tsv_analysis/identity_search.py``):
 
-        - **7-tuple identity_fields.** RECORD_ID is regen-unstable
-          (Finding K), `rcl_cmpt_id` is component-grain not row-grain,
-          and no single TSV field is row-natural per NHTSA's own
-          ``Import_Instructions_Recalls.pdf`` step 17. The composite
+        - **11-tuple identity_fields.** The original ADR 0030 7-tuple
           ``(campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
-          mfr_comp_ptno)`` achieves ~99.3% within-snapshot uniqueness;
-          the residue is byte-duplicate rows (Finding L).
+          mfr_comp_ptno)`` reached 99.3% within-snapshot uniqueness but
+          left an 822-group anomaly residue across the full POST_2010
+          corpus — not just the post-2024 slice the bronze diagnostic
+          examined. Iterative widening against both POST_2010 (May 7 and
+          older local regen) converged identically to four additional
+          fields: ``mfr_comp_desc`` (resolves 689/822), ``mfr_comp_name``
+          (128/145 of remainder), ``endman`` (10/17), ``bgman`` (7/7).
+          The 11-tuple is row-unique on POST_2010 (modulo 987 byte-
+          duplicate groups handled by within_batch_dedup) and
+          over-specified on PRE_2010 (where the 4 extra fields are empty
+          for all rows; tuple still row-unique because the 6-tuple alone
+          already is).
         - **hash_exclude_fields = {"source_recall_id"}.** RECORD_ID's
-          regen-time instability would otherwise produce a different
-          content_hash for the same logical row across daily extracts.
-          The field stays on bronze rows for audit/lineage but is not
-          load-bearing for dedup.
+          regen-time instability (Finding K) would otherwise produce a
+          different content_hash for the same logical row across daily
+          extracts. Field stays on bronze rows for audit/lineage but is
+          not load-bearing for dedup.
         - **within_batch_dedup = True.** NHTSA's TSV ships byte-identical
-          duplicate rows for ~0.7% of records (Finding L); collapsing
-          them here means bronze represents one row per logical recall ×
-          vehicle × component × part fact, and silver doesn't repeat
-          the work.
+          duplicate rows for ~0.4% of POST_2010 records (Finding L);
+          collapsing them at extract means bronze represents one row per
+          logical recall × vehicle × component × part fact, and silver
+          doesn't repeat the work.
+        - **allow_null_identity = True.** Four of the eleven identity
+          fields (``bgman``, ``endman``, ``mfr_comp_desc``,
+          ``mfr_comp_name``) are legitimately empty for many rows —
+          NHTSA omits manufacturing dates on equipment/tire recalls and
+          omits manufacturer-supplied component metadata on pre-2020
+          rows. Empty strings need to be treated as a valid identity
+          bucket rather than rejected as missing-required-field bugs.
         """
         loader = BronzeLoader(
             bronze_table=_nhtsa_bronze,
@@ -449,9 +469,14 @@ class NhtsaExtractor(FlatFileExtractor[NhtsaRecord]):
                 "compname",
                 "rcl_cmpt_id",
                 "mfr_comp_ptno",
+                "mfr_comp_desc",
+                "mfr_comp_name",
+                "endman",
+                "bgman",
             ),
             hash_exclude_fields=frozenset({"source_recall_id"}),
             within_batch_dedup=True,
+            allow_null_identity=True,
         )
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]

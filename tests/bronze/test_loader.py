@@ -49,6 +49,22 @@ class BilingualRecord(BaseModel):
     title: str
 
 
+class RecordWithNullableIdentity(BaseModel):
+    """Simulates NHTSA's schema where some identity components are nullable.
+
+    Per ADR 0030, NHTSA's 11-tuple identity includes bgman/endman/mfr_comp_*
+    fields that are legitimately empty for many rows. ``allow_null_identity``
+    on BronzeLoader lets empty strings and None values participate in the
+    identity tuple rather than raising "missing required field".
+    """
+
+    source_recall_id: str
+    campno: str
+    mfr_comp_ptno: str | None = None
+    mfr_comp_name: str | None = None
+    title: str = ""
+
+
 def _make_conn() -> MagicMock:
     """Return a mock SQLAlchemy Connection."""
     conn = MagicMock()
@@ -100,6 +116,7 @@ def _make_loader(
     hash_exclude_fields: frozenset[str] = frozenset(),
     identity_fields: tuple[str, ...] = ("source_recall_id",),
     within_batch_dedup: bool = False,
+    allow_null_identity: bool = False,
 ) -> tuple[BronzeLoader, MagicMock, MagicMock]:
     bronze = _make_table(bronze_name)
     rejected = _make_table(rejected_name)
@@ -109,6 +126,7 @@ def _make_loader(
         hash_exclude_fields=hash_exclude_fields,
         identity_fields=identity_fields,
         within_batch_dedup=within_batch_dedup,
+        allow_null_identity=allow_null_identity,
     )
     return loader, bronze, rejected
 
@@ -554,6 +572,65 @@ def test_bronze_loader_raises_when_composite_identity_field_is_missing_on_record
 
 
 # ---------------------------------------------------------------------------
+# BronzeLoader._identity_text_expr — text-canonicalization for IN comparison
+# ---------------------------------------------------------------------------
+
+
+def test_identity_text_expr_uses_to_char_for_datetime_columns() -> None:
+    """For DateTime / TIMESTAMP identity columns, ``_identity_text_expr``
+    emits a ``coalesce(to_char(... AT TIME ZONE 'UTC', '...'), '')``
+    expression. This is the loader-side mechanism that makes
+    ``allow_null_identity=True`` work for sources whose ``identity_fields``
+    include TIMESTAMPTZ columns (NHTSA's ``bgman``/``endman`` per ADR 0030):
+    empty-string identity values bind cleanly as TEXT instead of failing
+    to bind as TIMESTAMPTZ. Without ``to_char``, Postgres returns
+    ``DataError: invalid input syntax for type timestamp with time zone: ""``.
+
+    The ISO-8601-Z format (``YYYY-MM-DDTHH24:MI:SSZ``) matches Pydantic's
+    ``model_dump(mode="json")`` serialization of UTC datetimes so populated
+    values match across sides too.
+    """
+    from sqlalchemy import DateTime as SaDateTime
+
+    loader, _, _ = _make_loader()
+
+    dummy_table = Table(
+        "dummy_dt",
+        MetaData(),
+        Column("when", SaDateTime(timezone=True)),
+    )
+    expr = loader._identity_text_expr(dummy_table.c.when)
+    compiled = str(expr.compile(compile_kwargs={"literal_binds": True}))
+
+    assert "to_char" in compiled.lower()
+    assert "at time zone" in compiled.lower()
+    # The format string is embedded in the SQL via literal_binds; we look for
+    # the distinctive Z-suffix wrapper rather than reproducing the full
+    # quoted format-string here, since SQLAlchemy may quote it differently
+    # across versions.
+    assert "Z" in compiled
+
+
+def test_identity_text_expr_uses_cast_to_text_for_non_datetime_columns() -> None:
+    """For non-DateTime identity columns (the default branch), the helper
+    emits ``coalesce(cast(col AS TEXT), '')``. Covers the non-NHTSA case
+    where every identity column is text/string-typed (CPSC, FDA, USDA).
+    """
+    loader, _, _ = _make_loader()
+
+    dummy_table = Table(
+        "dummy_str",
+        MetaData(),
+        Column("name", String),
+    )
+    expr = loader._identity_text_expr(dummy_table.c.name)
+    compiled = str(expr.compile(compile_kwargs={"literal_binds": True}))
+
+    assert "cast" in compiled.lower()
+    assert "to_char" not in compiled.lower()
+
+
+# ---------------------------------------------------------------------------
 # BronzeLoader._fetch_existing_hashes
 # ---------------------------------------------------------------------------
 
@@ -862,3 +939,131 @@ def test_within_batch_dedup_with_hash_exclude_fields_collapses_record_id_only_du
     # (arbitrary by ADR 0030 design — both are byte-equivalent on the
     # hashed surface).
     assert rows_inserted[0]["source_recall_id"] in {"record-100", "record-200"}
+
+
+# ---------------------------------------------------------------------------
+# BronzeLoader.allow_null_identity — opt-in acceptance of None/empty values
+# in identity_fields (NHTSA per ADR 0030 amendment)
+# ---------------------------------------------------------------------------
+
+
+def test_allow_null_identity_off_raises_on_empty_identity_field() -> None:
+    """Default behavior: empty/None identity field is rejected as a bug.
+
+    Existing sources (CPSC, FDA, USDA) rely on this safety check —
+    ``allow_null_identity=False`` is the default to preserve their
+    pre-ADR-0030 contract.
+    """
+    loader, _, _ = _make_loader(
+        identity_fields=("source_recall_id", "mfr_comp_name"),
+    )
+    conn = _make_conn()
+
+    record = RecordWithNullableIdentity(
+        source_recall_id="REC-001",
+        campno="24V001000",
+        mfr_comp_name=None,  # empty/None identity component
+        title="example",
+    )
+
+    with (
+        patch.object(loader, "_fetch_existing_hashes", return_value={}),
+        pytest.raises(ValueError, match="mfr_comp_name"),
+    ):
+        loader.load(
+            conn,
+            records=[record],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    conn.execute.assert_not_called()
+
+
+def test_allow_null_identity_on_accepts_empty_value() -> None:
+    """With the flag set, an empty/None identity field is treated as a
+    valid identity bucket (normalized to "") rather than rejected.
+
+    This is the NHTSA case — ``mfr_comp_name`` and friends are
+    legitimately empty for many rows; the row should still land in
+    bronze with its identity tuple including the empty bucket.
+    """
+    loader, _, _ = _make_loader(
+        identity_fields=("source_recall_id", "mfr_comp_name"),
+        allow_null_identity=True,
+    )
+    conn = _make_conn()
+
+    record = RecordWithNullableIdentity(
+        source_recall_id="REC-001",
+        campno="24V001000",
+        mfr_comp_name=None,
+        title="example",
+    )
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={}):
+        count = loader.load(
+            conn,
+            records=[record],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    assert count == 1
+    rows_inserted = conn.execute.call_args[0][1]
+    assert len(rows_inserted) == 1
+    assert rows_inserted[0]["source_recall_id"] == "REC-001"
+
+
+def test_allow_null_identity_normalizes_none_and_empty_to_same_bucket() -> None:
+    """With ``allow_null_identity=True`` plus ``within_batch_dedup=True``,
+    two rows whose identity components are (None, "") and ("", "") both
+    map to the same identity bucket and dedup if their content_hashes also
+    match (i.e., the records are byte-equivalent on the hashable surface).
+
+    This ensures a TSV-shipped duplicate where one row has Pydantic-
+    coerced None and the other has a literal empty string still collapses
+    correctly under the NHTSA dedup policy.
+    """
+    loader, _, _ = _make_loader(
+        identity_fields=("mfr_comp_name", "mfr_comp_ptno"),
+        hash_exclude_fields=frozenset({"source_recall_id"}),
+        within_batch_dedup=True,
+        allow_null_identity=True,
+    )
+    conn = _make_conn()
+
+    # Two records with the same data fields but distinct source_recall_id.
+    # mfr_comp_name and mfr_comp_ptno are both None on record A and
+    # explicitly "" on record B — they should normalize to the same
+    # identity bucket. After RECORD_ID exclusion, content hashes match too.
+    rec_a = RecordWithNullableIdentity(
+        source_recall_id="REC-001",
+        campno="24V001000",
+        mfr_comp_name=None,
+        mfr_comp_ptno=None,
+        title="shared content",
+    )
+    rec_b = RecordWithNullableIdentity(
+        source_recall_id="REC-002",
+        campno="24V001000",
+        mfr_comp_name=None,
+        mfr_comp_ptno=None,
+        title="shared content",
+    )
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={}):
+        count = loader.load(
+            conn,
+            records=[rec_a, rec_b],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    # Same identity bucket + same hash → collapse to one insert.
+    assert count == 1
+    rows_inserted = conn.execute.call_args[0][1]
+    assert len(rows_inserted) == 1

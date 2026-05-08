@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+import sqlalchemy as sa
 import structlog
 from sqlalchemy import and_, func, select, tuple_
 
@@ -17,6 +18,18 @@ if TYPE_CHECKING:
     from src.extractors._base import QuarantineRecord
 
 logger = structlog.get_logger()
+
+# Postgres' Bind message uses an int16 parameter count — practical ceiling
+# is 65,535 parameters per query. The composite ``tuple_(*cols).in_(...)``
+# clause in ``_fetch_existing_hashes`` contributes
+# ``len(identity_fields) × len(identity_keys)`` parameters; for NHTSA's
+# 11-tuple at 65k records that's ~723k, observed empirically as the size-
+# related ``OperationalError`` that surfaced after the type-binding fix.
+# Chunking the lookup at ~5k keys per query stays under the protocol
+# ceiling and reduces planner memory pressure on small-compute Neon
+# branches. Results merge losslessly because dedup is per-row, not
+# cross-row — each identity tuple appears in exactly one chunk's result.
+_PG_PARAM_SAFETY_LIMIT = 60_000
 
 
 class WithinBatchIdentityCollisionError(ValueError):
@@ -91,6 +104,7 @@ class BronzeLoader:
         hash_exclude_fields: frozenset[str] = frozenset(),
         identity_fields: tuple[str, ...] = ("source_recall_id",),
         within_batch_dedup: bool = False,
+        allow_null_identity: bool = False,
     ) -> None:
         if not identity_fields:
             raise ValueError("identity_fields must contain at least one column name")
@@ -99,10 +113,50 @@ class BronzeLoader:
         self._hash_exclude_fields = hash_exclude_fields
         self._identity_fields = identity_fields
         self._within_batch_dedup = within_batch_dedup
+        self._allow_null_identity = allow_null_identity
 
     def _identity_columns(self) -> list[Any]:
         """Return SQLAlchemy column objects for each identity field on the bronze table."""
         return [getattr(self._bronze.c, f) for f in self._identity_fields]
+
+    def _identity_text_expr(self, col: Any) -> Any:
+        """Return a text-canonical SQL expression for one identity column.
+
+        Used by ``_fetch_existing_hashes`` to make the IN comparison and the
+        result columns uniformly text-vs-text, regardless of the source
+        column's SQL type. The motivation is the NHTSA case (per ADR 0030):
+        the 11-tuple identity includes ``bgman`` / ``endman`` ``TIMESTAMPTZ``
+        columns, and the loader's identity-value normalization produces ``""``
+        for missing values when ``allow_null_identity=True``. SQLAlchemy
+        types each IN-clause bind parameter from the corresponding column,
+        so an empty string would be bound as TIMESTAMPTZ — Postgres rejects
+        that with ``DataError: invalid input syntax for type timestamp with
+        time zone: ""``. Casting both sides to text dodges the typed-bind
+        problem; aligning the format aligns populated values too.
+
+        For ``DateTime``-family columns: ``to_char`` with an ISO-8601-with-Z
+        format matching Pydantic's ``model_dump(mode="json")`` serialization
+        of UTC datetimes (e.g. ``"2024-03-06T00:00:00Z"``). ``AT TIME ZONE
+        'UTC'`` forces UTC interpretation regardless of session timezone.
+        For all other column types: ``cast → text`` with NULL coalesced to
+        empty string. Integer / numeric columns work too: ``str(int_value)``
+        on the Python side equals ``cast(int_col, TEXT)`` on the Postgres
+        side.
+
+        Caveat: the format does not include microseconds. NHTSA's date
+        fields always have second-or-coarser precision, so this is fine.
+        Future sources with microsecond-precision datetimes in identity
+        would need to extend the format string to ``...HH24:MI:SS.US"Z"``.
+        """
+        if isinstance(col.type, sa.DateTime):
+            return func.coalesce(
+                func.to_char(
+                    col.op("AT TIME ZONE")(sa.literal("UTC")),
+                    'YYYY-MM-DD"T"HH24:MI:SS"Z"',
+                ),
+                "",
+            )
+        return func.coalesce(sa.cast(col, sa.Text), "")
 
     def _dedup_within_batch(
         self,
@@ -155,40 +209,90 @@ class BronzeLoader:
         Return {identity_tuple: content_hash} for the most recent row of each
         composite identity key. Uses a subquery to find the row at
         max(extraction_timestamp) per identity grouping.
+
+        Identity columns are text-canonicalized via ``_identity_text_expr``
+        on both sides of the IN comparison so the bind parameters are
+        uniformly TEXT-typed, dodging the ``TIMESTAMPTZ`` empty-string
+        binding error (see helper docstring). The result tuples are also
+        text-canonical, matching the format the caller's ``identity_keys``
+        use, so dict-key equality works in ``filter_new_records``.
+
+        Chunks the lookup over ``identity_keys`` to stay under
+        ``_PG_PARAM_SAFETY_LIMIT`` total bind parameters per query. Per-chunk
+        queries run identical SQL with smaller IN clauses; results merge
+        losslessly into a single dict. For small batches (e.g. CPSC's typical
+        ~10-row daily delta) this runs as one chunk; for NHTSA's 65k-row
+        deep-rescan path, it runs ~12 chunks of ~5,400 keys each.
         """
         if not identity_keys:
             return {}
 
-        bt = self._bronze
-        identity_cols = self._identity_columns()
-        identity_tuple = tuple_(*identity_cols)
+        n_cols = len(self._identity_fields)
+        chunk_size = max(1, _PG_PARAM_SAFETY_LIMIT // n_cols)
 
-        # Subquery: latest extraction_timestamp per identity grouping. The
-        # composite IN reduces the scan to only the recall_ids in this batch.
+        result: dict[tuple[str, ...], str] = {}
+        for start in range(0, len(identity_keys), chunk_size):
+            chunk = identity_keys[start : start + chunk_size]
+            result.update(self._fetch_existing_hashes_chunk(conn, chunk))
+        return result
+
+    def _fetch_existing_hashes_chunk(
+        self,
+        conn: Connection,
+        identity_keys: list[tuple[str, ...]],
+    ) -> dict[tuple[str, ...], str]:
+        """One-shot existing-hash lookup for a chunk of identity_keys.
+
+        Same query shape as the historical ``_fetch_existing_hashes`` body:
+        text-canonical composite IN match against bronze, GROUP BY identity
+        for the latest extraction_timestamp, JOIN back to bronze on the
+        text-canonical identity + max_ts to recover content_hash. The
+        wrapper above splits large batches; this method assumes ``chunk``
+        is already small enough to fit under ``_PG_PARAM_SAFETY_LIMIT``.
+        """
+        bt = self._bronze
+        identity_text_exprs = [self._identity_text_expr(col) for col in self._identity_columns()]
+
+        # Subquery: latest extraction_timestamp per text-canonical identity
+        # grouping. The composite IN reduces the scan to only the identity
+        # tuples in this batch. Both LHS (text-canonicalized bronze cols)
+        # and RHS (caller's identity_keys, already strings) are TEXT — empty
+        # strings bind cleanly regardless of the underlying column type.
         latest_ts = (
             select(
-                *identity_cols,
+                *[
+                    expr.label(f)
+                    for expr, f in zip(identity_text_exprs, self._identity_fields, strict=True)
+                ],
                 func.max(bt.c.extraction_timestamp).label("max_ts"),
             )
-            .where(identity_tuple.in_(identity_keys))
-            .group_by(*identity_cols)
+            .where(tuple_(*identity_text_exprs).in_(identity_keys))
+            .group_by(*identity_text_exprs)
             .subquery()
         )
 
-        # Outer query: join on identity columns + max timestamp to recover the
-        # content_hash from that exact (identity, timestamp) row.
+        # Outer query: join the subquery's text-canonical identity output
+        # back to bronze, also via text-canonical expressions, so the join
+        # keys are type-aligned. ``extraction_timestamp`` joins natively.
+        # Build a fresh expression list — SQLAlchemy expressions aren't
+        # safe to share across distinct query positions.
+        outer_text_exprs = [self._identity_text_expr(col) for col in self._identity_columns()]
         join_conditions = [
-            getattr(bt.c, f) == getattr(latest_ts.c, f) for f in self._identity_fields
+            outer_text_exprs[i] == getattr(latest_ts.c, f)
+            for i, f in enumerate(self._identity_fields)
         ]
         join_conditions.append(bt.c.extraction_timestamp == latest_ts.c.max_ts)
-        stmt = select(*identity_cols, bt.c.content_hash).join(latest_ts, and_(*join_conditions))
+        stmt = select(
+            *[getattr(latest_ts.c, f) for f in self._identity_fields],
+            bt.c.content_hash,
+        ).join(latest_ts, and_(*join_conditions))
 
         rows = conn.execute(stmt).fetchall()
         n = len(self._identity_fields)
-        # Each row: (identity_col_1, identity_col_2, ..., content_hash).
-        # If multiple bronze rows share the same identity tuple at the same
-        # max_ts, the dict comprehension will collapse them to one — but
-        # constructing identity correctly upstream means this never happens.
+        # Each row: (text_canonical_identity_1, ..., text_canonical_identity_N,
+        # content_hash). The text-canonical tuple matches the caller's
+        # identity_keys format, so the returned dict's keys can be looked
+        # up directly via ``existing.get(item[0])`` in ``filter_new_records``.
         return {tuple(row[:n]): row[n] for row in rows}
 
     def load(
@@ -227,12 +331,22 @@ class BronzeLoader:
             for field_name in self._identity_fields:
                 value = row_data.get(field_name)
                 if value is None or value == "":
-                    raise ValueError(
-                        f"{type(record).__name__} has no '{field_name}' field "
-                        f"(or value is empty). All bronze schemas must declare every "
-                        f"identity field configured on the loader: {self._identity_fields}."
-                    )
-                identity_values.append(str(value))
+                    if not self._allow_null_identity:
+                        raise ValueError(
+                            f"{type(record).__name__} has no '{field_name}' field "
+                            f"(or value is empty). All bronze schemas must declare every "
+                            f"identity field configured on the loader: {self._identity_fields}."
+                        )
+                    # NHTSA per ADR 0030: nullable identity components
+                    # (bgman, endman, mfr_comp_*) are legitimate empty
+                    # values, not bugs. Normalize None and "" to the
+                    # same sentinel so they map to the same identity
+                    # bucket — within_batch_dedup can then collapse
+                    # byte-identical rows whose identity tuples include
+                    # empty values.
+                    identity_values.append("")
+                else:
+                    identity_values.append(str(value))
             identity_key = tuple(identity_values)
 
             # hash_exclude_fields strips query artifacts (e.g. FDA's RID position counter)

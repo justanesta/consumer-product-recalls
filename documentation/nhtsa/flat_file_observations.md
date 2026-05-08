@@ -1,12 +1,16 @@
 # NHTSA Flat-File Source — Empirical Observations
 
-> **Status: Step 1 complete (2026-05-05); Step 3 first-extraction analysis (2026-05-07) added Findings K and L.**
+> **Status: Step 1 complete (2026-05-05); Step 3 first-extraction analysis (2026-05-07) added Findings K and L; TSV-level full-corpus analysis (2026-05-08) widened ADR 0030's identity tuple from 7 to 11 fields.**
 > Findings A, B, C, D, E, F, G, I confirmed 2026-05-04 / 2026-05-05.
 > Finding J (ZIP wrapper non-determinism) added 2026-05-05.
 > Findings K (RECORD_ID is regenerated per file build) and L (TSV ships
 > byte-duplicate rows) added 2026-05-07 from Step 3 first-extraction
-> analysis. Architectural response: **ADR 0030** (NHTSA bronze identity:
-> composite tuple + within-batch dedup).
+> analysis. Finding L's evidence updated 2026-05-08 with full-POST_2010
+> corpus measurements; the bronze-narrow scope underestimated the
+> residue. Architectural response: **ADR 0030** (NHTSA bronze identity:
+> composite tuple + within-batch dedup) — initial 7-tuple amended to
+> 11-tuple on 2026-05-08 after TSV-level analysis converged on the
+> minimum row-unique identity for the full corpus.
 > Architecture decision **resolved as Option A (TSV-only)** after Finding I
 > revealed CSV files are a structurally divergent document-attachment index
 > rather than recall data. Finding H's update-cadence sub-question is
@@ -764,7 +768,15 @@ field 1.
 > verification against the May 7 R2 wrapper. Inner-TSV SHA `c955c37153d1…`
 > matches `extraction_runs.response_inner_content_sha256` for the May 7
 > extract, so the verification covers the exact bytes that produced
-> bronze.**
+> bronze. Updated 2026-05-08 with full-POST_2010-corpus measurements
+> from `scripts/nhtsa/tsv_analysis/identity_search.py` — the bronze-narrow
+> diagnostics underestimated the residue (the bronze data was
+> `--since 2024-01-01` filtered, but the deep-rescan path needs the full
+> corpus). Corpus-wide: 1,805 collision groups on the original ADR-0030
+> 7-tuple, of which 822 are anomalies (rows differ on a non-RECORD_ID
+> field) and 983 are byte-identical. The 4 additional fields needed to
+> reach 0 anomalies (`mfr_comp_desc`, `mfr_comp_name`, `endman`, `bgman`)
+> drove the 7→11 tuple amendment in ADR 0030.**
 
 **Question:** Does NHTSA's TSV ever emit multiple rows that carry
 identical content for the same logical (recall × vehicle × component ×
@@ -775,9 +787,9 @@ byte-identical to at least one other row in the file (modulo RECORD_ID,
 which differs per row by the Finding K mechanism). NHTSA's TSV format
 does not enforce row-uniqueness on the data axis.
 
-**Evidence — bronze-side measurement**
+**Evidence — bronze-side measurement (post-2024 slice)**
 (`scripts/sql/nhtsa/bronze/investigate_residual_collisions.sql` Q3, May 7
-snapshot):
+snapshot, `--since 2024-01-01`):
 
 | Pattern | Collision groups | Total colliding rows | Excess rows |
 |---|---:|---:|---:|
@@ -785,9 +797,30 @@ snapshot):
 | Empty `mfr_comp_ptno` | 57 | 143 | 86 |
 | **Total** | **394** | **871** | **477** |
 
-477 out of 66,078 rows (~0.7%) are duplicates of another row on the
-maximal natural-key tuple `(campno, maketxt, modeltxt, yeartxt, compname,
-rcl_cmpt_id, mfr_comp_ptno)`.
+477 out of 66,078 rows in the post-2024 slice (~0.7%) are duplicates of
+another row on the original 7-tuple
+`(campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id, mfr_comp_ptno)`.
+
+**Evidence — TSV-level measurement (full POST_2010 corpus, added 2026-05-08)**
+(`scripts/nhtsa/tsv_analysis/identity_search.py`, both May 7 SHA `c955c37`
+and older SHA `f11119e` regenerations):
+
+| Tuple shape | Collisions | Byte-identical | Anomalies |
+|---|---:|---:|---:|
+| 7-tuple (original ADR 0030) | 1,805 | 983 | 822 |
+| + `mfr_comp_desc` (8-tuple) | 1,132 | 987 | 145 |
+| + `mfr_comp_name` (9-tuple) | 1,004 | 987 | 17 |
+| + `endman` (10-tuple) | 994 | 987 | 7 |
+| + `bgman` (11-tuple, final) | 987 | 987 | 0 |
+
+The 11-tuple is row-unique on POST_2010 (240,158 rows → 239,036 distinct
+identities → 1,122 byte-duplicate rows in 987 groups, all collapsed by
+within_batch_dedup). The bronze-narrow analysis missed the 822
+populated-`mfr_comp_ptno` anomalies because they're spread across the
+full corpus (many predate the post-2024 slice). PRE_2010 has zero
+collisions at any tuple width — the 4 added fields are constant-empty
+for pre-2010 rows, so the wider tuple is harmless there. ADR 0030's
+amendment-on-2026-05-08 captures the 7→11 widening rationale.
 
 **Evidence — column-by-column distinct-count** within representative
 collision sets (`investigate_residual_collisions.sql` Q1 and Q2):
@@ -834,25 +867,35 @@ in any of the 29 fields.
 
 **Implications:**
 
-- A within-batch dedup step in `NhtsaExtractor.extract()` (or
-  `validate_records()`) is required. Without it, the bronze loader's
-  existing-hash check (against bronze, not within-batch) would insert all
-  duplicates on first extract.
-- Combined with Finding K's `hash_exclude_fields={"source_recall_id"}`,
-  the dedup logic is: group records by `(identity_tuple, content_hash)`
-  after RECORD_ID-aware hashing, emit one record per group. The choice of
-  which record to keep is arbitrary because the records are
-  byte-equivalent post-hash-exclusion.
+- A within-batch dedup step in `BronzeLoader._dedup_within_batch()` is
+  required. Without it, the loader's existing-hash check (against bronze,
+  not within-batch) would insert all duplicates on first extract.
+  Combined with Finding K's `hash_exclude_fields={"source_recall_id"}`,
+  the dedup groups records by `(identity_tuple, content_hash)` after
+  RECORD_ID-aware hashing and emits one record per group.
+- The **11-tuple identity** (per ADR 0030 amendment) is needed for the
+  full corpus, not just the post-2024 slice. The bronze-narrow analysis
+  found 477 collisions of which spot-checked samples were byte-identical;
+  TSV-level analysis revealed 1,805 collisions of which 822 are
+  legitimately-different rows that need additional fields
+  (`mfr_comp_desc`, `mfr_comp_name`, `endman`, `bgman`) to disambiguate.
+- **Loader implementation surfaced two SQL-level issues** during the
+  rollout (both fixed in `BronzeLoader._fetch_existing_hashes`):
+  TIMESTAMPTZ columns in identity_fields can't accept empty-string bind
+  parameters → text-canonical IN comparison via `_identity_text_expr`;
+  composite IN clauses on 65k+ rows exceed Postgres' bind-parameter
+  ceiling and stress planner memory → chunked existing-hash lookup at
+  ~5,400 keys per query. Both apply to any future source with typed
+  identity columns or large extraction batches. See ADR 0030
+  Implementation section.
 - **Silver consequence:** silver staging models can rely on bronze
   representing one row per logical fact. The dedup work happens at
   extract; silver doesn't repeat it.
 - **Cross-source lesson:** future flat-file sources may exhibit the same
-  pattern. The raw-TSV byte-comparison test (`verify_collisions_raw_tsv.sh`
-  pattern: SHA the unzipped content, match against
-  `extraction_runs.response_inner_content_sha256`, then `cut -f2- | sort
-  -u | wc -l` for collision sets) is a generic diagnostic worth
-  replicating for USCG and any future source whose row grain isn't obvious
-  from the documentation.
+  pattern. The TSV-level analysis suite at `scripts/nhtsa/tsv_analysis/`
+  generalizes to any tab-delimited source — `identity_search.py` is the
+  load-bearing tool for finding the minimum row-unique identity tuple
+  empirically rather than guessing from documentation.
 
 ---
 
@@ -906,8 +949,26 @@ a side-effect of writing the extractor or running it against live data.
 - **Step 3 raw-TSV verification:** `scripts/nhtsa/verify_collisions_raw_tsv.sh`
   — runs against the May 7 R2 wrapper (`nhtsa/2026-05-07/2180b301-844c-4ab2-9fb1-98848642a57f.zip.gz`)
   and confirms the bronze duplicates are NHTSA-shipped, not parsing artifacts.
+- **TSV-level analysis suite (added 2026-05-08):**
+  `scripts/nhtsa/tsv_analysis/` — pure-Python tools that operate on the
+  raw zipped TSV rather than bronze:
+  - `_lib.py` — TSV streaming, FIELD_NAMES lookup, group-by, differing-fields helpers.
+  - `identity_search.py` — iterative widening that surfaced the
+    POST_2010 822-anomaly residue and converged on the 11-tuple identity.
+  - `uniqueness_at_tuple.py` — single-tuple uniqueness check for ad-hoc
+    spot-checks against any chosen group key.
+  - `find_differentiator.py` — column-by-column distinct-count for
+    chosen group keys with optional row filter; replaces the one-off
+    `verify_empty_ptno_groups_byte_identical.py` and generalizes
+    `investigate_residual_collisions.sql` Q1/Q2.
+- **End-to-end validation:**
+  `scripts/sql/nhtsa/bronze/verify_eleven_tuple_row_unique.sql` — confirms
+  the 11-tuple is row-unique on bronze post-extraction (`excess_rows = 0`),
+  and dedup-on-rerun works (re-extract against existing bronze inserts
+  only genuinely-new records).
 - **Architectural response:**
-  `documentation/decisions/0030-nhtsa-bronze-identity-composite-tuple-and-within-batch-dedup.md`.
+  `documentation/decisions/0030-nhtsa-bronze-identity-composite-tuple-and-within-batch-dedup.md`
+  (initial 7-tuple 2026-05-07; amended to 11-tuple 2026-05-08).
 
 ## References
 
