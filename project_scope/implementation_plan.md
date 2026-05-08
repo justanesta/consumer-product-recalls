@@ -153,6 +153,22 @@ This split was established for CPSC in Phase 3 (CPSC API behavior confirmed: an 
 
 ---
 
+### Standing architectural requirement: verify identity stability empirically before trusting source field descriptions
+
+For every source, the bronze `identity_fields` choice is load-bearing for ADR 0007 dedup. A field that *claims* to uniquely identify a row may turn out to be a regen-time counter, a within-file-only identifier, or a coarser-grain identifier than the TSV row grain. Documentation wording can mislead — verify empirically before committing.
+
+The minimum verification, before locking `identity_fields` for any new source:
+
+- **Cross-regeneration stability.** Pull two regenerations of the source's data at least 24 hours apart. Pin a known logical row (e.g., a specific recall × make × model × year) in both regenerations using fields you trust as content-stable, and compare the candidate identity fields. Identity fields must be byte-identical for the same logical row across regenerations. Set-equality joins are safer than tuple joins for fan-out cases (avoid the cartesian-blowup that polluted Phase 5c's first attempt).
+- **Within-snapshot row-uniqueness.** `count(*)` vs `count(distinct (identity_tuple))` against a single regeneration's load. A deficit means the candidate tuple is too coarse and the source emits multiple rows for the same identity — diagnose the residual collisions with a column-by-column distinct-count diagnostic to find the missing dimension or confirm byte-duplicates.
+- **Byte-level fidelity.** Compare bronze rows to the raw source file for at least one non-trivial collision set, using the `extraction_runs.response_inner_content_sha256` (flat-file sources) or `response_body_sha256` (REST sources) capture as the byte-equivalence anchor. This rules out the extractor's parsing/decompression layer as a source of false differentiation or false collapse before any architectural conclusion is drawn.
+
+This requirement was established in Phase 5c after NHTSA's `RECORD_ID` (RCL.txt field 1, documented as *"Running Sequence Number, Which Uniquely Identifies The Record"*) turned out to be a regen-time row counter. The original schema's docstring read the "uniquely identifies" qualifier as a stability claim, ignoring the "Running Sequence Number" prefix; verifying empirically would have caught this in Step 3 instead of after a 132,135-row bronze pollution. See ADR 0030 and `documentation/nhtsa/flat_file_observations.md` Findings K and L for the full evidence trail.
+
+The same lesson applies to NHTSA's `RCL_CMPT_ID` (component-grain, repeats across rows within a recall) and to NHTSA's `(campno, make, model, year, compname)` 5-tuple (too coarse — fan-out across part numbers and across NHTSA-internal duplicates). Apply this verification to USCG (Phase 5d) and any future flat-file or HTML-scrape source. The diagnostic SQL pattern under `scripts/sql/nhtsa/bronze/` is reusable: per-source `verify_natural_key_candidate.sql` + `find_row_differentiator.sql` + `verify_<n>_tuple_identity.sql` was the sequence that resolved Phase 5c.
+
+---
+
 ### Per-source workflow
 
 Each sub-phase replicates the Phase 3 → Phase 4 pattern for its source: build and run the extractor first, then design cassettes from real evidence, then establish the silver layer before moving on. The five steps are ordered — each informs the next, and none should be skipped or resequenced.
@@ -351,16 +367,23 @@ FDA's FEI per ADR 0002).
 **Step 1 — Source exploration** ✓
 - Direct inspection of the NHTSA recall ZIP download URL before writing the extractor. Key questions: How often does NHTSA release a new ZIP vs update an existing one? Does the file modification date reliably reflect content changes or just re-packaging? Document in `documentation/nhtsa/`.
 
-**Step 2 — Schema, extractor, migration** ✓
+**Step 2 — Schema, extractor, migration** ✓ (revision in progress per ADR 0030)
 - `src/extractors/_flat_file.py` — `FlatFileExtractor` operation-type subclass of the `Extractor` ABC (deferred from Phase 2 to its first use here). Shape is informed by NHTSA: ZIP download → stream-decompress → row-by-row parse → bronze load. Unit-tested in isolation before `NhtsaExtractor` lands on top of it.
 - `NhtsaExtractor(FlatFileExtractor)` per ADR 0008
 - Pydantic schema for 29-field tab-delimited row
 - Schema-drift detection on unexpected fields (NHTSA has added fields before)
 - Weekly cron workflow
 - Large bronze table; test with realistic row counts
+- **Post-bronze identity-and-dedup revision (per ADR 0030 / Findings K and L) — in progress 2026-05-07:** Step 3 first-extraction analysis surfaced two source-shape findings the original schema/extractor mishandled: NHTSA's RECORD_ID is a regen-time row counter (not a stable per-row identifier — Finding K), and the TSV ships byte-duplicate rows for ~0.7% of records (Finding L). Three code changes follow, all in `src/extractors/nhtsa.py`:
+  - **Identity tuple change:** `BronzeLoader` instantiation in `load_bronze()` changes from `identity_fields=("source_recall_id",)` to the 7-tuple `("campno", "maketxt", "modeltxt", "yeartxt", "compname", "rcl_cmpt_id", "mfr_comp_ptno")`. Empirical row-uniqueness within a single TSV: 65,601 / 66,078 (~99.3%); the 477-row residue is byte-duplicate rows handled by the dedup step below.
+  - **Hash exclusion:** `hash_exclude_fields=frozenset({"source_recall_id"})` added to the `BronzeLoader` config so RECORD_ID's regen-time instability doesn't pollute the content_hash. `source_recall_id` remains stored on bronze rows for audit/lineage but is not load-bearing for dedup.
+  - **Within-batch dedup:** `NhtsaExtractor.extract()` (or a new transform in `validate_records()`) groups records by `(identity_tuple, content_hash)` after RECORD_ID-aware hashing and emits one record per group. Without this step, the loader's existing-hash check (against bronze, not within-batch) would insert all NISSAN/ACHILLES-style duplicates on first extract.
+  - Schema docstring (`src/schemas/nhtsa.py:148`) and extractor docstring (`src/extractors/nhtsa.py:414-416`) rewritten — the original "RECORD_ID is NHTSA's stable per-row natural key per RCL.txt" claim is empirically wrong; replace with a pointer to ADR 0030 and the actual identity scheme.
+  - Bronze-table cleanup before re-extracting on dev: `truncate table nhtsa_recalls_bronze` and `truncate table nhtsa_recalls_rejected`. The 132,135 polluted rows from the May 5 + May 7 loads under the old `source_recall_id`-as-identity scheme would otherwise mislead the new identity-key dedup. `extraction_runs` history is retained for audit.
+  - Tests verify (a) byte-duplicate input rows produce one bronze row, (b) same logical row across two regenerations produces no new insert on the second extract, (c) hard error on within-batch identity collision with *different* content (defensive — not observed for NHTSA but pins behavior for future regressions).
 
 **Step 3 — First extraction and bronze findings** (pending)
-- After first extraction, document publication cadence, whether the modification date watermark is reliable, and any schema surprises in `documentation/nhtsa/`.
+- After first extraction, document publication cadence, whether the modification date watermark is reliable, and any schema surprises in `documentation/nhtsa/`. Findings K and L (2026-05-07) are the bronze-shape surprises and are documented in `documentation/nhtsa/flat_file_observations.md`; their architectural response is ADR 0030 and is slotted into Step 2 above. Watermark-reliability verdict (Finding H sub-question) and publication-cadence characterization remain open and close as a side-effect of post-revision daily extracts logging `inner_content_sha256` to `extraction_runs` (per Finding J's mandate).
 
 **Step 4 — Cassettes** (pending)
 - One representative archive cassette + intentionally-malformed variant. The "page" concept doesn't apply to flat-file downloads; pagination-specific scenarios are busywork here.

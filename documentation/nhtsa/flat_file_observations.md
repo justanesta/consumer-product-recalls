@@ -1,8 +1,12 @@
 # NHTSA Flat-File Source — Empirical Observations
 
-> **Status: Step 1 complete (2026-05-05).**
+> **Status: Step 1 complete (2026-05-05); Step 3 first-extraction analysis (2026-05-07) added Findings K and L.**
 > Findings A, B, C, D, E, F, G, I confirmed 2026-05-04 / 2026-05-05.
 > Finding J (ZIP wrapper non-determinism) added 2026-05-05.
+> Findings K (RECORD_ID is regenerated per file build) and L (TSV ships
+> byte-duplicate rows) added 2026-05-07 from Step 3 first-extraction
+> analysis. Architectural response: **ADR 0030** (NHTSA bronze identity:
+> composite tuple + within-batch dedup).
 > Architecture decision **resolved as Option A (TSV-only)** after Finding I
 > revealed CSV files are a structurally divergent document-attachment index
 > rather than recall data. Finding H's update-cadence sub-question is
@@ -672,6 +676,186 @@ choices.
 
 ---
 
+### Finding K — RECORD_ID is regenerated per file build (not a stable per-row identifier)
+
+> **Status: Confirmed 2026-05-07 via Step 3 first-extraction analysis.**
+> RCL.txt field 1 RECORD_ID is a regen-time row counter, not a stable
+> identifier. Architectural response in ADR 0030.
+
+**Question:** Does RCL.txt field 1 (RECORD_ID, *"Running Sequence Number,
+Which Uniquely Identifies The Record"*) provide a stable per-row natural
+key that survives across NHTSA file regenerations?
+
+**Result: No.** NHTSA reassigns RECORD_ID on each file build. The same
+logical row gets a different RECORD_ID across consecutive snapshots, *and*
+RECORD_ID values are reused across regenerations to refer to unrelated
+recalls.
+
+**Evidence — cross-regen instability** (`scripts/sql/nhtsa/bronze/verify_natural_key_candidate.sql`
+Q-A): the Vermeer BC900XL 2019 lug-nut recall (CAMPNO 24V357000), pinned
+in both the May 5 and May 7 bronze snapshots:
+
+| Logical row (Vermeer recall) | May 5 RECORD_ID | May 7 RECORD_ID |
+|---|---:|---:|
+| Lug Nut (`mfr_comp_ptno=131334019`) | 255795 | 267221 |
+| Wheel Stud (`131334017`) | 257610 | 267222 |
+| Service Manual (`105400DP8`) | 257611 | 267223 |
+| Maintenance Manual (`105400DN6`) | 257612 | 267224 |
+| Lugs/Nuts/Bolts/Studs (rcl_cmpt_id `…000312`) | 257617 | 267228 |
+
+Same campaign, same vehicle, same component, same part numbers — different
+RECORD_ID on each row, every regeneration.
+
+**Evidence — RECORD_ID reuse across regenerations**
+(`scripts/sql/nhtsa/bronze/diagnose_full_reinsert.sql` Q4): RECORD_ID
+`255795` describes:
+
+- May 5: Vermeer BC900XL 2019, lug-nut defect (CAMPNO `24V357000`)
+- May 7: Mercedes-Benz Sprinter 2500 2022, instrument-cluster defect (CAMPNO `24V930000`)
+
+Same RECORD_ID, completely unrelated recalls. The counter resets and gets
+reassigned to whatever row happens to occupy that position in the new
+file's row order.
+
+**Empirical impact:** the original `identity_fields=("source_recall_id",)`
+configuration produced 132,135 bronze rows after two consecutive
+`recalls extract nhtsa --since 2024-01-01` runs that should have produced
+~66,000. Every prior-run row was treated as a new row because RECORD_ID
+had shifted, and the loader's content-hash check (which included
+RECORD_ID) saw new hashes for rows the source described identically.
+
+**Why RCL.txt's wording was misleading:** the field description's
+*"Running Sequence Number"* prefix is the load-bearing phrase — that means
+counter, not stable identifier. The trailing *"Which Uniquely Identifies
+The Record"* qualifier refers to within-file uniqueness (one row per
+RECORD_ID within a given TSV) and is silent on cross-file stability. The
+schema docstring at `src/schemas/nhtsa.py:148` originally read the
+qualifier as a stability claim, ignoring the prefix.
+
+**NHTSA's own confirmation:** `documentation/nhtsa/Import_Instructions_Recalls.pdf`
+step 17 instructs MS Access importers to *"Let Access add primary key"* —
+official documentation that no TSV field is a row-natural primary key.
+NHTSA expects importers to synthesize a row identity rather than rely on
+field 1.
+
+**Implications:**
+
+- `RECORD_ID` cannot be used as an `identity_fields` component in
+  `BronzeLoader`. ADR 0030 specifies a composite 7-tuple identity
+  (`campno`, `maketxt`, `modeltxt`, `yeartxt`, `compname`, `rcl_cmpt_id`,
+  `mfr_comp_ptno`) as the replacement.
+- `RECORD_ID` must also be excluded from the bronze content_hash via
+  `hash_exclude_fields={"source_recall_id"}` — otherwise its instability
+  would produce a different hash for the same logical row across
+  regenerations, making dedup fail in a different way.
+- The schema docstring at `src/schemas/nhtsa.py:148` and the extractor
+  docstring at `src/extractors/nhtsa.py:414-416` must be rewritten to
+  reflect this finding and reference ADR 0030.
+- **Cross-source lesson:** future flat-file and HTML-scrape sources
+  (Phase 5d USCG, future) must empirically verify field-stability claims
+  across at least two regenerations before trusting them. Source-published
+  field descriptions can mislead.
+
+---
+
+### Finding L — TSV ships byte-duplicate rows for some recalls
+
+> **Status: Confirmed 2026-05-07 via bronze SQL analysis + raw-TSV
+> verification against the May 7 R2 wrapper. Inner-TSV SHA `c955c37153d1…`
+> matches `extraction_runs.response_inner_content_sha256` for the May 7
+> extract, so the verification covers the exact bytes that produced
+> bronze.**
+
+**Question:** Does NHTSA's TSV ever emit multiple rows that carry
+identical content for the same logical (recall × vehicle × component ×
+part) tuple?
+
+**Result: Yes.** Within a single TSV regeneration, ~0.7% of rows are
+byte-identical to at least one other row in the file (modulo RECORD_ID,
+which differs per row by the Finding K mechanism). NHTSA's TSV format
+does not enforce row-uniqueness on the data axis.
+
+**Evidence — bronze-side measurement**
+(`scripts/sql/nhtsa/bronze/investigate_residual_collisions.sql` Q3, May 7
+snapshot):
+
+| Pattern | Collision groups | Total colliding rows | Excess rows |
+|---|---:|---:|---:|
+| Populated `mfr_comp_ptno` | 337 | 728 | 391 |
+| Empty `mfr_comp_ptno` | 57 | 143 | 86 |
+| **Total** | **394** | **871** | **477** |
+
+477 out of 66,078 rows (~0.7%) are duplicates of another row on the
+maximal natural-key tuple `(campno, maketxt, modeltxt, yeartxt, compname,
+rcl_cmpt_id, mfr_comp_ptno)`.
+
+**Evidence — column-by-column distinct-count** within representative
+collision sets (`investigate_residual_collisions.sql` Q1 and Q2):
+
+- NISSAN TITAN 2021 air bag recall (4-row collision): every column has
+  `distinct_count=1` except `source_recall_id` (= 4) and `content_hash`
+  (= 4, derived from source_recall_id since RECORD_ID was in the hash
+  input). Same campaign, same vehicle, same component, same narrative
+  text, same dates, same everything else.
+- ACHILLES ATR SPORT 2 tire recall (5-row empty-`mfr_comp_ptno` collision):
+  identical pattern — every column constant except the regen-unstable
+  RECORD_ID.
+
+**Evidence — raw-TSV byte verification** (`scripts/nhtsa/verify_collisions_raw_tsv.sh`
+against the May 7 R2 wrapper at
+`nhtsa/2026-05-07/2180b301-844c-4ab2-9fb1-98848642a57f.zip.gz`):
+
+- Inner-TSV SHA-256 `c955c37153d1…` matches
+  `extraction_runs.response_inner_content_sha256` for the May 7 extract,
+  confirming we tested the exact bytes that produced bronze.
+- 4 NISSAN raw TSV lines collapse to 1 unique line after stripping field 1
+  (RECORD_ID). 5 ACHILLES raw TSV lines collapse to 1 unique line under
+  the same operation.
+
+The duplicates are NHTSA's, not parsing artifacts — bronze faithfully
+preserves what the source served (per ADR 0027).
+
+**NHTSA's own acknowledgment:** the same `Import_Instructions_Recalls.pdf`
+step 17 referenced in Finding K — *"Let Access add primary key"* — is
+also implicit acknowledgment of this pattern. If the TSV were row-unique
+on its data fields, NHTSA could direct importers to choose a natural
+primary key. They don't; they direct importers to synthesize one. The
+byte-duplicate pattern is a known consequence of NHTSA's denormalized TSV
+export from their internal relational database.
+
+**Pattern interpretation:** the byte-duplicates likely arise from joins
+in NHTSA's internal export query. A recall row like `Vermeer BC900XL 2019
+× lug-nut` may join to multiple internal table rows (e.g., manufacturing
+plant codes, DOT batch identifiers, owner-mailing tier records) that are
+not surfaced as TSV columns. The join multiplies the recall row by
+however many internal rows match, but the surfaced TSV columns are
+identical because the joined-but-not-surfaced dimension doesn't appear
+in any of the 29 fields.
+
+**Implications:**
+
+- A within-batch dedup step in `NhtsaExtractor.extract()` (or
+  `validate_records()`) is required. Without it, the bronze loader's
+  existing-hash check (against bronze, not within-batch) would insert all
+  duplicates on first extract.
+- Combined with Finding K's `hash_exclude_fields={"source_recall_id"}`,
+  the dedup logic is: group records by `(identity_tuple, content_hash)`
+  after RECORD_ID-aware hashing, emit one record per group. The choice of
+  which record to keep is arbitrary because the records are
+  byte-equivalent post-hash-exclusion.
+- **Silver consequence:** silver staging models can rely on bronze
+  representing one row per logical fact. The dedup work happens at
+  extract; silver doesn't repeat it.
+- **Cross-source lesson:** future flat-file sources may exhibit the same
+  pattern. The raw-TSV byte-comparison test (`verify_collisions_raw_tsv.sh`
+  pattern: SHA the unzipped content, match against
+  `extraction_runs.response_inner_content_sha256`, then `cut -f2- | sort
+  -u | wc -l` for collision sets) is a generic diagnostic worth
+  replicating for USCG and any future source whose row grain isn't obvious
+  from the documentation.
+
+---
+
 ## Open items
 
 None of these gate Step 2. Each closes during or after Step 2/3 work as
@@ -698,13 +882,32 @@ a side-effect of writing the extractor or running it against live data.
 
 ## Evidence
 
-- **Probe script:** `scripts/nhtsa/probe_watermarks.sh`
+- **Probe script (Step 1):** `scripts/nhtsa/probe_watermarks.sh`
 - **Probe data (committed):** `documentation/nhtsa/watermark_probes.jsonl`
-- **Download script:** `scripts/nhtsa/download_archives.sh`
+- **Download script (Step 1):** `scripts/nhtsa/download_archives.sh`
 - **Step 2 download artifacts (gitignored):** `data/exploratory/nhtsa/`
 - **Data dictionary:** `documentation/nhtsa/RCL.txt`
 - **Source directory listing (manual capture):** referenced in conversation
   notes 2026-05-04; not committed.
+- **Step 3 bronze diagnostic SQL** (used in Findings K and L):
+  - `scripts/sql/nhtsa/bronze/diagnose_full_reinsert.sql` — surfaced the
+    66,078-row re-insert + RECORD_ID reuse across regenerations.
+  - `scripts/sql/nhtsa/bronze/verify_natural_key_candidate.sql` — Vermeer
+    cross-regen RECORD_ID table; rcl_cmpt_id within-snapshot non-uniqueness.
+  - `scripts/sql/nhtsa/bronze/find_row_differentiator.sql` — initial
+    column-by-column distinct-count diagnostic (Vermeer + tire cases).
+  - `scripts/sql/nhtsa/bronze/verify_six_tuple_identity.sql` — mfr_comp_ptno
+    set-equality test across regenerations; null-rate per rcltype + year.
+  - `scripts/sql/nhtsa/bronze/investigate_tire_collision.sql` — rcl_cmpt_id
+    set-equality stability test; 7-tuple uniqueness measure (65,601 / 66,078).
+  - `scripts/sql/nhtsa/bronze/investigate_residual_collisions.sql` — Q1/Q2
+    column-by-column proof that NISSAN/ACHILLES collisions are byte-identical
+    except RECORD_ID; Q3 population breakdown of the 477-row residue.
+- **Step 3 raw-TSV verification:** `scripts/nhtsa/verify_collisions_raw_tsv.sh`
+  — runs against the May 7 R2 wrapper (`nhtsa/2026-05-07/2180b301-844c-4ab2-9fb1-98848642a57f.zip.gz`)
+  and confirms the bronze duplicates are NHTSA-shipped, not parsing artifacts.
+- **Architectural response:**
+  `documentation/decisions/0030-nhtsa-bronze-identity-composite-tuple-and-within-batch-dedup.md`.
 
 ## References
 
@@ -714,6 +917,10 @@ a side-effect of writing the extractor or running it against live data.
 - ADR 0007 (bronze content hashing — fallback if Findings B/C disqualify ETag/LM)
 - ADR 0010 (deep-rescan workflows — historical seeding mechanism)
 - ADR 0014 (`extra='forbid'` Pydantic strict mode)
+- ADR 0027 (bronze storage-forced transforms only — basis for "bronze
+  faithfully preserves NHTSA's TSV including duplicates")
+- ADR 0030 (NHTSA bronze identity: composite tuple + within-batch dedup —
+  architectural response to Findings K and L)
 - `documentation/usda/recall_api_observations.md` (sibling source's
   observations doc, structural template for this one)
 - `documentation/cpsc/last_publish_date_semantics.md` (sibling watermark
