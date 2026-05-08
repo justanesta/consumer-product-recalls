@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: stg_nhtsa_recalls
+    description: >
+      One row per NHTSA bronze 11-tuple identity (latest version per identity).
+      11-tuple grain matches ADR 0030 bronze identity:
+      (campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+       mfr_comp_ptno, mfr_comp_desc, mfr_comp_name, endman, bgman).
+      source_recall_id (RECORD_ID) is preserved for audit but NOT
+      load-bearing for identity per Finding K. Silver recall_product_id
+      derives from the 11-tuple per ADR 0031.
+    columns:
+      - name: campno
+        description: NHTSA recall campaign ID (e.g., 24V930000). Stable upstream.
+        tests:
+          - not_null
+      - name: content_hash
+        tests:
+          - not_null
+      - name: extraction_timestamp
+        tests:
+          - not_null

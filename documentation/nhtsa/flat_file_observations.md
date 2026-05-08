@@ -13,10 +13,12 @@
 > minimum row-unique identity for the full corpus.
 > Architecture decision **resolved as Option A (TSV-only)** after Finding I
 > revealed CSV files are a structurally divergent document-attachment index
-> rather than recall data. Finding H's update-cadence sub-question is
-> **deferred** — it closes implicitly once `_FlatFileExtractor` lands in
-> Step 2 and starts logging per-run inner-content SHA-256 to
-> `extraction_runs`. None of the open items gate Step 2.
+> rather than recall data. Finding H's update-cadence sub-question
+> **closed 2026-05-08** via `extraction_runs.response_inner_content_sha256`
+> day-over-day diffs across 7 successful runs: NHTSA publishes content
+> intermittently, can update intra-day (≥1 update on 2026-05-08), and is
+> idle on most consecutive runs (4/6 transitions) — confirming daily cron +
+> content-hash dedup as the right operational shape.
 > Evidence accumulates in `documentation/nhtsa/watermark_probes.jsonl`
 > plus Step 2 download artifacts in `data/exploratory/nhtsa/` (gitignored).
 
@@ -422,38 +424,48 @@ surfaces; `x-amz-version-id` is the unique-upload anchor.
 
 > **Status: Historical coverage fully confirmed 2026-05-04 via refined
 > date-bound probes (DATEA, RCDATE, BGMAN, ODATE). Update cadence
-> deferred 2026-05-05 — closes implicitly once `_FlatFileExtractor`
-> lands in Step 2 with inner-content SHA-256 logging.**
+> CONFIRMED 2026-05-08 via `extraction_runs.response_inner_content_sha256`
+> day-over-day diffs across 7 successful NHTSA runs (2026-05-05 → 2026-05-08).
+> Standing closure mechanism: `scripts/sql/nhtsa/_pipeline/inner_content_cadence.sql`.**
 
 **Question 1 (update cadence):** How often does NHTSA actually publish
 new content vs re-stamp idle data? Daily? Weekly? In bursts?
 
-**Result 1:** Deferred. The wrapper-level watermark probe cannot answer
-this — per Finding J, ZIP wrapper bytes shift every day regardless of
-inner content, so wrapper-level diffs can't separate "real new recall
-records" from "non-deterministic re-zip of identical inner content."
+**Result 1: NHTSA publishes content updates *intermittently* and *can update intra-day*. Daily cron is the right cadence; idle days are absorbed at near-zero cost by content-hash dedup.**
 
-Closing the question requires inner-content hashing across days, which
-is *exactly* the primitive `_FlatFileExtractor` will run on every
-incremental fetch (per Finding J's mandate that ZIP dedup must operate
-on decompressed inner content). Once Step 2 lands and the extractor
-starts logging `inner_content_sha256` to `extraction_runs`, day-over-day
-diffs on that column close this question as a free side-effect of
-production runs — no separate probe extension needed.
+Empirical evidence (`scripts/sql/nhtsa/_pipeline/inner_content_cadence.sql`, run 2026-05-08):
 
-The cadence answer is **operational characterization**, not a Step 2/3
-design input: the schema, extractor lifecycle, watermark strategy, and
-bronze migration shape are fully specified by Findings A–G, I, and J
-regardless of whether NHTSA actually updates content daily, weekly, or
-in bursts. Daily cron is the right cadence either way (ADR 0007's
-content-hash dedup absorbs no-op days at near-zero cost). The eventual
-cadence verdict primarily informs Phase 7 monitoring/alerting baselines
-and a portfolio-narrative bandwidth-vs-staleness tradeoff note — neither
-of which is on the Step 2 critical path.
+```
+total_runs:                  7
+distinct_inner_snapshots:    3   (edae1d2193478bcd, c955c37153d1cb1e, bf43d58588cbc608)
+content_change_transitions:  2 / 6  (33% of consecutive transitions)
+idle_transitions:            4 / 6
+```
 
-**Closure target:** ~7 days after Step 3's first extraction, write the
-verdict as a small follow-up edit referencing `extraction_runs`
-inner-hash transition data. No probe-script change required.
+| Started (UTC) | Inner hash (prefix) | Transition | Notes |
+|---|---|---|---|
+| 2026-05-05 22:39 | `edae1d21` | first_run | Initial bronze load (66,057 rows) |
+| 2026-05-05 22:44 | `edae1d21` | unchanged | Re-run minutes later — bronze dedup correctly skipped (0 inserted) |
+| 2026-05-07 11:44 | `c955c371` | **CHANGED** | NHTSA published new content between 2026-05-05 22:44 and 2026-05-07 11:44 (≥1 update in this ~37-hour window) |
+| 2026-05-08 02:46 | `c955c371` | unchanged | Idle re-fetch |
+| 2026-05-08 03:16 | `c955c371` | unchanged | Idle re-fetch |
+| 2026-05-08 03:29 | `c955c371` | unchanged | Idle re-fetch |
+| 2026-05-08 20:05 | `bf43d585` | **CHANGED** | NHTSA published new content within UTC day 2026-05-08 (between 03:29 and 20:05 — likely the 07:05 daily regen window per Finding C) |
+
+**Key observations:**
+
+- **Real content changes happen** (refutes the null hypothesis that wrappers are re-stamped without content changes). 2 out of 6 transitions in this window carry actual new content.
+- **Content can change within a single UTC day.** 2026-05-08 had two distinct inner-content snapshots from runs at 03:29 and 20:05. The change probably aligns with NHTSA's ~07:05 UTC daily regen window observed in `watermark_probes.jsonl` Last-Modified headers (Finding B).
+- **Content is NOT updated every day.** Multiple consecutive idle transitions (May 5 → 5, May 7 → 8 morning) confirm idle-day stability — important because it means daily cron + content-hash dedup is the right cost-shape (no wasted bronze writes on idle days; observed 0 net bronze inserts across the 4 idle transitions).
+- **Sample is small but consistent with expectation.** 4 days isn't enough to characterize weekly seasonality (e.g., Mon-Fri publishing) or burst patterns. Longer-term observation lives in `extraction_runs` once Phase 7 cron is on.
+
+**Operational implications:**
+
+- **Daily cron is correct.** ADR 0010's daily incremental cadence catches at least the 07:05 UTC regen window. ADR 0007 content-hash dedup absorbs idle days at near-zero cost (validated empirically: 4 idle transitions = 4 × ~14 MB downloads + 0 bronze writes).
+- **Daily cron will miss intra-day updates.** If a recall is published at 09:00 UTC and the cron runs at 06:00 UTC, the next observation is the following day. This is acceptable for v1; downstream consumers requiring lower latency would need either (a) higher-frequency cron, or (b) a NHTSA notification subscription if such exists.
+- **The cadence-monitor SQL script (`inner_content_cadence.sql`) is now standing tooling.** Re-run periodically (or wire into a Tier 2 / DQ-framework hook per ADR 0031) to catch any change in NHTSA's publication cadence.
+
+**Closure date:** 2026-05-08. Standing closure mechanism: `scripts/sql/nhtsa/_pipeline/inner_content_cadence.sql`. No further investigation required for v1.
 
 **Question 2 (historical coverage):** What is the actual date range and
 total record count of the TSV archive corpus we're committing to?

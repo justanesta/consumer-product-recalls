@@ -9,6 +9,12 @@
 -- USDA: source_recall_id = field_recall_number; staging filters to English only.
 --   published_at coalesces last_modified_date → recall_date because
 --   last_modified_date is 42% null per Finding D.
+-- NHTSA: source_recall_id = campno (recall campaign ID); DISTINCT ON (campno)
+--   collapses many-rows-per-recall (each row is a vehicle × component × batch
+--   under the campaign) to one event header. Event-level fields (desc_defect,
+--   corrective_action, etc.) are stable across all rows sharing campno, so
+--   the representative-row choice is safe. ADR 0031 documents the silver
+--   layered design.
 
 with cpsc_events as (
     select
@@ -109,6 +115,45 @@ usda_events as (
         extraction_timestamp,
         raw_landing_path
     from {{ ref('stg_usda_fsis_recalls') }}
+),
+
+nhtsa_events as (
+    select distinct on (campno)
+        md5('NHTSA' || '|' || campno)                                  as recall_event_id,
+        'NHTSA'                                                        as source,
+        campno                                                         as source_recall_id,
+        rcdate                                                         as announced_at,
+        coalesce(datea, rcdate)                                        as published_at,
+        campno || ' — ' || mfgname                                     as title,
+        desc_defect                                                    as description,
+        cast(null as text)                                             as url,
+        cast(null as text)                                             as classification,
+        case
+            when do_not_drive is true then 'do_not_drive'
+            when park_outside is true then 'park_outside'
+            else null
+        end                                                            as status,
+        cast(null as jsonb)                                            as hazards,
+        jsonb_build_object(
+            'desc_defect',       desc_defect,
+            'corrective_action', corrective_action,
+            'conequence_defect', conequence_defect,
+            'mfgcampno',         mfgcampno,
+            'influenced_by',     influenced_by,
+            'mfgtxt',            mfgtxt,
+            'rpno',              rpno,
+            'fmvss',             fmvss,
+            'do_not_drive',      do_not_drive,
+            'park_outside',      park_outside,
+            'notes',             notes,
+            'potaff',            potaff,
+            'odate',             odate
+        )                                                              as source_payload_raw,
+        content_hash,
+        extraction_timestamp,
+        raw_landing_path
+    from {{ ref('stg_nhtsa_recalls') }}
+    order by campno, extraction_timestamp desc
 )
 
 select * from cpsc_events
@@ -116,3 +161,5 @@ union all
 select * from fda_events
 union all
 select * from usda_events
+union all
+select * from nhtsa_events

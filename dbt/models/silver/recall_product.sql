@@ -8,7 +8,14 @@
 -- USDA: product_items is a free-text blob; ADR 0002 defers structured parsing.
 --   Emit one product row per recall event (recall_product_id = recall_event_id)
 --   so referential integrity holds and downstream queries don't silently skip USDA.
--- Neither source associates UPCs with specific products (CPSC UPCs are recall-level;
+-- NHTSA: each bronze row IS a product instance at 11-tuple grain (vehicle ×
+--   component × part × batch); recall_product_id = md5(11-tuple) per ADR 0031.
+--   Mirrors CPSC's md5(parent || distinguishing_fields || disambiguator)
+--   recipe structurally — bgman/endman serve as NHTSA's batch-level
+--   disambiguator (analog to CPSC's product_ordinal). v1 fragmentation rate
+--   ~0.0004%/day (AC DELCO maketxt normalization observed 2026-05-08); see
+--   ADR 0031 + documentation/nhtsa/incremental_delta_findings.md Section G.
+-- Neither CPSC nor FDA associates UPCs with specific products (CPSC UPCs are recall-level;
 -- FDA does not return them via the bulk POST endpoint), so upc is NULL for both.
 
 with cpsc_exploded as (
@@ -87,6 +94,41 @@ usda_products as (
             'processing',        processing
         )                                             as source_specific_attrs
     from {{ ref('stg_usda_fsis_recalls') }}
+),
+
+nhtsa_products as (
+    select
+        md5(
+            'NHTSA' || '|' || campno
+            || '|' || coalesce(maketxt, '')        || '|' || coalesce(modeltxt, '')
+            || '|' || coalesce(yeartxt, '')        || '|' || coalesce(compname, '')
+            || '|' || coalesce(rcl_cmpt_id, '')    || '|' || coalesce(mfr_comp_ptno, '')
+            || '|' || coalesce(mfr_comp_desc, '')  || '|' || coalesce(mfr_comp_name, '')
+            || '|' || coalesce(bgman::text, '')    || '|' || coalesce(endman::text, '')
+        )                                             as recall_product_id,
+        md5('NHTSA' || '|' || campno)                 as recall_event_id,
+        'NHTSA'                                       as source,
+        campno                                        as source_recall_id,
+        compname                                      as product_name,
+        mfr_comp_desc                                 as product_description,
+        modeltxt                                      as model,
+        cast(null as text)                            as type,
+        cast(null as text)                            as category_id,
+        potaff                                        as number_of_units,
+        cast(null as text)                            as upc,
+        jsonb_build_object(
+            'maketxt',       maketxt,
+            'yeartxt',       yeartxt,
+            'mfgname',       mfgname,
+            'mfgtxt',        mfgtxt,
+            'rcl_cmpt_id',   rcl_cmpt_id,
+            'mfr_comp_ptno', mfr_comp_ptno,
+            'mfr_comp_name', mfr_comp_name,
+            'bgman',         bgman,
+            'endman',        endman,
+            'fmvss',         fmvss
+        )                                             as source_specific_attrs
+    from {{ ref('stg_nhtsa_recalls') }}
 )
 
 select * from cpsc_products
@@ -94,3 +136,5 @@ union all
 select * from fda_products
 union all
 select * from usda_products
+union all
+select * from nhtsa_products

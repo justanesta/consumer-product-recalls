@@ -13,6 +13,10 @@
 -- documentation/usda/establishment_join_coverage.md (HTML-entity decode applied
 -- on the recall side in stg_usda_fsis_recalls.sql lifts the rate from 82.85%).
 -- Names with no FSIS match keep company_id=null and are unaffected by the join.
+-- NHTSA contributes a single scalar firm per recall row (mfgname), always
+-- 'manufacturer' role. company_id=null — NHTSA has no analog to FDA's firmfeinum.
+-- The 'AC DELCO' vs 'ACDELCO' drift class (ADR 0031) currently produces two
+-- firm rows; reconciliation is Phase 6 RapidFuzz work per ADR 0002.
 -- Matching by normalized_name enables implicit cross-source firm deduplication:
 -- a firm that appears in multiple sources with the same normalized name will
 -- collapse to a single row with all company IDs in observed_company_ids.
@@ -70,12 +74,25 @@ usda_normalized as (
       and trim(r.establishment) <> ''
 ),
 
+nhtsa_normalized as (
+    select distinct
+        'manufacturer'              as role,
+        mfgname                     as raw_name,
+        upper(trim(mfgname))        as normalized_name,
+        cast(null as text)          as company_id
+    from {{ ref('stg_nhtsa_recalls') }}
+    where mfgname is not null
+      and trim(mfgname) <> ''
+),
+
 all_normalized as (
     select * from cpsc_normalized
     union all
     select * from fda_normalized
     union all
     select * from usda_normalized
+    union all
+    select * from nhtsa_normalized
 )
 
 select

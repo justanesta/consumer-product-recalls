@@ -5,6 +5,7 @@
 - **Supersedes:** —
 - **Superseded by:** —
 - **Clarifies:** ADR 0007 (extends `hash_exclude_fields` use beyond FDA's RID position counter); ADR 0012 (concrete `identity_fields` choice for NHTSA); ADR 0014 (RECORD_ID is not a per-row natural key despite RCL.txt's "uniquely identifies the record" wording).
+- **Extended by:** ADR 0031 (silver-row fragmentation strategy) — uses this ADR's 11-tuple as the basis for NHTSA's silver `recall_product_id = md5(11-tuple)` recipe; documents the cross-run drift class observed against this identity choice and the v1 reconciliation policy.
 
 ## Amendment summary (2026-05-08)
 

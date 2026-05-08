@@ -102,6 +102,47 @@ sources:
         description: Quarantine table for USDA records that failed validation or invariant checks (ADR 0013).
         loaded_at_field: rejected_at
 
+  - name: nhtsa
+    description: Bronze layer for NHTSA flat-file recalls, loaded by src.extractors.nhtsa.NhtsaExtractor (incremental POST_2010) and NhtsaDeepRescanLoader (full PRE_2010 + POST_2010 corpus).
+    schema: public
+    tables:
+      - name: nhtsa_recalls_bronze
+        description: >
+          One row per (11-tuple identity, content_hash) landed from
+          static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_POST_2010.zip (and PRE_2010 on
+          deep-rescan). Identity is the 11-tuple per ADR 0030
+          (campno + maketxt + modeltxt + yeartxt + compname + rcl_cmpt_id +
+          mfr_comp_ptno + mfr_comp_desc + mfr_comp_name + endman + bgman).
+          source_recall_id holds RCL.txt's RECORD_ID column but is NOT a
+          stable identifier — NHTSA regenerates it on every TSV build per
+          Finding K. hash_exclude_fields={source_recall_id} per ADR 0030.
+        loaded_at_field: extraction_timestamp
+        freshness:
+          # NHTSA regenerates files daily but content updates are bursty.
+          # 48h covers a missed daily run; 7d flags a real cron failure.
+          warn_after: {count: 48, period: hour}
+          error_after: {count: 7, period: day}
+        columns:
+          - name: source_recall_id
+            description: RCL.txt RECORD_ID (Running Sequence Number). Regen-unstable per Finding K — preserved for audit/lineage only, never join on this.
+            tests:
+              - not_null
+          - name: content_hash
+            description: SHA-256 of canonicalized record payload (ADR 0007), excluding source_recall_id (ADR 0030).
+            tests:
+              - not_null
+          - name: extraction_timestamp
+            description: When the extractor wrote this row.
+            tests:
+              - not_null
+          - name: campno
+            description: NHTSA recall campaign ID (e.g., 24V930000). Stable upstream identifier.
+            tests:
+              - not_null
+      - name: nhtsa_recalls_rejected
+        description: Quarantine table for records that failed validation or invariant checks (ADR 0013); also holds drift rows where the TSV's field count != 29 (Finding F).
+        loaded_at_field: rejected_at
+
   - name: usda_establishments
     description: Bronze layer for USDA FSIS Establishment Listing API, loaded by src.extractors.usda_establishment.UsdaEstablishmentExtractor.
     schema: public

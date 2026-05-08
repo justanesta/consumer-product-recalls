@@ -7,6 +7,10 @@
 --   role. DISTINCT ON recall_event_id prevents duplicating the same firm across
 --   multiple products in the same event.
 -- USDA: free-text establishment (FSIS-regulated facility), role='establishment'.
+-- NHTSA: single scalar firm per recall row (mfgname), always 'manufacturer' role.
+--   Multiple bronze rows per campno (one per recall component); DISTINCT
+--   collapses to one bridge row per (campno, mfgname) — typically one firm
+--   per recall, occasionally co-recalls with multiple manufacturers.
 
 with cpsc_firms as (
     select source_recall_id, 'manufacturer' as role,
@@ -54,6 +58,16 @@ usda_event_firms as (
     from {{ ref('stg_usda_fsis_recalls') }}
     where establishment is not null
       and trim(establishment) <> ''
+),
+
+nhtsa_event_firms as (
+    select distinct
+        md5('NHTSA' || '|' || campno)           as recall_event_id,
+        md5(upper(trim(mfgname)))               as firm_id,
+        'manufacturer'                          as role
+    from {{ ref('stg_nhtsa_recalls') }}
+    where mfgname is not null
+      and trim(mfgname) <> ''
 )
 
 select * from cpsc_event_firms
@@ -61,3 +75,5 @@ union all
 select * from fda_event_firms
 union all
 select * from usda_event_firms
+union all
+select * from nhtsa_event_firms

@@ -1,0 +1,84 @@
+interactions:
+- request:
+    body: ''
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      host:
+      - static.nhtsa.gov
+      user-agent:
+      - python-httpx/0.28.1
+    method: GET
+    uri: https://static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_POST_2010.zip
+  response:
+    body:
+      string: !!binary |
+        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
+    headers:
+      Accept-Ranges:
+      - bytes
+      Cache-Control:
+      - max-age=31179
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/octet-stream
+      Date:
+      - Fri, 08 May 2026 23:20:22 GMT
+      ETag:
+      - '"22b3f12c7ded2f569456bc21f5f2585e"'
+      Last-Modified:
+      - Fri, 08 May 2026 07:05:08 GMT
+      Strict-Transport-Security:
+      - max-age=31536000 ; includeSubDomains ; preload
+      Vary:
+      - Accept-Encoding
+      X-Content-Type-Options:
+      - nosniff
+      X-Frame-Options:
+      - SAMEORIGIN
+      content-length:
+      - '1821'
+      x-amz-replication-status:
+      - REPLICA
+      x-amz-version-id:
+      - RZN.YPeo7DFrb3O5rqj1G8NLyvKB1i.L
+    status:
+      code: 200
+      message: OK
+version: 1
