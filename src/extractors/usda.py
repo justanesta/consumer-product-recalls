@@ -164,13 +164,15 @@ class UsdaExtractor(RestApiExtractor[UsdaFsisRecord]):
 
     source_name: str = _USDA_SOURCE
     settings: Settings
-    # Production default is OFF (Finding N — needs more cross-day evidence before
-    # we depend on it). The optimization is empirically viable when paired with
-    # the Finding O browser-like headers — re-runs hit Akamai's cached path and
-    # 304s work correctly, including the contradiction guard. Leaving disabled
-    # until multi-day probe data confirms consistency. Flip to True (or pass
-    # explicitly via constructor) once that evidence lands.
-    etag_enabled: bool = False
+    # Production default ON since 2026-05-09 — `etag_viability.sql` produced a
+    # SAFE-TO-ENABLE verdict over 7 transitions including a real-update day
+    # (false_304_count=0; false_200_count=5 from the upstream re-stamping
+    # ETags without body changes — over-fetches are absorbed by ADR 0007
+    # bronze content-hash dedup, no correctness impact). See Finding P at
+    # `documentation/usda/recall_api_observations.md`. UsdaDeepRescanLoader
+    # below explicitly overrides this default to False — deep rescan workflow
+    # requires unconditional full re-pull.
+    etag_enabled: bool = True
 
     _engine: sa.Engine = PrivateAttr()
     _r2_client: R2LandingClient = PrivateAttr()
@@ -523,8 +525,19 @@ class UsdaExtractor(RestApiExtractor[UsdaFsisRecord]):
         try:
             with self._engine.begin() as conn:
                 conn.execute(_extraction_runs.insert().values(**row))
-        except Exception:
-            logger.warning("extraction_run.record_failed", run_id=run_id, status=status)
+        except Exception as exc:
+            # Run-recording is best-effort: the bronze write already committed,
+            # so a failure here doesn't lose data. Include the exception type
+            # and message so a constraint violation (e.g., missing FK row in
+            # source_watermarks for a new source) is diagnosable from logs
+            # rather than requiring code-side instrumentation to reproduce.
+            logger.warning(
+                "extraction_run.record_failed",
+                run_id=run_id,
+                status=status,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
 
 def _parse_http_date(s: str) -> datetime:

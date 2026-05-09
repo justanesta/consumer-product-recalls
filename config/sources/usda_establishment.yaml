@@ -16,13 +16,19 @@ base_url: https://www.fsis.usda.gov/fsis/api/establishments/v/1
 # at request time. Generous timeout matches the recall API for cold-cache misses.
 timeout_seconds: 60.0
 rate_limit_rps: null
-# Finding A — no pagination, no ETag, no incremental cursor. Every run is a full
-# dump and content-hash dedup (ADR 0007) handles idempotency.
+# Finding A (revised 2026-05-03) — no pagination, no incremental cursor. Every
+# run is a full dump; content-hash dedup (ADR 0007) handles idempotency, and
+# ETag conditional-GET short-circuits the body download when unchanged.
 incremental_filter_param: null
 incremental_filter_format: null
 default_lookback_days: null
 format_param: null
 credentials: null
-# Finding A — no ETag header is returned by this endpoint (contrast with the recall
-# API). The conditional-GET optimization is unavailable here regardless of config.
-etag_enabled: false
+# Finding A revised 2026-05-03: the establishment endpoint DOES return ETag and
+# Last-Modified under browser fingerprint (the original "no ETag" claim was a
+# Bruno-default-headers artifact). Enabled in production since 2026-05-09 after
+# etag_viability.sql cleared the green-light gate — 7 transitions,
+# false_304_count=0, false_200_count=3 (over-fetches absorbed by ADR 0007
+# content-hash dedup). See Finding A revision 2026-05-09 in
+# documentation/usda/establishment_api_observations.md.
+etag_enabled: true

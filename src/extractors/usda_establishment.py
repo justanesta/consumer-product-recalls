@@ -167,17 +167,19 @@ class UsdaEstablishmentExtractor(RestApiExtractor[UsdaFsisEstablishment]):
     short-circuits cleanly on 304 (skipping the ~810 KB download and the
     bronze write). A contradiction guard fails the run if a 304 is paired with
     a ``last-modified`` header that has advanced past the prior recorded
-    value. Default is OFF until viability data clears the gate at
-    ``scripts/sql/_pipeline/etag_viability.sql``.
+    value. Production default ON since 2026-05-09 after
+    ``scripts/sql/_pipeline/etag_viability.sql`` cleared the green-light gate.
     """
 
     source_name: str = _SOURCE
     settings: Settings
-    # Mirrors UsdaExtractor.etag_enabled; default OFF for the same reason —
-    # multi-day cross-fingerprint evidence is needed before depending on
-    # Akamai-served ETags. Flip to True (or pass explicitly via constructor)
-    # once etag_viability.sql gives the green light for this source.
-    etag_enabled: bool = False
+    # Production default ON since 2026-05-09 — etag_viability.sql produced a
+    # SAFE-TO-ENABLE verdict over 7 transitions including a real-update day
+    # (false_304_count=0; false_200_count=3 from upstream ETag re-stamping
+    # without body changes, absorbed by ADR 0007 content-hash dedup). See
+    # `documentation/usda/establishment_api_observations.md` Finding A
+    # (revision 2026-05-09). Mirrors UsdaExtractor.etag_enabled.
+    etag_enabled: bool = True
 
     _engine: sa.Engine = PrivateAttr()
     _r2_client: R2LandingClient = PrivateAttr()

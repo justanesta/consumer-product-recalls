@@ -451,11 +451,11 @@ Cross-cutting work targeted at specific upcoming phases. Each item is gated to a
 | ADR 0012 source-config loader and registry | **Phase 6** (preferred) or Phase 7 prerequisite | Pending |
 | ADR 0026 manifest implementation | **Phase 6** (USDA-only initially per accepted ADR) | Pending |
 | ADR 0027 bronze storage-forced transforms refactor | **Phase 5b.2 Step 4.5** (already on critical path) | Cross-referenced from §5b.2 |
-| `source_watermarks` seeding fix | **Phase 7 prerequisite** | Pending |
-| FDA firm role reconciliation | **Phase 6 prerequisite** (firm entity resolution) | Pending |
+| `source_watermarks` seeding fix | **Phase 7 prerequisite** | Diagnostic-logging fix Implemented 2026-05-09; constraint redesign (FK vs. CHECK vs. no-constraint) still deferred — see section below |
+| FDA firm role reconciliation | **Phase 6 prerequisite** (firm entity resolution) | Implemented 2026-05-09 — see section below |
 | Shared annotated types and invariants audit | **Phase 5c prerequisite** | Resolved 2026-05-01 — documented negative result; see section below |
-| USDA recall ETag re-evaluation | **Phase 7 prerequisite** | Pending |
-| USDA establishment ETag enablement | **Phase 7 prerequisite** (gate-paired with USDA recall) | Code scaffolded 2026-05-03 (`etag_enabled=False`); awaiting viability gate |
+| USDA recall ETag re-evaluation | **Phase 7 prerequisite** | Implemented 2026-05-09 — `etag_enabled=True` per Finding P; see section below |
+| USDA establishment ETag enablement | **Phase 7 prerequisite** (gate-paired with USDA recall) | Implemented 2026-05-09 — `etag_enabled=True` per Finding A revision; see section below |
 | `extraction_runs` source-specific column sparsity | **Phase 7 prerequisite** (after USCG forensics shape is known) | Pending |
 
 ### ADR 0012 implementation: source-config loader and registry
@@ -494,11 +494,15 @@ Either avoids the per-new-source seed-migration ritual. Also: replicate the diag
 
 Lands before Phase 7 cron turn-on so `extraction_runs` write-failures during cron are loud, not silent.
 
+**Diagnostic-logging fix Implemented 2026-05-09.** `cpsc.py:331-345`, `fda.py:477-491`, `usda.py:523-537` now mirror `usda_establishment.py:529-544` exactly: `except Exception as exc:` captures the exception, the warning includes `error=str(exc)` and `error_type=type(exc).__name__`, and a comment explains why diagnostic fields matter for FK constraint violations. Tests `test_db_error_does_not_propagate` (cpsc, fda) and `test_db_failure_is_swallowed_and_logged` (usda) extended to assert the new fields are emitted via `structlog.testing.capture_logs()`. Migration 0008 (`migrations/versions/0008_seed_usda_establishments_watermark.py`) had already addressed the `usda_establishments` seed gap that surfaced this bug, so the diagnostic-logging fix is the only remaining piece of this section's near-term work. **Constraint redesign (FK vs. CHECK vs. no-constraint)** is the remaining open question — deferred until Phase 7 cron-prep when actual operational pain (or lack thereof) is visible.
+
 ### FDA firm role reconciliation — Phase 6 prerequisite
 
 `firm.sql` and `recall_event_firm.sql` label FDA's `firm_legal_nam` with `role='manufacturer'`, but semantically that field is the *recalling establishment* (analogous to USDA's `establishment` which uses `role='establishment'`). Relabel FDA's role to `'establishment'` to align cross-source firm rollups. Touches the `accepted_values` enum on `recall_event_firm.role` and downstream queries that filter by role.
 
 Lands in Phase 6 alongside firm entity resolution work — the resolution logic across CPSC, FDA, and USDA is cleaner if all three agree on the role vocabulary first.
+
+**Implemented 2026-05-09.** Relabeled in `dbt/models/silver/firm.sql:53-65` (`fda_normalized` CTE) and `dbt/models/silver/recall_event_firm.sql:43-54` (`fda_event_firms` CTE). The `accepted_values` test at `dbt/models/silver/_silver.yml:111-113` already permitted `'establishment'` (USDA had been using it), so no test-enum update was needed. Code-scan over `dbt/`, `scripts/sql/`, `src/` for hardcoded `'manufacturer'` filters surfaced no FDA-context occurrences that would silently miss FDA after the flip — the only `'manufacturer'` literal role-assignments in dbt are correctly scoped to CPSC's `manufacturers` JSONB array and NHTSA's `mfgname`. Stale documentation comments updated in `firm.sql:6-11`, `recall_event_firm.sql:6-11`, and `documentation/silver_design_notes.md:62`.
 
 ### USDA recall ETag re-evaluation — Phase 7 prerequisite
 
@@ -526,6 +530,8 @@ Universal across REST API sources (cpsc/fda/usda/usda_establishments today; futu
 
 Best landed before Phase 7 cron turn-on so the daily bandwidth profile is settled before recurring runs accumulate. Cost of re-evaluation is now near-zero (the capture path runs on every extract automatically; no log-field addition or manual per-request capture needed); cost of leaving it ambiguous through cron is recurring ~1.6 MB / day per affected source on idle days that could have been 304s.
 
+**Implemented 2026-05-09.** `etag_viability.sql -v src=usda` produced the SAFE-TO-ENABLE verdict over 7 transitions (`false_304_count=0`, `false_200_count=5`, one real-update day on 2026-05-05). `UsdaExtractor.etag_enabled` flipped to `True` at `src/extractors/usda.py:173`; `UsdaDeepRescanLoader` retains its explicit `False` override per its docstring. YAML at `config/sources/usda.yaml:36` updated for forward-consistency. Test `test_usda_extractor_etag_enabled_by_default` updated. Empirical disposition documented as Finding P in `documentation/usda/recall_api_observations.md`.
+
 ### USDA establishment ETag enablement — Phase 7 prerequisite
 
 The establishment endpoint emits `ETag` and `Last-Modified` under browser fingerprint (Finding A revision 2026-05-03 + A/B verification at `bruno/usda/establishment_exploration/get_all_establishments_with_browser_headers.yml`). The capture path (migration 0010) collects per-run ETag observations alongside the recall endpoint's data; both share the same `etag_viability.sql` machinery.
@@ -541,6 +547,8 @@ The establishment endpoint emits `ETag` and `Last-Modified` under browser finger
 **Decision rule:** the two endpoints share Akamai infrastructure and may exhibit identical ETag reliability, but do not assume so without evidence — they get studied independently. A `false_304_count > 0` for either source is disqualifying for that source regardless of how the other behaves.
 
 Best landed alongside the recall ETag flip if both pass viability simultaneously, or independently if one passes and the other doesn't. Cost of leaving disabled through cron is ~810 KB / day downloads on idle days that could have been 304s. Lands before Phase 7 cron turn-on so the daily bandwidth profile is settled before recurring runs accumulate.
+
+**Implemented 2026-05-09.** `etag_viability.sql -v src=usda_establishments` produced the SAFE-TO-ENABLE verdict over 7 transitions (`false_304_count=0`, `false_200_count=3`, one real-update day on 2026-05-06 inserting 7,176 records). `UsdaEstablishmentExtractor.etag_enabled` flipped to `True` at `src/extractors/usda_establishment.py:180`. YAML at `config/sources/usda_establishment.yaml:28` updated for forward-consistency. Test `test_no_conditional_headers_when_etag_disabled` reworked from "default-state" assertion to "explicit-disable" assertion (sets `etag_enabled=False` before sanity check). Empirical disposition documented in `documentation/usda/establishment_api_observations.md` Finding A revision 2026-05-09.
 
 ### `extraction_runs` source-specific column sparsity — Phase 7 prerequisite
 

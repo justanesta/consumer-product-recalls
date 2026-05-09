@@ -3,9 +3,12 @@
 -- Many-to-many association between recall events and firms with role (ADR 0002).
 -- CPSC: firms extracted from four JSONB arrays per event (manufacturer, retailer,
 --   importer, distributor roles).
--- FDA: single scalar firm per product row (firm_legal_nam), always 'manufacturer'
---   role. DISTINCT ON recall_event_id prevents duplicating the same firm across
---   multiple products in the same event.
+-- FDA: single scalar firm per product row (firm_legal_nam), always
+--   'establishment' role — `firm_legal_nam` is the recalling FDA-registered
+--   establishment, analogous to USDA's establishment (relabeled per
+--   implementation_plan.md §445 follow-up #5; prior: 'manufacturer'). DISTINCT
+--   ON recall_event_id prevents duplicating the same firm across multiple
+--   products in the same event.
 -- USDA: free-text establishment (FSIS-regulated facility), role='establishment'.
 -- NHTSA: single scalar firm per recall row (mfgname), always 'manufacturer' role.
 --   Multiple bronze rows per campno (one per recall component); DISTINCT
@@ -41,10 +44,12 @@ cpsc_event_firms as (
 ),
 
 fda_event_firms as (
+    -- FDA's `firm_legal_nam` is the recalling establishment, not a
+    -- manufacturer. Relabeled per implementation_plan.md §445 follow-up #5.
     select distinct
         md5('FDA' || '|' || recall_event_id::text) as recall_event_id,
         md5(upper(trim(firm_legal_nam)))            as firm_id,
-        'manufacturer'                              as role
+        'establishment'                             as role
     from {{ ref('stg_fda_recalls') }}
     where firm_legal_nam is not null
       and trim(firm_legal_nam) <> ''

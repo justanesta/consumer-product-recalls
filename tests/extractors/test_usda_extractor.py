@@ -432,9 +432,11 @@ class TestLoadBronze:
 
 
 class TestEtagDefaults:
-    def test_usda_extractor_etag_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Production posture: do not depend on Akamai's cached path until
-        # multi-day probes confirm consistency (Finding N).
+    def test_usda_extractor_etag_enabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Production posture since 2026-05-09: ETag conditional-GET is ON by
+        # default after etag_viability.sql cleared the green-light gate
+        # (Finding P in documentation/usda/recall_api_observations.md).
+        # UsdaDeepRescanLoader still overrides to False — see its sibling test.
         for k, v in _REQUIRED_ENV.items():
             monkeypatch.setenv(k, v)
         with (
@@ -443,7 +445,7 @@ class TestEtagDefaults:
         ):
             settings = Settings()  # type: ignore[call-arg]
             extractor = UsdaExtractor(base_url=_BASE_URL, settings=settings)
-        assert extractor.etag_enabled is False
+        assert extractor.etag_enabled is True
 
 
 class TestUsdaDeepRescanLoader:
@@ -661,7 +663,16 @@ class TestRecordRun:
                 started_at=datetime(2026, 4, 30, tzinfo=UTC),
                 status="success",
             )
-        assert any(e.get("event") == "extraction_run.record_failed" for e in captured)
+        # Diagnostic fields land in the warning per architectural follow-up #4
+        # (implementation_plan.md §445) so constraint violations are debuggable
+        # from logs alone — matching the pattern in usda_establishment.py.
+        record_failed = next(
+            (e for e in captured if e.get("event") == "extraction_run.record_failed"),
+            None,
+        )
+        assert record_failed is not None
+        assert record_failed["error"] == "DB down"
+        assert record_failed["error_type"] == "RuntimeError"
 
 
 # ---------------------------------------------------------------------------

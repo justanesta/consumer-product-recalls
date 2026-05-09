@@ -186,9 +186,12 @@ class TestFetch:
     def test_no_conditional_headers_when_etag_disabled(
         self, extractor: UsdaEstablishmentExtractor
     ) -> None:
-        # Default state (etag_enabled=False): conditional headers must NOT be
-        # sent even when prior values are passed. Guards against accidental
-        # enablement via leaky watermark state.
+        # Explicit-disable state: conditional headers must NOT be sent even
+        # when prior values are passed. Guards against accidental enablement
+        # via leaky watermark state. (Class default is now True since
+        # 2026-05-09 — Finding A revision in establishment_api_observations.md
+        # — so this test sets the flag explicitly to exercise the off path.)
+        extractor.etag_enabled = False
         assert extractor.etag_enabled is False  # sanity
         response = _make_response(200, json_body=[])
         with patch("httpx.Client") as mock_client:

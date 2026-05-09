@@ -531,6 +531,34 @@ The kill switch (`etag_enabled: false` in config) is sufficient to disable
 without removing the extractor's ETag-handling code path. Re-enable by flipping
 to `true` if a future audit shows Akamai/FSIS behavior has changed.
 
+### Finding P — ETag enabled in production (2026-05-09) per `etag_viability.sql` green-light verdict
+
+The Finding N addendum's re-enabling criteria (lines 495-505) called for "multi-day probe sequence... at least one observed cache-key flip without a stale-positive 304 leaking past the contradiction guard." The capture infrastructure landed in migration 0010 (universal `_capture_response()` on every `RestApiExtractor` fetch) and ran for 8 days from 2026-05-01 to 2026-05-09, accumulating one ETag observation per daily extraction.
+
+**Verdict from `scripts/sql/_pipeline/etag_viability.sql -v src=usda` on 2026-05-09:**
+
+| metric | value |
+|---|---|
+| `total_transitions` | 7 |
+| `consistent_unchanged` | 1 (2026-05-03 same-day re-run, ETag stable, body unchanged — clean 200 with same ETag) |
+| `consistent_changed` | 1 (2026-05-05 real upstream update — ETag advanced, 1 record inserted, body genuinely different) |
+| `false_200_count` | 5 (ETag advanced, body byte-identical — upstream re-stamping the cache without content change) |
+| `false_304_count` | **0** |
+| recommendation | **SAFE TO ENABLE — false-200 only (over-fetch sometimes; bronze absorbs)** |
+
+**Why this clears the gate.** The re-enable criteria boil down to "no stale-positive 304s and at least one cache-key flip observed cleanly." Both are met:
+
+- `false_304_count = 0` over 7 transitions: ETag never lied conservatively in the dangerous direction (returning 304 when origin had genuinely advanced). Stale-positive 304s would silently drop new records; their absence is the binding correctness signal.
+- The 2026-05-05 transition is the cleanly-observed cache-key flip: ETag advanced from `1777861266` → `1777929739`, the body content changed, and 1 new record landed in bronze. The 200/304 round-trip is working as documented.
+- The 5 false-200 observations are benign cache re-stamps: upstream (Akamai or origin) regenerates the ETag (Unix timestamp shape, per `looks_unix_timestamp=true`) without changing the body. We re-fetch the body, ADR 0007 bronze content-hash dedup compares, sees no change, and the row is absorbed without writing. No correctness impact; just an occasional ~1.6 MB over-fetch — exactly the case `implementation_plan.md:524` flagged as safe.
+
+**Action taken 2026-05-09:**
+- `src/extractors/usda.py:173`: `etag_enabled` default flipped `False → True`. `UsdaDeepRescanLoader.etag_enabled` (line 566) explicitly remains `False` per its docstring — the deep-rescan workflow exists to re-pull unconditionally and self-correct any silent ETag bug within ≤7 days.
+- `config/sources/usda.yaml:36`: YAML toggle flipped to `true` for forward-consistency once ADR 0012 lands (still not loaded today).
+- Tests `test_usda_extractor_etag_enabled_by_default` (renamed from `_etag_disabled_by_default`) updated to assert the new default. The deep-rescan test `test_etag_disabled_by_default` continues to assert `is False` per the deliberate override.
+
+**Reopen condition:** if `etag_viability.sql` ever shows `false_304_count > 0` in a future run, flip back to `False` immediately and treat as a Finding N regression. Daily capture continues automatically — re-run `etag_viability.sql` periodically as a check.
+
 ---
 
 ## Akamai Bot Manager — request shape requirements

@@ -63,7 +63,18 @@ The `x-drupal-cache` flip (`UNCACHEABLE (request policy)` → `HIT`) is the smok
 - `bruno/usda/establishment_exploration/get_all_establishments_with_browser_headers.yml` — A/B sibling that adds browser headers; observes ETag and Last-Modified populated.
 - `extraction_runs.response_etag` and `response_last_modified` columns (migration 0010) capture per-run ETag values from the production extractor for ongoing viability study via `scripts/sql/_pipeline/etag_viability.sql`.
 
-**Implementation status:** `UsdaEstablishmentExtractor` does NOT yet send `If-None-Match` or `If-Modified-Since` — every run remains a full dump (~810 KB compressed). The conditional-GET enablement is a separate workstream (see `project_scope/implementation_plan.md` § "USDA establishment ETag enablement"), gated on the same multi-day viability evidence as the recall endpoint. Bronze content-hash dedup (ADR 0007) continues to handle idempotency until then.
+**Implementation status (revised 2026-05-09): conditional-GET enabled in production.** `UsdaEstablishmentExtractor.etag_enabled` flipped `False → True` after `scripts/sql/_pipeline/etag_viability.sql -v src=usda_establishments` produced a SAFE-TO-ENABLE verdict over 7 transitions:
+
+| metric | value |
+|---|---|
+| `total_transitions` | 7 |
+| `consistent_unchanged` | 3 (ETag stable across consecutive runs, body unchanged — clean 200s) |
+| `consistent_changed` | 1 (2026-05-06 real upstream update — ETag advanced, 7,176 records inserted) |
+| `false_200_count` | 3 (ETag re-stamped without body change, absorbed by ADR 0007) |
+| `false_304_count` | **0** |
+| recommendation | **SAFE TO ENABLE — false-200 only (over-fetch sometimes; bronze absorbs)** |
+
+The endpoint behaves identically to the recall endpoint on the ETag dimension (Finding P in `recall_api_observations.md`). Both share the same Akamai infrastructure and the same browser-fingerprint-keyed cache tier; both met the same re-enable criteria. Live extractor sends `If-None-Match` and `If-Modified-Since` on every run; 304s short-circuit the ~810 KB body download cleanly. Bronze content-hash dedup (ADR 0007) absorbs the rare false-200 over-fetches without writing.
 
 ---
 

@@ -59,7 +59,7 @@ FDA bronze is already flat — each bronze row IS a product, with `PRODUCTID` as
 
 CPSC encodes firms as four separate JSONB arrays per event row (`manufacturers`, `retailers`, `importers`, `distributors`), each containing structured `{name, company_id}` objects. The firm models explode these arrays and track all four roles.
 
-FDA encodes a single firm as two scalar columns (`firm_legal_nam`, `firm_fei_num`) on each product row, always in the 'manufacturer' role. There is no equivalent to CPSC's retailer/importer/distributor roles in the FDA data.
+FDA encodes a single firm as two scalar columns (`firm_legal_nam`, `firm_fei_num`) on each product row, always in the `'establishment'` role — `firm_legal_nam` is the recalling FDA-registered establishment, analogous to USDA's `establishment` field (relabeled 2026-05-09 per `project_scope/implementation_plan.md` §445 architectural follow-up #5; prior versions of `firm.sql` and `recall_event_firm.sql` used `'manufacturer'`). There is no equivalent to CPSC's retailer/importer/distributor roles in the FDA data.
 
 Both `firm.sql` and `recall_event_firm.sql` handle this via UNION ALL: the CPSC branch explodes JSON arrays; the FDA branch uses `DISTINCT` on `(recall_event_id, firm_legal_nam)` to avoid duplicating the same firm across multiple products in the same event.
 

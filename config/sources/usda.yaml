@@ -26,11 +26,12 @@ incremental_filter_format: null
 default_lookback_days: null
 format_param: null
 credentials: null
-# ETag conditional-GET optimization. Disabled in production per Finding N
-# (extractor class default `UsdaExtractor.etag_enabled = False`). Empirically
-# viable when paired with the Finding O browser-like headers — re-runs land on
-# Akamai's cached path and 304s with `If-None-Match` work correctly. Stays
-# disabled until multi-day probe data confirms consistency. NOTE: this YAML
-# value is intent-only; the live kill-switch is the class default referenced
-# above (this file is not loaded — see header comment).
-etag_enabled: false
+# ETag conditional-GET optimization. Enabled in production since 2026-05-09
+# (extractor class default `UsdaExtractor.etag_enabled = True`) after
+# `scripts/sql/_pipeline/etag_viability.sql` cleared the green-light gate —
+# 7 transitions, false_304_count=0, false_200_count=5 (over-fetches absorbed
+# by ADR 0007 bronze content-hash dedup). See Finding P in
+# documentation/usda/recall_api_observations.md. NOTE: this YAML value is
+# intent-only; the live kill-switch is the class default referenced above
+# (this file is not loaded — see header comment).
+etag_enabled: true

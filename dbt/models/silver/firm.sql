@@ -4,8 +4,11 @@
 -- CPSC contributes firms from four JSONB arrays (manufacturers, retailers, importers,
 -- distributors) with structured {name, company_id} objects.
 -- FDA contributes a single scalar firm per product row (firm_legal_nam + firm_fei_num),
--- always in the 'manufacturer' role. DISTINCT prevents duplicating the same firm
--- across multiple products in the same recall event.
+-- always in the 'establishment' role — `firm_legal_nam` is semantically the
+-- recalling FDA-registered establishment, analogous to USDA's establishment
+-- field (relabeled per implementation_plan.md §445 architectural follow-up #5;
+-- prior versions of this model used role='manufacturer'). DISTINCT prevents
+-- duplicating the same firm across multiple products in the same recall event.
 -- USDA contributes a free-text 'establishment' (recalling FSIS-regulated facility)
 -- with role='establishment'. company_id is populated via a LEFT JOIN against
 -- stg_usda_fsis_establishments matching on normalized establishment_name —
@@ -51,8 +54,11 @@ cpsc_normalized as (
 ),
 
 fda_normalized as (
+    -- FDA's `firm_legal_nam` is semantically the recalling establishment
+    -- (analogous to USDA's `establishment` field), not a manufacturer.
+    -- Relabeled per implementation_plan.md §445 architectural follow-up #5.
     select distinct
-        'manufacturer'                as role,
+        'establishment'               as role,
         firm_legal_nam                as raw_name,
         upper(trim(firm_legal_nam))   as normalized_name,
         firm_fei_num::text            as company_id

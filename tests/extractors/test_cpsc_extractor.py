@@ -423,7 +423,23 @@ class TestRecordRun:
     def test_db_error_does_not_propagate(self, extractor: CpscExtractor) -> None:
         from datetime import UTC, datetime
 
+        import structlog.testing
+
         started_at = datetime.now(UTC)
         extractor._engine.begin.side_effect = RuntimeError("db down")  # type: ignore[attr-defined]
 
-        extractor._record_run("test-run-id", started_at, "failed", error_message="original error")
+        # Must not raise; must log diagnostic fields per architectural
+        # follow-up #4 (implementation_plan.md §445) so constraint violations
+        # are debuggable from logs alone.
+        with structlog.testing.capture_logs() as captured:
+            extractor._record_run(
+                "test-run-id", started_at, "failed", error_message="original error"
+            )
+
+        record_failed = next(
+            (e for e in captured if e.get("event") == "extraction_run.record_failed"),
+            None,
+        )
+        assert record_failed is not None
+        assert record_failed["error"] == "db down"
+        assert record_failed["error_type"] == "RuntimeError"
