@@ -128,11 +128,11 @@ Three things prompted the audit:
 | | |
 |---|---|
 | **Why load-bearing** | Documented FDA contract per `documentation/fda/api_observations.md:145-147`. Would be the per-record edit timestamp for Phase 6 `recall_event_history` if available. |
-| **Evidence today** | **Untestable today.** PRODUCTLMD is not captured in `fda_recalls_bronze` (migration 0004) — the FDA extractor's `displaycolumns` request does not include it (`src/schemas/fda.py:88-132`). |
-| **Falsification script** | None — would require an ADR + schema migration to add PRODUCTLMD to bronze first. |
+| **Evidence today** | **Empirically falsified on the lookup-endpoint surface (re-verification 2026-05-09, rebaseline-filtered).** Bruno re-runs of `get_product_by_id.yml` against 5 productids surfaced by `scripts/sql/fda/bronze/find_real_edit_productids.sql` (post-rebaseline filter mirroring `dbt/tests/source_assumptions/assert_fda_eventlmd_correlates_with_content_change.sql:26-27`) returned `PRODUCTLMD: null` for all 5. Two distinct events (98540 Philips Respironics CDRH, 98497 American Laboratories CFSAN), two distinct FDA centers, multiple recall types. The rebaseline filter did real work: an initial unfiltered probe included productid 218953 whose hash deltas turned out to be `schema_rebaseline`/`hash_helper_rebaseline` artifacts (ADR 0027); after filtering, 218953 dropped out and 219028 swapped in — all 5 productids in the rebaseline-clean population still nulled. FDA does not populate `PRODUCTLMD` even on records its own bronze content shows it has edited. Earlier observations (Findings H + K0 at `api_observations.md:146`, `:306`) showed null on un-edited products; FDA's native field-history endpoints returned `RESULTCOUNT: 0` across 4 events spanning 2002-2026 (Finding L, `api_observations.md:300-328`). Full re-verification table at `api_observations.md` K0.1. |
+| **Falsification script** | Not applicable — capture decision deferred per `api_observations.md` K0.1 (no information-gain expected from adding the column). |
 | **ADR 0031 threshold** | N/A. |
-| **Downstream impact** | None today (assumption isn't being relied on). When/if PRODUCTLMD is added, F3 becomes testable and its violation would mean Phase 6 cannot use PRODUCTLMD as a per-record edit signal. |
-| **Follow-up** | File an ADR proposing PRODUCTLMD addition to FDA extractor + bronze schema + Pydantic schema. Until landed, F3 sits as a documented gap. |
+| **Downstream impact** | None today, none expected. ADR 0007 was amended 2026-04-26 to abandon the FDA-history-endpoints lineage strategy; Phase 6 `recall_event_history` (per `project_scope/implementation_plan.md:611`) uses bronze-snapshot synthesis with `LAG()`, treating FDA the same as the other four sources. PRODUCTLMD plays no role. |
+| **Follow-up** | Closed per `api_observations.md` K0.1. Re-open if a `content_hash`-edited product in `fda_recalls_bronze` ever returns a non-null `PRODUCTLMD` from the lookup endpoint. |
 
 ### F4 — FDA does not delete records
 
@@ -254,7 +254,7 @@ Three things prompted the audit:
 | C4 | CPSC | Already false → mitigated | Re-confirmed by recall `00015` | CPSC fixed a typo on 2026-05-08 without advancing `last_publish_date`; deep-rescan policy correct |
 | F1 | FDA | **Verified** | 0 PRODUCTID renumbers across 5,529 bronze rows / 2,924 distinct PRODUCTIDs / 7 runs | "Any non-zero rate" threshold not at risk |
 | F2 | FDA | **Verified within routine path** | 41 real edits, 0 silent edits, 0 archive-migration noise (all post rebaseline-filter) | Pre-filter showed 2,535 false silent edits; all attributable to 2026-05-01 architecture realignment (ADR 0027). Cell B = 0 contradicts ADR 0023's archive-migration narrative — worth periodic re-check |
-| F3 | FDA | **Untestable today (column not captured)** | n/a | PRODUCTLMD not in `fda_recalls_bronze`; schema migration filed as follow-up (TODO.md:42) |
+| F3 | FDA | **Empirically falsified on lookup-endpoint surface** | n/a | Re-verification 2026-05-09 (rebaseline-filtered): 5/5 productids in the routine-only population (records of demonstrated FDA edits per `content_hash` deltas) returned `PRODUCTLMD: null`. Two events / two FDA centers (Philips Respironics Devices, American Laboratories Food). Filter did real work — productid 218953 dropped out as a rebaseline-only phantom; 219028 swapped in. Adds to prior null-on-un-edited and zero-rows-from-history-endpoints evidence (Findings H/K0/L). ADR 0007 already amended 2026-04-26 to bronze-snapshot synthesis; capture deferred per `api_observations.md` K0.1. |
 | F4 | FDA | Verified | No deletions observed across 7 runs | Lifecycle handled via ADR 0026 manifest |
 | F5 | FDA | Verified → mitigated | N/A | RID excluded from hash |
 | U1 | USDA | Verified | 2,003 distinct (recall_id, langcode), 0 collisions | Composite key works |

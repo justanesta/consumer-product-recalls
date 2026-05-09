@@ -188,6 +188,56 @@ The PDF lists 32 valid `displaycolumns` values for the bulk POST (productid, rec
 
 **Implication for the extractor:** `EVENTLMD` is the production watermark for daily incremental queries (per ADR 0010), and that field IS in the bulk POST displaycolumns/filter list. Product-level edit timestamps (`PRODUCTLMD`) are visible only via per-product lookups, which makes them useful for enrichment but unsuitable as a top-level extraction watermark. This is consistent with the architecture: bulk POST drives the sweep, per-product lookups enrich.
 
+### K0.1. `productlmd` capture decision (closure of `TODO.md:42`)
+
+Codifies the cumulative empirical evidence on whether to add `PRODUCTLMD` to `fda_recalls_bronze`. **Decision: do not capture.**
+
+**Bulk POST surface.** 406 when requested (Finding K0 above), confirmed 2026-04-26.
+
+**Lookup endpoint surface** (`/recalls/product/{productid}` via `bruno/fda/lookup/get_product_by_id.yml`). Exposes `PRODUCTLMD` as a column (no `dt` suffix; Finding H, lines 137-142 — ADR 0007 already amended for the column-name correction). Empirically null for product 219875 (Alcon Research, recent recall — line 146); the table at line 306 extends the null observation across additional probed events.
+
+**FDA's native field-history surface** (`/search/producthistory/{productid}`, `/search/eventproducthistory/{eventid}`). `RESULTCOUNT: 0` for every product tested across 4 distinct events spanning 2002-2026, ongoing/terminated/archive-era, multiple firms (Finding L, lines 300-328). The endpoints work correctly — the dataset is empirically empty for the records we can reach.
+
+**Architectural fallout already absorbed.** ADR 0007 was amended 2026-04-26 to abandon the FDA-history-endpoints lineage strategy in favor of bronze-snapshot synthesis with `LAG()`, treating FDA the same as CPSC/USDA/NHTSA/USCG. Phase 6 `recall_event_history` (per `project_scope/implementation_plan.md:611`) is the production lineage signal for FDA edits.
+
+**Cost-benefit of capture.** Adding `PRODUCTLMD` to bronze would require a per-product GET pass after the bulk POST: ~134k extra requests on backfill, ~20/day incremental. The data-quality return on that work is empirically zero — `PRODUCTLMD` has been null for every product probed via every available FDA surface. Bronze-snapshot synthesis already captures real edits via `content_hash` deltas, independent of whether FDA's lookup-endpoint metadata happens to populate.
+
+**Reopen condition.** If any product whose `content_hash` has changed across snapshots in `fda_recalls_bronze` is observed to return a non-null `PRODUCTLMD` from the lookup endpoint, reopen this decision.
+
+**Re-verification 2026-05-09: probe executed, conclusion strengthened to F3 falsification.** SQL on `fda_recalls_bronze` identified 5 productids whose `content_hash` had changed across snapshots — products we have *empirically observed* FDA editing in our own corpus. Bruno re-runs of `get_product_by_id.yml` against each:
+
+| productid | recall_event_id | recall_num | center | `PRODUCTLMD` |
+|---|---|---|---|---|
+| 219025 | 98540 (Philips Respironics Trilogy Evo) | Z-1646-2026 | Devices (CDRH) | **null** |
+| 219026 | 98540 (Philips Respironics Trilogy Evo O2) | Z-1647-2026 | Devices (CDRH) | **null** |
+| 218950 | 98497 (American Laboratories Pepsin Full Strength) | H-0610-2026 | Food (CFSAN) | **null** |
+| 218952 | 98497 (American Laboratories Pepsin 1:10,000) | H-0611-2026 | Food (CFSAN) | **null** |
+| 218953 | 98497 (American Laboratories Pepsin 1:3000) | H-0612-2026 | Food (CFSAN) | **null** |
+
+Two distinct events, two distinct FDA centers, multiple recall types — and all 5 returned `PRODUCTLMD: null`. **This falsifies F3's "populates on first edit" half**: FDA does not populate `PRODUCTLMD` even on records that our bronze proves it has edited (`content_hash` deltas across `extraction_runs`). The PDF-documented contract is not honored on the lookup-endpoint surface.
+
+Implications:
+- Capture decision is **strengthened**, not reopened: PRODUCTLMD via lookup-enrichment would carry zero information even for measurably-edited records.
+- ADR 0007's bronze-snapshot synthesis with `LAG()` over `content_hash` is empirically the right lineage signal — `content_hash` captures real FDA edits that FDA's own `PRODUCTLMD` metadata fails to surface.
+- F3 status updated in `documentation/source_assumption_audit.md` from "untestable" → "empirically falsified on the lookup-endpoint surface."
+
+**Rebaseline-filtered re-verification 2026-05-09 (methodological caveat resolved).** The unfiltered probe above raised a concern: hash deltas could be `schema_rebaseline`/`hash_helper_rebaseline` artifacts (ADR 0027) rather than real FDA edits. The follow-up script `scripts/sql/fda/bronze/find_real_edit_productids.sql` applies the same rebaseline filter as `dbt/tests/source_assumptions/assert_fda_eventlmd_correlates_with_content_change.sql:26-27` to surface only productids whose `content_hash` changed across routine (non-rebaseline) extractions. Bruno re-probe results:
+
+| productid | recall_event_id | recall_num | center | in filtered Q1? | in unfiltered Q2? | `PRODUCTLMD` |
+|---|---|---|---|---|---|---|
+| 218950 | 98497 American Laboratories Pepsin Full Strength | H-0610-2026 | Food (CFSAN) | ✓ | ✓ | **null** |
+| 218952 | 98497 American Laboratories Pepsin 1:10,000 | H-0611-2026 | Food (CFSAN) | ✓ | ✓ | **null** |
+| 219025 | 98540 Philips Respironics Trilogy Evo | Z-1646-2026 | Devices (CDRH) | ✓ | ✓ | **null** |
+| 219026 | 98540 Philips Respironics Trilogy Evo O2 | Z-1647-2026 | Devices (CDRH) | ✓ | ✓ | **null** |
+| 219028 | 98540 Philips Respironics Trilogy Evo Universal | Z-1649-2026 | Devices (CDRH) | ✓ (newly surfaced) | — (below top 5) | **null** |
+| 218953 | 98497 American Laboratories Pepsin 1:3000 | H-0612-2026 | Food (CFSAN) | — (rebaseline-only phantom) | ✓ | (was null on unfiltered probe) |
+
+The filter did real work: productid 218953 dropped out of the filtered population (its hash deltas were `schema_rebaseline`/`hash_helper_rebaseline` artifacts, not FDA edits), and productid 219028 swapped in. The remaining 5 productids are all in the rebaseline-clean population — records where `fda_recalls_bronze` carries direct evidence of FDA editing — and *all 5 again returned `PRODUCTLMD: null`*.
+
+**F3 falsification is now airtight.** On a rebaseline-filtered population of records where FDA edits are empirically observable in our own bronze content, FDA's lookup endpoint returns `PRODUCTLMD: null` for every probe. The PDF-documented "populates on first edit" contract is contradicted on the only edit-detection surface available to clients. The K0.1 capture decision stands at higher confidence than before: capturing `PRODUCTLMD` via lookup-enrichment would carry zero information even on records of demonstrated edits.
+
+**R2 landing sanity check (2026-05-09).** Confirms end-to-end exclusion of `PRODUCTLMD` from the bulk POST extraction path. The most recent FDA landing in R2 at the time of writing (`fda/2026-05-09/d4ee85d6-522a-4f56-8da0-925c954d450c.json.gz`) yielded zero case-insensitive `productlmd` matches when grepped via `aws s3 cp <key> - | gunzip | grep -ic productlmd`. Consistent with `_DISPLAY_COLUMNS` at `src/extractors/fda.py:117-123`, which excludes the field from the request payload — FDA's bulk POST response honors the exclusion. Rules out the alternate hypothesis that FDA returns unrequested fields anyway and that bronze projection silently drops them. Closes the third potential information path: lookup endpoint (null), history endpoint (empty), bulk POST landing (field absent). All three are empirically silent on `PRODUCTLMD`.
+
 ### K. GET lookup endpoints handle the empty-result case cleanly
 
 Confirmed against `get_press_release_urls.yml` for `event_id=98815` (which has zero press releases):

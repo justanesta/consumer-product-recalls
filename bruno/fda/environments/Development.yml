@@ -9,7 +9,7 @@ variables:
   - name: event_id
     value: "98815"
   - name: product_id
-    value: "219875"
+    value: "216700"
   - name: edited_event_id
     value: "25159"
   - name: edited_product_id

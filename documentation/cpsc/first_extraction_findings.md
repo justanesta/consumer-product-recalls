@@ -118,9 +118,13 @@ The zero-edit observation may mean CPSC rarely edits published recalls, or it ma
 | `sold_at_label` | 100.0% | See note below |
 | `product_upcs` | 0.0% | Present but always `[]` — see JSONB section |
 
-### `sold_at_label` — 100% null (data gap)
+### `sold_at_label` — 100% null (empirically null at source)
 
-`sold_at_label` was added in migration 0003 as a derived text field. It is null for all existing rows, which means either the extractor does not yet populate it, or it requires a backfill from the `products` JSONB (e.g. extracting the retailer/sold-at information). This is a known gap to resolve before the silver layer consumes this field.
+`sold_at_label` was added in migration 0003 (`migrations/versions/0003_cpsc_sold_at_label.py:7-8`) because the field appears in every CPSC SaferProducts response and was causing 100% record rejection pre-migration. The Pydantic schema maps it directly via `validation_alias="SoldAtLabel"` (`src/schemas/cpsc.py:150`); the bronze loader (`src/bronze/loader.py`) passes it through unmodified. So the column **is** being populated correctly — with the `null` values that CPSC's API systematically returns. Cassette evidence: `tests/fixtures/cassettes/cpsc/test_happy_path_recent.yaml` lines 37, 57, 85+ all show `"SoldAtLabel":null` across multiple recalls.
+
+There is nothing to backfill from the `products` JSONB either — that array does not carry sold-at-label information.
+
+**Status: documented-empty by source.** Not an extractor gap, not an unmet derivation. Revisit only if CPSC ever starts populating the field. The earlier "either the extractor does not yet populate it, or it requires a backfill" framing in this section was wrong on both halves and has been corrected here.
 
 ### JSONB fields (empty array rates)
 
