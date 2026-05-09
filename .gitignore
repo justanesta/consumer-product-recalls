@@ -55,6 +55,7 @@ dbt/.user.yml
 .claude/skills/
 .claude/agents/
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # Local-only project notes
 CLAUDE.local.md

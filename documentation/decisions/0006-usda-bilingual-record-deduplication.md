@@ -28,3 +28,19 @@ Three options considered:
 - **Edge case to handle during extraction:** if USDA publishes a Spanish record without an English counterpart within 24 hours (rare but possible during initial publication, before USDA back-fills the English version), `check_invariants()` quarantines the Spanish record to the T1 `usda_recalls_rejected` bronze table with `failure_stage='invariants'` per ADR 0013, emits a T2 structured warning log, and the silver builder picks the record up on the next scheduled ingestion cycle once the English counterpart lands. If the English counterpart never appears within a configurable timeout, the Spanish record is eligible for promotion as primary on a later re-ingest once the timeout is acknowledged. This preserves the "never silently drop a recall" invariant while routing the edge case through the existing quarantine architecture rather than introducing a separate alert channel.
 - **Terminology note:** "record" in this ADR refers to a source-API row (one English, one Spanish from USDA). Bronze preserves both; `recall_event` in silver collapses them to a single event-level row. USDA silver granularity remains event-only per ADR 0002 — product-level granularity for USDA is deferred to v2.
 - The `summary_alt_lang` JSONB shape generalizes if USDA or any other source adds further languages later — no further schema changes needed.
+
+## Phase 5c verification addendum (2026-05-08) — bilingual content can be years stale
+
+The cross-source assumption audit (`documentation/source_assumption_audit.md`, U2 row) re-measured FSIS's bilingual update behavior against current bronze. Two findings affect the operational meaning of `summary_alt_lang->>'es'`:
+
+- **13.31% of bilingual recall pairs (105/789) have mismatched `last_modified_date` between EN and ES siblings.** The divergence is structural, not transient: top-10 EN/ES gaps range 740–1,701 days, with EN always ahead. FSIS edits English without translating to Spanish, indefinitely.
+- **35% of all USDA recalls have no Spanish version at all.** Confirmed via `assert_bilingual_atomic_update.sql` Q3: 425 EN-only recalls / 1,214 total.
+
+**This does not change the design decision in this ADR** — collapsing to one event row, English-primary, Spanish summary attached, remains correct. But it **does affect the consumer-facing app's presentation contract**:
+
+- The Spanish summary in `summary_alt_lang->>'es'` may be substantially out of date relative to the English summary on the same row. For ~9% of all recalls (the bilingual-but-desynced population: 65% × 13.3%), the Spanish text could be years older than the English text.
+- The consumer app should either: (a) display a "Spanish summary may be outdated" notice when the EN/ES `last_modified_date` differ by more than some threshold, or (b) surface the actual Spanish-side `last_modified_date` next to the summary so users can judge.
+
+**The orphan-detection invariant (`check_usda_bilingual_pairing`) does not need to change.** It correctly catches Spanish records with no English counterpart at all (an extraction-time anomaly). The new finding is about ongoing edit-divergence between paired EN/ES rows, which is normal FSIS behavior, not an extraction anomaly. Two distinct concerns; the invariant stays focused on the extraction-time one.
+
+**Cross-reference:** `documentation/usda/bilingual_and_lmd_findings.md` U2 section has the full baseline, sample violation pairs with date gaps, and the three-population breakdown for downstream design.

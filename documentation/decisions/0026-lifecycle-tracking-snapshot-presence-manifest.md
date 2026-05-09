@@ -358,3 +358,23 @@ Compute the manifest on-demand at silver build time by parsing R2 raw payloads
 - **Q2 (resolved 2026-05-01):** Quarantined records do **not** appear in the manifest. The manifest tracks bronze-table-presence; raw R2 is the residual log for what was present in the response. Quarantined-but-not-loaded records are visible via T1 `_rejected` tables (ADR 0013) and the raw R2 payloads (ADR 0004) — those are the right surfaces for that question.
 
 - **Q3 (resolved 2026-05-01 → ADR 0028):** Manifest backfill from historical R2 payloads is deferred to ADR 0028 (backfill / historical re-extraction semantics), which covers the broader question of how to seed historical state into bronze and silver. The manifest-backfill question is one instance of that pattern.
+
+---
+
+## Phase 5c verification addendum (2026-05-08)
+
+The cross-source assumption audit (`documentation/source_assumption_audit.md`) re-measured the empirical signals this ADR cites. Two findings reinforce the design:
+
+**1. The 13.3% bilingual non-atomic-update rate held to two decimal places.**
+Re-computed against current bronze: 105 of 789 bilingual pairs (13.31%) — see `documentation/usda/bilingual_and_lmd_findings.md` U2 section. Importantly, the divergence is **structural, not transient**: top-10 EN/ES `last_modified_date` gaps range 740–1,701 days, with EN always ahead of ES. FSIS edits English without translating to Spanish, indefinitely. The original ADR motivation framed this as "FSIS sometimes touches one language and not the other"; the corrected framing is "EN and ES are de facto independent records for ~13% of bilingual recalls."
+
+This **strengthens the Option A decision** (separate `extraction_run_identities` table with `langcode` in PK). Per-language presence tracking isn't just useful — it's structurally necessary because EN and ES lifecycle events diverge.
+
+**2. `last_modified_date` is empirically unreliable as a per-record edit signal.**
+The Phase 5c USDA U3 assertion (`scripts/sql/usda_recalls/bronze/assert_field_last_modified_date_advances_on_edit.sql`) found that the only observed routine USDA content-edit transition (`PHA-04092026-01`, the canonical state-2 case cited in this ADR) was a lifecycle field flip (`active_notice: false → true`) with **no `last_modified_date` advance**. Confirmed by the project owner as a known FSIS pattern of "tweak content shortly after publish without bumping date."
+
+**Implication for the Phase 6 silver derivations** (table at line 161-167): the lifecycle dimensions should derive from `extraction_runs.started_at` (the manifest-driven signal) and `extraction_timestamp` (bronze content), **not** from `last_modified_date`. The original derivation table is already correct on this — `first_seen_at = MIN(extraction_runs.started_at)`, `last_seen_at = MAX(extraction_runs.started_at)`, `edit_count = COUNT(DISTINCT content_hash)` — none reference `last_modified_date`. This ADR's design was prescient; the empirical finding confirms it.
+
+**Cross-references for the Phase 6 implementer:**
+- `documentation/usda/bilingual_and_lmd_findings.md` — full U2/U3 baselines and the rebaseline-filter pattern that Phase 6 `recall_event_history` must mirror.
+- `documentation/source_assumption_audit.md` — cross-source assumption catalogue; lifecycle-relevant rows are U2, U3, F4, U4 (no-deletion confirmation).

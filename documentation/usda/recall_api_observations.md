@@ -160,7 +160,7 @@ Confirmed 2026-04-29 via `data_exploration/get_bilingual_pair.yml` (recall `004-
 
 - A single `field_recall_number` query returns exactly **2 records** — one `langcode=English`, one `langcode=Spanish`.
 - Both records share the **same `field_recall_number`** (`004-2020`).
-- **`field_last_modified_date` is identical across both language versions** (`2020-05-20`). FSIS updates both records atomically — the watermark moves in sync. This means content-hash dedup will catch changes to either language version on the same run.
+- **`field_last_modified_date` was identical across both language versions for recall `004-2020`** (`2020-05-20`). The original Finding F observation generalized this to "FSIS updates both records atomically — the watermark moves in sync," based on inspection of this single bilingual pair. **That generalization does not hold at corpus scale.** Cross-corpus measurement on 2026-05-08 (see `documentation/usda/bilingual_and_lmd_findings.md` U2 section) found 105 of 789 bilingual pairs (**13.31%**) have mismatched `last_modified_date`, with EN ahead of ES by 740–1,701 days in the top-10 samples — a structural divergence pattern, not transient FSIS lag. FSIS edits English without translating to Spanish, indefinitely. Content-hash dedup still works correctly on either language version (independent identity tuples per ADR 0006), but the "atomic update" framing is wrong: EN and ES are de facto independent records for ~13% of bilingual recalls.
 - **`field_has_spanish` is `"True"` on both the English AND Spanish record** — it is not a flag that distinguishes which version is the English original. It simply signals "this recall has a bilingual pair." Use `langcode` to distinguish EN from ES.
 
 **Fields that differ between EN/ES versions:**

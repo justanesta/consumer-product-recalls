@@ -24,3 +24,17 @@ models:
       +materialized: table
     gold:
       +materialized: view
+
+# Singular tests under tests/source_assumptions/ check load-bearing source-API
+# assumptions (CPSC products[] append-only, FDA PRODUCTID stable, USDA bilingual
+# atomicity, NHTSA 11-tuple drift). Per ADR 0031, some assumptions have known
+# non-zero baselines (e.g., NHTSA AC DELCO maketxt drift at ~1 case/day) — these
+# tests surface violations as warnings rather than build failures, so the
+# threshold-based posture in ADR 0031's per-source table holds. Severity
+# escalation (warn → error) is deferred until the Soda Core / Great Expectations
+# migration in Phase 7 (implementation_plan.md:643), at which point threshold-
+# aware assertions become natural.
+tests:
+  consumer_product_recalls:
+    source_assumptions:
+      +severity: warn
