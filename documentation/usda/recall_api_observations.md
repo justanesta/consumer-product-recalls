@@ -559,6 +559,18 @@ The Finding N addendum's re-enabling criteria (lines 495-505) called for "multi-
 
 **Reopen condition:** if `etag_viability.sql` ever shows `false_304_count > 0` in a future run, flip back to `False` immediately and treat as a Finding N regression. Daily capture continues automatically — re-run `etag_viability.sql` periodically as a check.
 
+### Finding P addendum (2026-05-10) — Verdict basis was passive observation; script + extractor patched after sibling-source 304 surfaced an artifact
+
+The recall endpoint has not yet returned a 304 (every post-flip run has been a content-changed 200 — e.g. 2 records inserted on 2026-05-10, 1 record on 2026-05-05). The sibling `usda_establishments` source did return its first 304 on 2026-05-10, and `etag_viability.sql` mis-classified it as a phantom false-304. Full root-cause analysis lives in the Finding A addendum of `documentation/usda/establishment_api_observations.md`; the short version is that `_base._capture_response()` was writing `sha256("")` to `response_body_sha256` on 304 rows, and the viability CASE was inferring `body_sha != prev_body` from that artifact rather than treating the 304 status code as authoritative.
+
+The same artifact would surface on this source the first time the recall endpoint returns a 304. The patches landed for establishments — extractor writes `NULL` on 304, viability CASE branches on `response_status_code = 304`, query 4 excludes 304 rows from `distinct_bodies` — apply uniformly to `src=usda` here as well.
+
+**Caveat on the Finding P green-light, retroactively.** The 14-day window summarized in the table above was a *passive* observation: ETag was off, so the extractor downloaded the full body every run and the server never had reason to return a 304. The 7 transitions reported on validate ETag *generation* honesty (does the cache regenerate the ETag on identical content?) but cannot directly validate ETag *validation* honesty (does the server ever return a 304 when content has actually changed?). The `false_304_count = 0` figure was strictly an inference from those passive observations — "if the server's ETag tracks the body on every 200 we observed, the server is probably honest about 304s too." Reasonable, but not directly measured.
+
+The flip remains the right call: every 200 transition observed was internally consistent, and the bronze content-hash dedup is a backstop for any false-200 over-fetches. The caveat to record is that the inference is now testable on every future 304 — and the patched script will report those 304 transitions as `consistent_unchanged` rather than fabricating a false-304.
+
+**Future hardening — audit-run pattern.** A genuine false-304 cannot be detected from a 304 row alone, because no body is fetched to compare. Direct measurement requires a periodic audit run that omits `If-None-Match` to force a 200, then compares the fresh body sha against the sha implied by the most recent prior 200's body. Even one weekly audit per source would convert the inferential green-light into a directly measured one. Not implemented; logged here as the natural next-step hardening if Akamai/FSIS behavior ever shifts.
+
 ---
 
 ## Akamai Bot Manager — request shape requirements

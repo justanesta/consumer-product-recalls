@@ -172,9 +172,11 @@ def test_repeated_capture_overwrites_prior_state() -> None:
 
 
 def test_capture_handles_304_not_modified() -> None:
-    """304 path: empty body, headers may be present. Body hash is the
-    well-known empty-bytes sha256 — useful as a sentinel if etag_enabled
-    flips on and 304s start arriving."""
+    """304 path: empty body, headers may be present. Body hash is NULL
+    (not sha256("")) so that etag_viability.sql can distinguish "no body
+    to hash" from "empty body's hash" without surfacing phantom false-304
+    verdicts. Status code, etag, and headers still populate normally —
+    those carry the actual conditional-GET signal."""
     extractor = _new_extractor()
     response = _make_response(
         status_code=304,
@@ -186,9 +188,7 @@ def test_capture_handles_304_not_modified() -> None:
 
     assert extractor._captured_response_status_code == 304
     assert extractor._captured_response_etag == '"unchanged"'
-    assert extractor._captured_response_body_sha256 == (
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    )
+    assert extractor._captured_response_body_sha256 is None
 
 
 def test_initial_state_is_all_none() -> None:

@@ -323,7 +323,15 @@ class RestApiExtractor[T: BaseModel](Extractor[T]):
         self._captured_response_status_code = response.status_code
         self._captured_response_etag = response.headers.get("etag")
         self._captured_response_last_modified = response.headers.get("last-modified")
-        self._captured_response_body_sha256 = hashlib.sha256(body_bytes).hexdigest()
+        # 304 Not Modified responses carry no body. Writing sha256(b"") would
+        # be technically correct but surfaces as a phantom false-304 in
+        # etag_viability.sql when compared against the prior 200's real body
+        # hash (observed 2026-05-10 on usda_establishments). Persist NULL so
+        # downstream analysis can distinguish "no body to hash" from "empty
+        # body's hash."
+        self._captured_response_body_sha256 = (
+            None if response.status_code == 304 else hashlib.sha256(body_bytes).hexdigest()
+        )
         self._captured_response_headers = dict(response.headers)
 
 

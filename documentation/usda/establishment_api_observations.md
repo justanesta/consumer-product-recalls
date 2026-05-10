@@ -76,6 +76,35 @@ The `x-drupal-cache` flip (`UNCACHEABLE (request policy)` → `HIT`) is the smok
 
 The endpoint behaves identically to the recall endpoint on the ETag dimension (Finding P in `recall_api_observations.md`). Both share the same Akamai infrastructure and the same browser-fingerprint-keyed cache tier; both met the same re-enable criteria. Live extractor sends `If-None-Match` and `If-Modified-Since` on every run; 304s short-circuit the ~810 KB body download cleanly. Bronze content-hash dedup (ADR 0007) absorbs the rare false-200 over-fetches without writing.
 
+### Finding A addendum (2026-05-10) — First post-flip 304 surfaced a script artifact (not a real false-304)
+
+The 2026-05-10 daily run was the first 304 ever recorded for `usda_establishments` (extractor sent `If-None-Match: "1778270406"`, server confirmed unchanged with 304, no body downloaded, 0.8s wall time vs. ~3s for a fetched 200). `etag_viability.sql -v src=usda_establishments` initially flagged this transition as `SUSPECT false-304: body changed, etag stable (would miss updates)` and flipped the summary recommendation to `DO NOT ENABLE`. **The verdict was a script-side artifact, not a real false-304** — the Akamai/Drupal stack behaved correctly.
+
+**Root cause.** `_base._capture_response()` was unconditionally hashing `response.content` and writing the digest to `extraction_runs.response_body_sha256`. On a 304 the body is empty, so the column received `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` — the well-known SHA-256 of the empty string. The viability script's verdict CASE then compared that empty-body sha against the prior 200's real-body sha (`26513e4e8a4f...`), saw `response_etag = prev_etag` and `response_body_sha256 != prev_body`, and fired the false-304 verdict.
+
+**Direct confirmation:**
+
+```
+ started_at                    | status | response_etag | response_body_sha256
+-------------------------------+--------+---------------+-----------------------------------
+ 2026-05-10 13:19:14.538034+00 |    304 | "1778270406"  | e3b0c44298fc1c149afbf4c8996...  (= sha256(""))
+ 2026-05-09 17:47:48.781891+00 |    200 | "1778270406"  | 26513e4e8a4f47a79d0f3c461c8...  (real body)
+ 2026-05-08 20:00:06.299672+00 |    200 | "1778270406"  | 26513e4e8a4f47a79d0f3c461c8...  (same real body)
+```
+
+ETag stable across all three runs; body genuinely unchanged across both 200s; today's "different" hash is `sha256("")`.
+
+**Fixes landed 2026-05-10:**
+
+- `src/extractors/_base.py` (`_capture_response`): on `response.status_code == 304`, persist `NULL` for `response_body_sha256` instead of `sha256("")`. Distinguishes "no body to hash" from "empty body's hash" at the column level.
+- `scripts/sql/_pipeline/etag_viability.sql` queries 1 and 5: added `when response_status_code = 304 then 'consistent_unchanged'` to the verdict CASE — a 304 is the server's own assertion that nothing changed, so trust it categorically rather than inferring from the body-sha comparison.
+- `scripts/sql/_pipeline/etag_viability.sql` query 4: excludes 304 rows from `count(distinct response_body_sha256)` and adds a `not_modified_runs` count, so days mixing 200s and 304s don't inflate `distinct_bodies`.
+- `tests/unit/test_response_capture.py::test_capture_handles_304_not_modified` updated to assert `_captured_response_body_sha256 is None` for 304 responses.
+
+**Passive-vs-active observation (concept worth recording).** The 14-day pre-flip viability window was *passive*: the extractor was downloading the full body every run and never sending `If-None-Match`, so the server never had occasion to return a 304. Every "false_200" verdict in the historical data tells you about ETag *generation* honesty (does the ETag drift on identical content?), not ETag *validation* honesty (does a 304 ever lie about content being unchanged?). The Finding P green-light verdict was therefore an *inference*: "if the ETag matches the body hash on every 200, the server is probably honest about 304s too." Reasonable, but not directly measured. Today's 304 was the first chance to test ETag validation under load — and although the script mis-classified it, the underlying API behaved correctly.
+
+**Future hardening — audit-run pattern.** A real false-304 (server returns 304 but underlying data changed) cannot be detected from a 304 row alone, since by definition no body is fetched to compare. The detection requires a periodic *audit run* that explicitly omits `If-None-Match`, forces a 200, and compares the fresh body sha against the sha implied by the most recent prior 200's body sha. Even one such audit per week per source would convert the inferential green-light into a directly measured one. Not implemented yet; logged here as the natural next-step hardening if Akamai/FSIS behavior ever shifts.
+
 ---
 
 ## Dataset Cardinality

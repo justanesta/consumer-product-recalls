@@ -43,6 +43,15 @@
 -- 1. Change-signal verdict (the headline query).
 --    For every successful run, compare ETag and body hash against the prior
 --    successful run. SUSPECT verdicts mean the ETag is misleading.
+--
+--    304 handling: a 304 Not Modified response has no body — the server is
+--    *itself* asserting "nothing changed." We trust that assertion and label
+--    the transition `consistent: nothing changed` regardless of what
+--    response_body_sha256 holds. Without this branch, a 304 row whose
+--    extractor wrote sha256("") into the body column would be compared
+--    against the prior 200's real body hash and surface as a phantom
+--    false-304 (observed 2026-05-10 on usda_establishments — see Finding A
+--    addendum in documentation/usda/establishment_api_observations.md).
 with transitions as (
     select
         started_at,
@@ -63,6 +72,8 @@ select
     case
         when prev_etag is null
             then '(first run — no prior to compare)'
+        when response_status_code = 304
+            then 'consistent: nothing changed (304 Not Modified)'
         when response_body_sha256 =  prev_body
          and response_etag        =  prev_etag
             then 'consistent: nothing changed'
@@ -123,11 +134,17 @@ limit 30;
 --    distinct_etags > distinct_bodies on a given day = ETag drifts within a day
 --    on identical content (cache-layer artifact). distinct_etags = distinct_bodies
 --    = 1 across multiple runs = stable, encouraging signal.
+--
+--    304 rows are excluded from `distinct_bodies` because they have no body —
+--    counting sha256("") (or NULL post-extractor-fix) would otherwise inflate
+--    the distinct count on days mixing 200s and 304s.
 select
     started_at::date                                  as day,
     count(*)                                          as runs,
     count(distinct response_etag)                     as distinct_etags,
-    count(distinct response_body_sha256)              as distinct_bodies,
+    count(distinct response_body_sha256)
+        filter (where response_status_code <> 304)    as distinct_bodies,
+    count(*) filter (where response_status_code = 304) as not_modified_runs,
     sum(records_inserted)                             as total_inserted,
     min((response_headers ->> 'age')::int)            as min_age_sec,
     max((response_headers ->> 'age')::int)            as max_age_sec
@@ -145,6 +162,7 @@ order by 1 desc;
 --                             bronze hash dedup absorbs it
 with transitions as (
     select
+        response_status_code,
         response_etag,
         response_body_sha256,
         lag(response_etag)        over w as prev_etag,
@@ -157,6 +175,7 @@ verdicts as (
     select
         case
             when prev_etag is null                        then null
+            when response_status_code = 304               then 'consistent_unchanged'
             when response_body_sha256 =  prev_body
              and response_etag        =  prev_etag       then 'consistent_unchanged'
             when response_body_sha256 != prev_body
