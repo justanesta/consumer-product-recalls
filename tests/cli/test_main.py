@@ -1,17 +1,48 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     import pytest
 
 from src.cli.main import app
 
 runner = CliRunner()
+
+
+@contextmanager
+def _patch_extractor(source: str, mock_extractor: MagicMock) -> Generator[MagicMock, None, None]:
+    """Patch the routine extractor registry so ``source`` resolves to a
+    MagicMock class returning ``mock_extractor`` on construction.
+
+    Yields the mock class so tests can assert on constructor kwargs
+    (``mock_cls.call_args.kwargs[...]``). On exit, the registry's original
+    entry for ``source`` is restored — patch.dict's standard behavior.
+    """
+    mock_cls = MagicMock(return_value=mock_extractor)
+    with patch.dict(
+        "src.config.source_registry.EXTRACTOR_BY_SOURCE_NAME",
+        {source: mock_cls},
+    ):
+        yield mock_cls
+
+
+@contextmanager
+def _patch_deep_rescan(source: str, mock_loader: MagicMock) -> Generator[MagicMock, None, None]:
+    """Same as ``_patch_extractor`` but for the deep-rescan registry."""
+    mock_cls = MagicMock(return_value=mock_loader)
+    with patch.dict(
+        "src.config.source_registry.DEEP_RESCAN_BY_SOURCE_NAME",
+        {source: mock_cls},
+    ):
+        yield mock_cls
 
 
 def test_version_command_prints_expected_string() -> None:
@@ -65,9 +96,7 @@ def test_extract_cpsc_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.cpsc.R2LandingClient"),
-        patch("sqlalchemy.create_engine"),
-        patch("src.extractors.cpsc.CpscExtractor", return_value=mock_extractor),
+        _patch_extractor("cpsc", mock_extractor),
     ):
         result = runner.invoke(app, ["extract", "cpsc"])
 
@@ -77,26 +106,26 @@ def test_extract_cpsc_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "rejected=0" in result.output
 
 
-def test_extract_cpsc_lookback_days_updates_watermark(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_extract_cpsc_lookback_days_calls_override_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per Wave 2: --lookback-days routes through the new public
+    override_watermark_lookback method rather than the CLI reaching into
+    extractor._engine directly."""
     for k, v in _REQUIRED_ENV.items():
         monkeypatch.setenv(k, v)
 
     mock_extractor = MagicMock()
     mock_extractor.run.return_value = _fake_run_result()
-    mock_conn = MagicMock()
-    mock_extractor._engine.begin.return_value.__enter__ = MagicMock(return_value=mock_conn)
-    mock_extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.cpsc.R2LandingClient"),
-        patch("sqlalchemy.create_engine"),
-        patch("src.extractors.cpsc.CpscExtractor", return_value=mock_extractor),
+        _patch_extractor("cpsc", mock_extractor),
     ):
         result = runner.invoke(app, ["extract", "cpsc", "--lookback-days", "7"])
 
     assert result.exit_code == 0
-    mock_conn.execute.assert_called_once()
+    mock_extractor.override_watermark_lookback.assert_called_once_with(7)
 
 
 def test_extract_unknown_source_exits_with_error() -> None:
@@ -121,7 +150,7 @@ def test_extract_fda_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.fda.FdaExtractor", return_value=mock_extractor),
+        _patch_extractor("fda", mock_extractor),
     ):
         result = runner.invoke(app, ["extract", "fda"])
 
@@ -132,24 +161,26 @@ def test_extract_fda_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "rejected=0" in result.output
 
 
-def test_extract_fda_lookback_days_updates_watermark(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_extract_fda_lookback_days_calls_override_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per Wave 2: --lookback-days routes through the new public
+    override_watermark_lookback method rather than the CLI reaching into
+    extractor._engine directly."""
     for k, v in _REQUIRED_ENV.items():
         monkeypatch.setenv(k, v)
 
     mock_extractor = MagicMock()
     mock_extractor.run.return_value = _fake_run_result()
-    mock_conn = MagicMock()
-    mock_extractor._engine.begin.return_value.__enter__ = MagicMock(return_value=mock_conn)
-    mock_extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.fda.FdaExtractor", return_value=mock_extractor),
+        _patch_extractor("fda", mock_extractor),
     ):
         result = runner.invoke(app, ["extract", "fda", "--lookback-days", "7"])
 
     assert result.exit_code == 0
-    mock_conn.execute.assert_called_once()
+    mock_extractor.override_watermark_lookback.assert_called_once_with(7)
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +197,7 @@ def test_deep_rescan_fda_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.fda.FdaDeepRescanLoader", return_value=mock_loader),
+        _patch_deep_rescan("fda", mock_loader),
     ):
         result = runner.invoke(
             app,
@@ -211,13 +242,48 @@ def test_extract_usda_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.usda.UsdaExtractor", return_value=mock_extractor),
+        _patch_extractor("usda", mock_extractor),
     ):
         result = runner.invoke(app, ["extract", "usda"])
 
     assert result.exit_code == 0
     assert "usda:" in result.output
     assert "fetched=2001" in result.output
+
+
+def test_extract_usda_etag_audit_disables_etag_on_extractor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """change_type=etag_audit must mutate extractor.etag_enabled = False
+    after construction so the next request omits If-None-Match. Per the
+    audit-run pattern landed 2026-05-10."""
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result()
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        _patch_extractor("usda", mock_extractor),
+    ):
+        result = runner.invoke(app, ["extract", "usda", "--change-type", "etag_audit"])
+
+    assert result.exit_code == 0
+    assert mock_extractor.etag_enabled is False
+
+
+def test_extract_etag_audit_rejected_for_non_usda_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """change_type=etag_audit is only supported for usda + usda_establishments;
+    using it on cpsc/fda/nhtsa exits with a clear error before any extraction
+    work begins."""
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+    result = runner.invoke(app, ["extract", "cpsc", "--change-type", "etag_audit"])
+    assert result.exit_code == 1
+    assert "etag_audit is only supported" in result.output
 
 
 def test_extract_usda_lookback_days_warns_but_does_not_fail(
@@ -231,7 +297,7 @@ def test_extract_usda_lookback_days_warns_but_does_not_fail(
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.usda.UsdaExtractor", return_value=mock_extractor),
+        _patch_extractor("usda", mock_extractor),
     ):
         result = runner.invoke(app, ["extract", "usda", "--lookback-days", "7"])
 
@@ -248,7 +314,7 @@ def test_deep_rescan_usda_prints_summary(monkeypatch: pytest.MonkeyPatch) -> Non
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.usda.UsdaDeepRescanLoader", return_value=mock_loader),
+        _patch_deep_rescan("usda", mock_loader),
     ):
         result = runner.invoke(app, ["deep-rescan", "usda"])
 
@@ -266,7 +332,7 @@ def test_deep_rescan_usda_ignores_date_args(monkeypatch: pytest.MonkeyPatch) -> 
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.usda.UsdaDeepRescanLoader", return_value=mock_loader),
+        _patch_deep_rescan("usda", mock_loader),
     ):
         result = runner.invoke(
             app,
@@ -307,10 +373,7 @@ def test_extract_usda_establishments_prints_summary(monkeypatch: pytest.MonkeyPa
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch(
-            "src.extractors.usda_establishment.UsdaEstablishmentExtractor",
-            return_value=mock_extractor,
-        ),
+        _patch_extractor("usda_establishments", mock_extractor),
     ):
         result = runner.invoke(app, ["extract", "usda_establishments"])
 
@@ -331,10 +394,7 @@ def test_extract_usda_establishments_lookback_days_warns_but_does_not_fail(
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch(
-            "src.extractors.usda_establishment.UsdaEstablishmentExtractor",
-            return_value=mock_extractor,
-        ),
+        _patch_extractor("usda_establishments", mock_extractor),
     ):
         result = runner.invoke(app, ["extract", "usda_establishments", "--lookback-days", "7"])
 
@@ -356,7 +416,7 @@ def test_extract_nhtsa_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.nhtsa.NhtsaExtractor", return_value=mock_extractor),
+        _patch_extractor("nhtsa", mock_extractor),
     ):
         result = runner.invoke(app, ["extract", "nhtsa"])
 
@@ -380,7 +440,7 @@ def test_extract_nhtsa_lookback_days_warns_but_does_not_fail(
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.nhtsa.NhtsaExtractor", return_value=mock_extractor),
+        _patch_extractor("nhtsa", mock_extractor),
     ):
         result = runner.invoke(app, ["extract", "nhtsa", "--lookback-days", "7"])
 
@@ -402,7 +462,7 @@ def test_extract_nhtsa_with_valid_since_prints_dev_mode_notice(
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.nhtsa.NhtsaExtractor", return_value=mock_extractor) as mock_cls,
+        _patch_extractor("nhtsa", mock_extractor) as mock_cls,
     ):
         result = runner.invoke(app, ["extract", "nhtsa", "--since", "2024-01-01"])
 
@@ -436,9 +496,7 @@ def test_extract_non_nhtsa_with_since_warns(monkeypatch: pytest.MonkeyPatch) -> 
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.cpsc.R2LandingClient"),
-        patch("sqlalchemy.create_engine"),
-        patch("src.extractors.cpsc.CpscExtractor", return_value=mock_extractor),
+        _patch_extractor("cpsc", mock_extractor),
     ):
         result = runner.invoke(app, ["extract", "cpsc", "--since", "2024-01-01"])
 
@@ -455,7 +513,7 @@ def test_deep_rescan_nhtsa_prints_summary(monkeypatch: pytest.MonkeyPatch) -> No
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.nhtsa.NhtsaDeepRescanLoader", return_value=mock_loader),
+        _patch_deep_rescan("nhtsa", mock_loader),
     ):
         result = runner.invoke(app, ["deep-rescan", "nhtsa"])
 
@@ -477,7 +535,7 @@ def test_deep_rescan_nhtsa_ignores_date_args(monkeypatch: pytest.MonkeyPatch) ->
 
     with (
         patch("src.cli.main.configure_logging"),
-        patch("src.extractors.nhtsa.NhtsaDeepRescanLoader", return_value=mock_loader),
+        _patch_deep_rescan("nhtsa", mock_loader),
     ):
         result = runner.invoke(
             app,

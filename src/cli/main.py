@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+from datetime import date
 from importlib.metadata import version as _pkg_version
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
 from src.config.logging import configure_logging
+from src.config.settings import Settings
+from src.config.source_loader import load_source_config
+from src.config.source_registry import (
+    DEEP_RESCAN_BY_SOURCE_NAME,
+    EXTRACTOR_BY_SOURCE_NAME,
+    build_extractor_kwargs,
+)
+
+if TYPE_CHECKING:
+    from src.extractors._base import Extractor
 
 app = typer.Typer(name="recalls", help="Consumer product recalls pipeline CLI")
 
@@ -27,6 +38,37 @@ _ALLOWED_CHANGE_TYPES = {
 # ETag headers passively, NHTSA uses content-MD5 on flat files. Audit-run
 # semantics are only meaningful for the conditional-GET case.
 _ETAG_AUDIT_SOURCES = {"usda", "usda_establishments"}
+
+# Sources that implement ``override_watermark_lookback()`` (= sources with a
+# date-watermarked incremental cursor). Other sources accept --lookback-days
+# for CLI shape parity but emit a per-source notice. Driven by source name
+# rather than ``hasattr(extractor, ...)`` because MagicMock auto-attributes
+# would defeat the latter under test.
+_LOOKBACK_DAYS_SOURCES = {"cpsc", "fda"}
+
+# Per-source notices when --lookback-days is passed to a source that does not
+# honor it (no override_watermark_lookback method). Keeps the user's existing
+# CLI feedback intact under the new generic dispatch.
+_LOOKBACK_NO_OP_MESSAGES: dict[str, str] = {
+    "usda": "usda: --lookback-days has no effect (full-dump every run; see Finding D).",
+    "usda_establishments": (
+        "usda_establishments: --lookback-days has no effect "
+        "(full-dump every run; see Finding A)."
+    ),
+    "nhtsa": (
+        "nhtsa: --lookback-days has no effect "
+        "(flat-file full-dump every run; see Findings B + C)."
+    ),
+}
+
+# Per-source notices when deep-rescan ignores --start-date/--end-date.
+_DEEP_RESCAN_NO_DATE_WINDOW_MESSAGES: dict[str, str] = {
+    "usda": "usda: --start-date / --end-date are ignored (full-dump every run; see Finding D).",
+    "nhtsa": (
+        "nhtsa: --start-date / --end-date are ignored "
+        "(archives partitioned by DATEA at the source; see Finding H Q2)."
+    ),
+}
 
 
 def _validate_change_type(value: str) -> str:
@@ -51,6 +93,33 @@ def _validate_etag_audit_source(change_type: str, source: str) -> None:
             err=True,
         )
         raise typer.Exit(code=1)
+
+
+def _parse_nhtsa_since(value: str | None) -> date | None:
+    """Parse the NHTSA --since flag (YYYY-MM-DD) and emit the dev-mode notice."""
+    if value is None:
+        return None
+    try:
+        since_date = date.fromisoformat(value)
+    except ValueError:
+        typer.echo(f"nhtsa: --since must be YYYY-MM-DD; got {value!r}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(
+        f"nhtsa: --since {since_date.isoformat()} active — "
+        "dev-mode RCDATE filter; bronze will be a date-bounded subset."
+    )
+    return since_date
+
+
+def _print_run_summary(prefix: str, result: object) -> None:
+    """Render the standard fetched/loaded/rejected summary line."""
+    fetched = result.records_fetched  # type: ignore[attr-defined]
+    loaded = result.records_loaded  # type: ignore[attr-defined]
+    rejected = (
+        result.records_rejected_validate  # type: ignore[attr-defined]
+        + result.records_rejected_invariants  # type: ignore[attr-defined]
+    )
+    typer.echo(f"{prefix}fetched={fetched} loaded={loaded} rejected={rejected}")
 
 
 @app.command()
@@ -96,174 +165,61 @@ def extract(
         ),
     ] = None,
 ) -> None:
-    """Run the incremental extractor for a given source."""
+    """Run the incremental extractor for a given source.
+
+    Per ADR 0012, source-specific configuration (URL, timeout, etag_enabled)
+    lives in ``config/sources/<source>.yaml`` and is loaded by the
+    ``source_loader``. The CLI's role is to materialize CLI-flag-specific
+    behavior (lookback, since, etag_audit) on top of the YAML-driven
+    extractor instance.
+    """
     configure_logging()
     change_type = _validate_change_type(change_type)
     _validate_etag_audit_source(change_type, source)
 
-    if since is not None and source != "nhtsa":
-        typer.echo(
-            f"{source}: --since is only honored for nhtsa; ignored.",
-        )
-
-    if source == "cpsc":
-        from src.config.settings import Settings
-        from src.extractors.cpsc import CpscExtractor
-
-        settings = Settings()  # type: ignore[call-arg]  # reads from env vars
-        extractor = CpscExtractor(
-            base_url="https://www.saferproducts.gov/RestWebServices/Recall",
-            settings=settings,
-        )
-        if lookback_days is not None:
-            from datetime import UTC, datetime, timedelta
-
-            import sqlalchemy as sa
-
-            from src.extractors.cpsc import _source_watermarks
-
-            override_date = datetime.now(UTC).date() - timedelta(days=lookback_days)
-            with extractor._engine.begin() as conn:
-                conn.execute(
-                    sa.update(_source_watermarks)
-                    .where(_source_watermarks.c.source == "cpsc")
-                    .values(last_cursor=override_date.isoformat())
-                )
-
-        result = extractor.run(change_type=change_type)
-        typer.echo(
-            f"cpsc: fetched={result.records_fetched} "
-            f"loaded={result.records_loaded} "
-            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
-        )
-
-    elif source == "fda":
-        from src.config.settings import Settings
-        from src.extractors.fda import FdaExtractor, _source_watermarks
-
-        settings = Settings()  # type: ignore[call-arg]
-        extractor = FdaExtractor(
-            base_url="https://www.accessdata.fda.gov/rest/iresapi",
-            settings=settings,
-        )
-        if lookback_days is not None:
-            from datetime import UTC, datetime, timedelta
-
-            import sqlalchemy as sa
-
-            override_date = datetime.now(UTC).date() - timedelta(days=lookback_days)
-            with extractor._engine.begin() as conn:
-                conn.execute(
-                    sa.update(_source_watermarks)
-                    .where(_source_watermarks.c.source == "fda")
-                    .values(last_cursor=override_date.isoformat())
-                )
-
-        result = extractor.run(change_type=change_type)
-        typer.echo(
-            f"fda: fetched={result.records_fetched} "
-            f"loaded={result.records_loaded} "
-            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
-        )
-
-    elif source == "usda":
-        from src.config.settings import Settings
-        from src.extractors.usda import UsdaExtractor
-
-        settings = Settings()  # type: ignore[call-arg]
-        # USDA has no usable server-side date filter (Finding D in
-        # documentation/usda/recall_api_observations.md), so --lookback-days has no
-        # meaningful effect on the request; the extractor pulls the full payload every run.
-        # The flag is accepted for CLI shape parity but ignored with a notice.
-        if lookback_days is not None:
-            typer.echo("usda: --lookback-days has no effect (full-dump every run; see Finding D).")
-        extractor = UsdaExtractor(
-            base_url="https://www.fsis.usda.gov/fsis/api/recall/v/1",
-            timeout_seconds=60.0,
-            settings=settings,
-        )
-        if change_type == "etag_audit":
-            # Force unconditional GET so the server cannot return 304; the
-            # captured body sha is then compared against the most recent prior
-            # 200 in scripts/sql/_pipeline/etag_audit_check.sql to verify
-            # ETag-validation honesty (any mismatch with intervening 304s =
-            # confirmed false-304).
-            extractor.etag_enabled = False
-        result = extractor.run(change_type=change_type)
-        typer.echo(
-            f"usda: fetched={result.records_fetched} "
-            f"loaded={result.records_loaded} "
-            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
-        )
-
-    elif source == "usda_establishments":
-        from src.config.settings import Settings
-        from src.extractors.usda_establishment import UsdaEstablishmentExtractor
-
-        settings = Settings()  # type: ignore[call-arg]
-        # No incremental cursor exists (Finding A); --lookback-days has no
-        # effect. Accepted for CLI shape parity but ignored with a notice.
-        if lookback_days is not None:
-            typer.echo(
-                "usda_establishments: --lookback-days has no effect "
-                "(full-dump every run; see Finding A)."
-            )
-        extractor = UsdaEstablishmentExtractor(
-            base_url="https://www.fsis.usda.gov/fsis/api/establishments/v/1",
-            timeout_seconds=60.0,
-            settings=settings,
-        )
-        if change_type == "etag_audit":
-            # Mirror UsdaExtractor's audit-run handling — see comment there.
-            extractor.etag_enabled = False
-        result = extractor.run(change_type=change_type)
-        typer.echo(
-            f"usda_establishments: fetched={result.records_fetched} "
-            f"loaded={result.records_loaded} "
-            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
-        )
-
-    elif source == "nhtsa":
-        from datetime import date
-
-        from src.config.settings import Settings
-        from src.extractors.nhtsa import NhtsaExtractor
-
-        settings = Settings()  # type: ignore[call-arg]
-        # NHTSA is a flat-file full-dump every run; --lookback-days has no
-        # effect (Findings B + C — the Last-Modified and x-amz-version-id
-        # watermark surfaces are disqualified). Accepted for CLI shape
-        # parity but ignored with a notice.
-        if lookback_days is not None:
-            typer.echo(
-                "nhtsa: --lookback-days has no effect "
-                "(flat-file full-dump every run; see Findings B + C)."
-            )
-        since_date: date | None = None
-        if since is not None:
-            try:
-                since_date = date.fromisoformat(since)
-            except ValueError:
-                typer.echo(
-                    f"nhtsa: --since must be YYYY-MM-DD; got {since!r}",
-                    err=True,
-                )
-                raise typer.Exit(code=1) from None
-            typer.echo(
-                f"nhtsa: --since {since_date.isoformat()} active — "
-                "dev-mode RCDATE filter; bronze will be a date-bounded subset."
-            )
-        extractor = NhtsaExtractor(settings=settings, since=since_date)
-        result = extractor.run(change_type=change_type)
-        typer.echo(
-            f"nhtsa: fetched={result.records_fetched} "
-            f"loaded={result.records_loaded} "
-            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
-        )
-
-    else:
+    if source not in EXTRACTOR_BY_SOURCE_NAME:
         typer.echo(f"Unknown source: {source}", err=True)
         raise typer.Exit(code=1)
+
+    if since is not None and source != "nhtsa":
+        typer.echo(f"{source}: --since is only honored for nhtsa; ignored.")
+
+    # Validate CLI flag values upfront so format errors surface BEFORE the
+    # heavier ``Settings()`` / ``load_source_config`` work — keeps
+    # "must be YYYY-MM-DD" errors visible without an env-var setup ritual.
+    since_date: date | None = None
+    if source == "nhtsa":
+        since_date = _parse_nhtsa_since(since)
+
+    config = load_source_config(source)
+    settings = Settings()  # type: ignore[call-arg]  # reads from env vars
+    extractor_cls = EXTRACTOR_BY_SOURCE_NAME[source]
+    kwargs = build_extractor_kwargs(config, extractor_cls, settings)
+
+    # NHTSA-only: --since is a CLI flag, not a YAML field. Always set the
+    # constructor kwarg (None when the flag is absent) since NhtsaExtractor
+    # declares ``since`` as a required Pydantic field with default None.
+    if source == "nhtsa":
+        kwargs["since"] = since_date
+
+    extractor: Extractor = extractor_cls(**kwargs)
+
+    # --lookback-days: only CPSC + FDA implement override_watermark_lookback;
+    # other sources ignore the flag with a per-source notice.
+    if lookback_days is not None:
+        if source in _LOOKBACK_DAYS_SOURCES:
+            extractor.override_watermark_lookback(lookback_days)  # type: ignore[attr-defined]
+        else:
+            typer.echo(_LOOKBACK_NO_OP_MESSAGES[source])
+
+    # --change-type=etag_audit: post-construction mutation. Only reachable for
+    # USDA recall + USDA establishments (gated by _validate_etag_audit_source).
+    # Forces unconditional GET so the audit-check SQL can verify ETag honesty.
+    if change_type == "etag_audit":
+        extractor.etag_enabled = False  # type: ignore[attr-defined]
+
+    result = extractor.run(change_type=change_type)
+    _print_run_summary(f"{source}: ", result)
 
 
 @app.command(name="deep-rescan")
@@ -291,92 +247,61 @@ def deep_rescan(
         ),
     ] = "routine",
 ) -> None:
-    """Run a historical / deep-rescan load for a given source over a date window."""
+    """Run a historical / deep-rescan load for a given source over a date window.
+
+    Same loader+registry pattern as ``extract``; the source-specific extras
+    are FDA's ``set_date_range`` mutator (post-construction) and the
+    ``etag_enabled`` exclusion that preserves ``UsdaDeepRescanLoader``'s
+    class invariant against YAML's ``etag_enabled: true`` (correct for the
+    routine path but invariant-violating for deep-rescan).
+    """
     configure_logging()
     change_type = _validate_change_type(change_type)
 
+    if source not in DEEP_RESCAN_BY_SOURCE_NAME:
+        typer.echo(f"Deep-rescan not implemented for source: {source}", err=True)
+        raise typer.Exit(code=1)
+
+    # Date-window pre-validation per source.
     if source == "fda":
-        from datetime import date
-
-        from src.config.settings import Settings
-        from src.extractors.fda import FdaDeepRescanLoader
-
         if start_date is None or end_date is None:
             typer.echo("fda deep-rescan requires --start-date and --end-date", err=True)
             raise typer.Exit(code=1)
+    elif start_date is not None or end_date is not None:
+        typer.echo(_DEEP_RESCAN_NO_DATE_WINDOW_MESSAGES[source])
 
-        settings = Settings()  # type: ignore[call-arg]
-        loader = FdaDeepRescanLoader(
-            base_url="https://www.accessdata.fda.gov/rest/iresapi",
-            settings=settings,
-        )
-        loader.set_date_range(
+    config = load_source_config(source)
+    settings = Settings()  # type: ignore[call-arg]
+    loader_cls = DEEP_RESCAN_BY_SOURCE_NAME[source]
+
+    # Deep-rescan invariant: ``UsdaDeepRescanLoader.etag_enabled = False`` is
+    # a class fact, not a YAML knob. Drop the YAML value before construction
+    # so a routine-path ``etag_enabled: true`` doesn't override the invariant.
+    # FDA + NHTSA deep-rescan loaders don't have this concern (their classes
+    # don't declare etag_enabled) but the exclude is harmless across the board.
+    kwargs = build_extractor_kwargs(
+        config,
+        loader_cls,
+        settings,
+        exclude=frozenset({"etag_enabled"}),
+    )
+    loader: Extractor = loader_cls(**kwargs)
+
+    # FDA-only: post-construction date-range mutation (the date fields are
+    # PrivateAttrs, so they cannot flow through constructor kwargs).
+    if source == "fda":
+        assert start_date is not None and end_date is not None  # validated above
+        loader.set_date_range(  # type: ignore[attr-defined]
             start_date=date.fromisoformat(start_date),
             end_date=date.fromisoformat(end_date),
         )
-        result = loader.run(change_type=change_type)
-        typer.echo(
-            f"fda deep-rescan [{start_date} → {end_date}]: "
-            f"fetched={result.records_fetched} "
-            f"loaded={result.records_loaded} "
-            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
-        )
 
-    elif source == "usda":
-        from src.config.settings import Settings
-        from src.extractors.usda import UsdaDeepRescanLoader
-
-        # USDA's deep-rescan path fetches the full payload (same as incremental) but
-        # never touches source_watermarks and never sends If-None-Match — the workflow
-        # exists as an operator-triggered "force a full re-pull" knob and as a weekly
-        # safety net that self-corrects any silent ETag bug (Finding N in
-        # documentation/usda/recall_api_observations.md).
-        if start_date is not None or end_date is not None:
-            typer.echo(
-                "usda: --start-date / --end-date are ignored (full-dump every run; see Finding D)."
-            )
-        settings = Settings()  # type: ignore[call-arg]
-        loader = UsdaDeepRescanLoader(
-            base_url="https://www.fsis.usda.gov/fsis/api/recall/v/1",
-            timeout_seconds=60.0,
-            settings=settings,
-        )
-        result = loader.run(change_type=change_type)
-        typer.echo(
-            f"usda deep-rescan: "
-            f"fetched={result.records_fetched} "
-            f"loaded={result.records_loaded} "
-            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
-        )
-
-    elif source == "nhtsa":
-        from src.config.settings import Settings
-        from src.extractors.nhtsa import NhtsaDeepRescanLoader
-
-        # NHTSA's deep-rescan path pulls BOTH FLAT_RCL_PRE_2010.zip and
-        # FLAT_RCL_POST_2010.zip (~322k total rows, dating back to
-        # 1966-01-19 by RCDATE per Finding H Q2). No date window — the
-        # archives are partitioned by DATEA at the source. Used for
-        # one-time historical seeding (--change-type=historical_seed)
-        # and Phase 7 weekly defense-in-depth.
-        if start_date is not None or end_date is not None:
-            typer.echo(
-                "nhtsa: --start-date / --end-date are ignored "
-                "(archives partitioned by DATEA at the source; see Finding H Q2)."
-            )
-        settings = Settings()  # type: ignore[call-arg]
-        loader = NhtsaDeepRescanLoader(settings=settings)
-        result = loader.run(change_type=change_type)
-        typer.echo(
-            f"nhtsa deep-rescan: "
-            f"fetched={result.records_fetched} "
-            f"loaded={result.records_loaded} "
-            f"rejected={result.records_rejected_validate + result.records_rejected_invariants}"
-        )
-
+    result = loader.run(change_type=change_type)
+    if source == "fda":
+        prefix = f"fda deep-rescan [{start_date} → {end_date}]: "
     else:
-        typer.echo(f"Deep-rescan not implemented for source: {source}", err=True)
-        raise typer.Exit(code=1)
+        prefix = f"{source} deep-rescan: "
+    _print_run_summary(prefix, result)
 
 
 if __name__ == "__main__":  # pragma: no cover

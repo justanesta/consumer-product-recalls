@@ -1,0 +1,174 @@
+"""Source-config registry and Pydantic discriminated-union models per ADR 0012.
+
+The CLI loads a YAML file from ``config/sources/<source>.yaml``, validates it
+through ``SourceConfig`` (a discriminated union keyed on ``source_type``), and
+hands the resulting model + the target extractor class to
+``build_extractor_kwargs`` to produce the kwargs dict for the extractor's
+constructor.
+
+Two key design choices:
+
+1. **Lightweight registry as static dicts.** ADR 0012 explicitly rejects
+   dcpy's heavy ``ConnectorRegistry`` ("we have three operation types and five
+   sources; direct Python imports are simpler than runtime dispatch at this
+   scale"). The mapping below is exactly that — a 5-entry dict and a 3-entry
+   dict, populated at module import time. Tests that need to mock a specific
+   extractor class do so via ``patch.dict("src.config.source_registry.
+   EXTRACTOR_BY_SOURCE_NAME", {"cpsc": mock_cls})`` rather than patching the
+   class symbol in its defining module.
+
+2. **Field-set introspection over hand-coded dispatch.** Each extractor class
+   is a Pydantic model exposing ``model_fields``. ``build_extractor_kwargs``
+   filters YAML-derived kwargs against that set, so the asymmetry between
+   ``UsdaExtractor`` (which has ``etag_enabled``) and ``CpscExtractor`` (which
+   does not) is handled automatically without per-class code.
+
+Wire scope (per the Wave 2 plan): only ``base_url`` / ``file_url``,
+``timeout_seconds``, ``rate_limit_rps``, ``etag_enabled`` (REST sources only),
+and ``historical_seed_urls`` (NHTSA deep-rescan only) flow from YAML to
+extractor constructors. The other YAML fields (``incremental_filter_param``,
+``incremental_filter_format``, ``default_lookback_days``, ``format_param``,
+``credentials``, ``expected_field_count``) are typed-but-unconsumed: they
+validate cleanly under ``extra="forbid"`` and travel with the config object,
+but are excluded from extractor kwargs. Future waves can wire individual
+fields by extending ``to_extractor_kwargs`` and the corresponding extractor
+class without YAML schema changes.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from src.extractors.cpsc import CpscExtractor
+from src.extractors.fda import FdaDeepRescanLoader, FdaExtractor
+from src.extractors.nhtsa import NhtsaDeepRescanLoader, NhtsaExtractor
+from src.extractors.usda import UsdaDeepRescanLoader, UsdaExtractor
+from src.extractors.usda_establishment import UsdaEstablishmentExtractor
+
+if TYPE_CHECKING:
+    from src.config.settings import Settings
+    from src.extractors._base import Extractor
+
+
+# Source-name → extractor class for the routine ``recalls extract <source>``
+# command. Direct Python imports per ADR 0012's deliberate rejection of dcpy's
+# heavy registry framework.
+EXTRACTOR_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
+    "cpsc": CpscExtractor,
+    "fda": FdaExtractor,
+    "usda": UsdaExtractor,
+    "usda_establishments": UsdaEstablishmentExtractor,
+    "nhtsa": NhtsaExtractor,
+}
+
+# Source-name → deep-rescan loader class for ``recalls deep-rescan <source>``.
+# Three of five sources have a deep-rescan path; CPSC and USDA establishments
+# do not (CPSC has no deep-rescan command branch; establishments has no
+# historical archive).
+DEEP_RESCAN_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
+    "fda": FdaDeepRescanLoader,
+    "usda": UsdaDeepRescanLoader,
+    "nhtsa": NhtsaDeepRescanLoader,
+}
+
+
+class _BaseSourceConfig(BaseModel):
+    """Shared YAML fields across all source types.
+
+    The documented-intent fields (``credentials``, ``default_lookback_days``,
+    ``format_param``, ``incremental_filter_param``, ``incremental_filter_format``)
+    are typed here so YAML files validate cleanly under ``extra="forbid"`` even
+    though no extractor consumes them today. ``to_extractor_kwargs`` excludes
+    them from the constructor kwargs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_name: str
+    rate_limit_rps: float | None = None
+
+    # Documented-intent fields — see module docstring.
+    credentials: dict[str, Any] | None = None
+    default_lookback_days: int | None = None
+    format_param: str | None = None
+    incremental_filter_param: str | None = None
+    incremental_filter_format: str | None = None
+
+
+class RestApiSourceConfig(_BaseSourceConfig):
+    """Config shape for REST API sources (CPSC, FDA, USDA recall, USDA establishments)."""
+
+    source_type: Literal["rest_api"]
+    base_url: str
+    timeout_seconds: float = 30.0
+    # USDA recall + USDA establishments declare ``etag_enabled`` as a Pydantic
+    # field; CPSC/FDA do not. ``build_extractor_kwargs`` filters via
+    # ``model_fields`` so passing this only takes effect on extractors that
+    # accept it.
+    etag_enabled: bool | None = None
+
+    def to_extractor_kwargs(self) -> dict[str, Any]:
+        """Return candidate kwargs; non-applicable fields filter out via model_fields."""
+        return {
+            "base_url": self.base_url,
+            "timeout_seconds": self.timeout_seconds,
+            "rate_limit_rps": self.rate_limit_rps,
+            "etag_enabled": self.etag_enabled,
+        }
+
+
+class FlatFileSourceConfig(_BaseSourceConfig):
+    """Config shape for flat-file sources (NHTSA, future USCG-if-it-returns)."""
+
+    source_type: Literal["flat_file"]
+    file_url: str
+    timeout_seconds: float = 120.0
+    # ``historical_seed_urls`` IS wired — consumed by ``NhtsaDeepRescanLoader``.
+    # ``expected_field_count`` and ``etag_enabled`` are typed-but-unconsumed
+    # (a flat-file extractor field change would be code work anyway).
+    historical_seed_urls: list[str] | None = None
+    expected_field_count: int | None = None
+    etag_enabled: bool | None = None
+
+    def to_extractor_kwargs(self) -> dict[str, Any]:
+        return {
+            "file_url": self.file_url,
+            "timeout_seconds": self.timeout_seconds,
+            "rate_limit_rps": self.rate_limit_rps,
+            "historical_seed_urls": self.historical_seed_urls,
+        }
+
+
+SourceConfig = Annotated[
+    RestApiSourceConfig | FlatFileSourceConfig,
+    Field(discriminator="source_type"),
+]
+
+
+def build_extractor_kwargs(
+    config: RestApiSourceConfig | FlatFileSourceConfig,
+    extractor_cls: type[Extractor[Any]],
+    settings: Settings,
+    *,
+    exclude: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Build the kwargs dict for ``extractor_cls(**kwargs)``.
+
+    Filters the YAML-derived candidate kwargs against ``extractor_cls.model_fields``
+    so each constructor receives only fields it declares. Drops ``None`` values
+    so class defaults take effect when YAML doesn't specify a value.
+
+    ``exclude`` lets callers force-drop fields even if the class accepts them —
+    used by the deep-rescan path to preserve ``UsdaDeepRescanLoader.etag_enabled
+    = False`` against a YAML ``etag_enabled: true`` (correct for the routine
+    path but invariant-violating for deep-rescan).
+    """
+    candidate = config.to_extractor_kwargs()
+    accepted = set(extractor_cls.model_fields.keys())
+    kwargs: dict[str, Any] = {
+        k: v for k, v in candidate.items() if k in accepted and v is not None and k not in exclude
+    }
+    kwargs["settings"] = settings
+    return kwargs

@@ -15,9 +15,9 @@ Per-source extraction workflows (per [ADR 0010](decisions/0010-ingestion-cadence
 | FDA | daily | Incremental on `eventlmd` | `.github/workflows/extract-fda.yml` |
 | FDA deep rescan | weekly (Sun) | Archive-migration coverage per [ADR 0023](decisions/0023-fda-deep-rescan-required-archive-migration-detected.md) | `.github/workflows/deep-rescan-fda.yml` |
 | USDA recalls | daily | **Full-dump** every run — no server-side filter exists | `.github/workflows/extract-usda.yml` |
-| USDA establishments | weekly (Mon) | Full-dump every run; ETag absent | `.github/workflows/extract-usda-establishments.yml` |
-| NHTSA | weekly | Full flat-file download per [ADR 0008](decisions/0008-nhtsa-flat-file-primary-api-for-vehicle-lookup.md) | `.github/workflows/extract-nhtsa.yml` (Phase 5c) |
-| USCG | weekly | Polite HTML scrape | `.github/workflows/extract-uscg.yml` (Phase 5d) |
+| USDA establishments | weekly (Mon) | Full-dump every run; ETag conditional GET enabled (Finding A revision, 2026-05-09) | `.github/workflows/extract-usda-establishments.yml` |
+| NHTSA | weekly | Full flat-file download per [ADR 0008](decisions/0008-nhtsa-flat-file-primary-api-for-vehicle-lookup.md) | `.github/workflows/extract-nhtsa.yml` |
+| USCG | — | **Indefinitely deferred** (USCG website down 2026-05-09; project proceeds 4-source). Polite HTML scrape was the planned strategy; reactivate when/if USCG returns | `.github/workflows/extract-uscg.yml` (planned, not implemented) |
 
 Plus a transformation workflow scheduled to run after the latest extraction completes (per [ADR 0018](decisions/0018-ci-posture.md)):
 
@@ -270,6 +270,24 @@ ORDER BY started_at DESC LIMIT 10;
 - **USDA**: any value of `field_last_modified_date` in the request URL is silently ignored, so the extractor must be in full-dump mode (it is by default per ADR 0010 revision). 0 records would mean the bot-manager threw an HTML page or the connection was throttled — see next entry.
 - **FDA**: incremental window `eventlmdfrom=<yesterday>` may legitimately return 0 records on weekends (FDA does not publish Sat/Sun). Confirm by checking the day-of-week before debugging further.
 
+### Extractor fails at startup with FileNotFoundError or ValidationError on YAML config
+
+**Symptom:** `recalls extract <source>` exits with `FileNotFoundError: No source config at config/sources/<source>.yaml` or `pydantic.ValidationError: ... Field required` / `Extra inputs are not permitted` / `Input tag 'X' found using 'source_type' does not match any of the expected tags`.
+
+**Diagnose:** The startup error fires before any DB or HTTP work. Check:
+
+1. Does `config/sources/<source>.yaml` exist? The filename must match the source name exactly (e.g., `usda_establishments.yaml`, not `usda_establishment.yaml` — the canonical name in `extraction_runs.source` is plural).
+2. Does the YAML's `source_type` match a known discriminator value (`rest_api` or `flat_file`)?
+3. Does the YAML's set of keys match `RestApiSourceConfig` or `FlatFileSourceConfig` in `src/config/source_registry.py`? Extra keys (e.g., the typo `etagh_enabled`) are rejected under `extra="forbid"`. Missing required fields are also rejected.
+
+**Most common causes:**
+
+- **Filename ↔ source-name mismatch.** If you renamed a source's canonical name, the YAML file needs the matching rename. Migration seed files identify the canonical name (e.g., `0008_seed_usda_establishments_watermark.py`).
+- **YAML key typo.** Pydantic `extra="forbid"` is strict; the error message names the offending key.
+- **Schema drift between YAML and code.** If `src/config/source_registry.py` was updated to require a new field but the YAML wasn't, validation fails. Update the YAML to add the missing key.
+
+**Fix:** Read the `ValidationError` message — it names the exact field. Edit the YAML to match `src/config/source_registry.py`'s field set, or rename the YAML file to match the canonical source name.
+
 ### USDA / FDA hangs or returns HTML when JSON is expected
 
 **Symptom:** `extract-usda.yml` or `extract-fda.yml` hangs (USDA) or completes too quickly with 0 records (FDA), no obvious error.
@@ -398,6 +416,8 @@ If an extractor failed, the [Auth error](#extractor-failing-with-401--403-auth-e
 **Likely cause:** `source_watermarks` does not have a seed row for the new source. `extraction_runs.source` is FK-constrained to that table, so the run-record insert silently fails inside the broad `except` block. Surfaced during Phase 5b.2 first extraction.
 
 **Fix:** Add a one-row seed migration for the new source (model on `0008_seed_usda_establishments_watermark.py`). Long-term fix is documented as a Phase 7 prerequisite in `project_scope/implementation_plan.md` "Architectural follow-ups."
+
+**Also required:** Add a `config/sources/<new_source>.yaml` file matching the discriminated union schema (`RestApiSourceConfig` or `FlatFileSourceConfig` — see `src/config/source_registry.py`). Without it, `load_source_config(source_name)` raises `FileNotFoundError` at CLI startup, before any extraction work begins. The `EXTRACTOR_BY_SOURCE_NAME` dict in `src/config/source_registry.py` also needs the new entry.
 
 ---
 

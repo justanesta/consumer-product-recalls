@@ -32,6 +32,8 @@ psql $NEON_DATABASE_URL -c "select 1"
 psql -c "select 1"
 ```
 
+**Note on scope.** The table above covers the env-var tier only (tooling shortcuts). Source-level configuration (API URLs, timeouts, ETag enabled flag) lives in `config/sources/*.yaml`, not in `.env` — see [`development.md` § Source configuration](development.md#source-configuration).
+
 **Note on dbt + Settings.** dbt and the application code use different env-var schemes by design. dbt reads `DBT_PROJECT_DIR` / `DBT_PROFILES_DIR` plus its own `NEON_HOST` / `NEON_USER` / `NEON_PASSWORD` / `NEON_DBNAME` (split from `NEON_DATABASE_URL`); the application code's `pydantic-settings` reads `NEON_DATABASE_URL` whole. **The dbt-only vars cannot live in `.env`** — Settings has `extra='forbid'` and would reject any key it doesn't declare. Put dbt-only vars in `.envrc` directly (not via `dotenv .env`), or in a sibling file that pydantic-settings doesn't read. See [`development.md` § Design rationale](development.md#design-rationale--strict-scope-on-env).
 
 ---
@@ -70,7 +72,9 @@ uv run recalls re-ingest <source> \                       # R2 replay (Phase 6)
     --change-type=schema_rebaseline
 ```
 
-Sources: `cpsc`, `fda`, `usda`, `usda_establishments`. NHTSA + USCG land in Phase 5c/5d.
+Sources: `cpsc`, `fda`, `usda`, `usda_establishments`, `nhtsa`. USCG indefinitely deferred.
+
+Source-level configuration (URL, timeout, ETag enabled flag) is loaded from `config/sources/<source>.yaml` per [ADR 0012](decisions/0012-extractor-pattern-custom-abc-and-per-source-subclasses.md) — editing those files takes effect on the next invocation. See [`development.md` § Source configuration](development.md#source-configuration) for the full story.
 
 See also: [`cli.md`](cli.md) for full flag semantics + per-source quirks, [`development.md` § Running extractors locally](development.md#running-extractors-locally), [`operations.md` § Re-ingestion procedure](operations.md#re-ingestion-procedure-after-schema-change), [ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md).
 
@@ -315,7 +319,7 @@ psql -f scripts/sql/_pipeline/quarantine_check.sql
 psql -f scripts/sql/_pipeline/watermark_health.sql
 
 # 3. ETag audit force extract for sources that can use it
-recalls extract usda --change-type=etag-audit
+recalls extract usda --change-type=etag_audit
 recalls extract usda_establishments --change-type=etag_audit
 ```
 

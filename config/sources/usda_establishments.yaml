@@ -1,14 +1,3 @@
-# NOTE — As of Phase 5b.2 (2026-05-01), this file is NOT loaded by any code path.
-# It exists as documented intent per ADR 0012 (declarative-source-config pattern,
-# adopted from NYC DCP's dcpy). The YAML loader, Pydantic-discriminated-union
-# dispatch, and registry described in ADR 0012 have not yet been implemented; CLI
-# dispatch in `src/cli/main.py` instantiates `UsdaEstablishmentExtractor` with
-# hardcoded constructor kwargs instead. Tracked as a follow-up: the loader/registry
-# refactor affects all sources equally and merits its own branch + ADR.
-#
-# Until that wiring lands, treat the values below as "what the loaded config will
-# look like" — i.e. documentation, not configuration.
-
 source_name: usda_establishments
 source_type: rest_api
 base_url: https://www.fsis.usda.gov/fsis/api/establishments/v/1

@@ -285,15 +285,13 @@ In effect: "When was this establishment last confirmed as active in the MPI dire
 
 ## Extraction Strategy
 
-Confirmed strategy based on Findings A–G.
+Confirmed strategy based on Findings A–G (Finding A revised 2026-05-03 and 2026-05-09 — see top of file).
 
-**Full dump, no filter (confirmed Finding A — no pagination, no ETag).**
+**Full dump, no filter (confirmed Finding A — no pagination).**
 `UsdaEstablishmentExtractor.extract()`: `GET /fsis/api/establishments/v/1` with no filter
 parameters. All 7,945 establishments returned in a single flat JSON array.
 
-**No ETag optimization available (contrast with recall API).** Every extraction run downloads
-the full dataset. At ~7,945 records this is acceptable. Content-hash dedup (ADR 0007) handles
-idempotency on the loader side.
+**ETag conditional GET enabled in production (Finding A revision, 2026-05-09).** The original "no ETag" claim was a Bruno-default-fingerprint artifact; under the production extractor's browser fingerprint (`browser_headers()` from `src/extractors/_fsis_headers.py`), the endpoint returns `ETag` and `Last-Modified` headers. `UsdaEstablishmentExtractor.etag_enabled = True` (live kill switch in `config/sources/usda_establishments.yaml`). Live extractor sends `If-None-Match` and `If-Modified-Since` on every run; 304 responses short-circuit the ~810 KB body download. Bronze content-hash dedup (ADR 0007) absorbs the rare false-200 over-fetches without writing. See Finding A revision and Finding A addendum (2026-05-10) at the top of this file for the full disposition.
 
 **Extraction scope: full dataset, not active-MPI filter.** The `status_regulated_est_value_1_op=empty`
 shortcut excludes 777 inactive establishments (9.8%) that may still be referenced by historical recalls.

@@ -139,11 +139,10 @@ Three things happen per extraction run that the diagram above abbreviates:
 
 | File | Role |
 |---|---|
-| `_base.py` | `Extractor` ABC — defines the 5-step lifecycle (`extract`, `land_raw`, `validate`, `check_invariants`, `load_bronze`) shared by every source |
-| `_rest_api.py` | `RestApiExtractor` — operation-type subclass for JSON REST sources (CPSC, FDA, USDA) |
-| `_flat_file.py` | `FlatFileExtractor` — operation-type subclass for tab-delimited downloads (NHTSA, Phase 5c) |
-| `_html_scraping.py` | `HtmlScrapingExtractor` — operation-type subclass for HTML scraping (USCG, Phase 5d) |
-| `cpsc.py` / `fda.py` / `usda.py` / `usda_establishment.py` | Per-source concrete subclasses |
+| `_base.py` | `Extractor` ABC — defines the 5-step lifecycle (`extract`, `land_raw`, `validate`, `check_invariants`, `load_bronze`) shared by every source; also contains `RestApiExtractor` (REST sources) and `HtmlScrapingExtractor` (scraping; reserved for future use) operation-type subclasses |
+| `_flat_file.py` | `FlatFileExtractor` — operation-type subclass for tab-delimited downloads (NHTSA) |
+| `_fsis_headers.py` | Shared browser-fingerprint header helper for USDA FSIS endpoints (per ADR 0016 amendment — bot-manager fingerprinting) |
+| `cpsc.py` / `fda.py` / `usda.py` / `usda_establishment.py` / `nhtsa.py` | Per-source concrete subclasses |
 
 The hierarchy is **two layers deep**: `Extractor` (ABC) → operation-type subclass (`RestApiExtractor`, etc.) → per-source concrete subclass. This was deliberate per [ADR 0012](decisions/0012-extractor-pattern-custom-abc-and-per-source-subclasses.md): `Extractor` defines the lifecycle contract, the operation-type subclasses encode shape-specific concerns (pagination loops for REST, ZIP unpacking for flat files, BeautifulSoup parsing for scraping), and concrete subclasses encode source-specific quirks (auth headers, watermark column names, response-shape multiplexing).
 
@@ -174,15 +173,15 @@ Per [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md), schemas
 
 ### `src/cli/` — Typer CLI dispatch
 
-`recalls extract <source>`, `recalls re-ingest`, debug subcommands. Thin dispatch over the Extractor ABC and bronze loader; no business logic. Per [ADR 0012](decisions/0012-extractor-pattern-custom-abc-and-per-source-subclasses.md) Implementation notes.
+`recalls extract <source>`, `recalls deep-rescan <source>`, and `recalls version`. The CLI loads source-level config from `config/sources/<source>.yaml` via `src/config/source_loader.py`, looks up the target extractor class from a static dict in `src/config/source_registry.py` keyed on `source_name`, and constructs the extractor with kwargs filtered against the class's Pydantic `model_fields`. CLI flag-specific behavior (`--lookback-days`, `--since`, `--change-type=etag_audit`) is layered on top of the YAML-driven extractor instance via post-construction methods or attribute mutations. No business logic lives in CLI modules. See ADR 0012's "Implementation notes — source-config loader and registry (Wave 2, landed 2026-05-10)" section.
 
-The CLI currently instantiates extractors with hardcoded constructor kwargs — the YAML-driven dispatch promised in ADR 0012 is filed as a Phase 6/7 architectural follow-up. See `project_scope/implementation_plan.md`.
-
-### `src/config/` — settings + structured logging
+### `src/config/` — settings, source config, and structured logging
 
 | File | Role |
 |---|---|
 | `settings.py` | `pydantic-settings` `Settings` model — loads `.env`, fails loud on missing required values, marks credentials as `SecretStr` |
+| `source_loader.py` | YAML loader — reads `config/sources/<source>.yaml` and validates through the discriminated union in `source_registry.py`. Strict-fails on extra fields, missing required fields, or wrong `source_type`. |
+| `source_registry.py` | Pydantic discriminated-union models (`RestApiSourceConfig`, `FlatFileSourceConfig`); static dicts `EXTRACTOR_BY_SOURCE_NAME` (5 entries) and `DEEP_RESCAN_BY_SOURCE_NAME` (3 entries); `build_extractor_kwargs` helper using `model_fields` introspection per ADR 0012. |
 | `logging.py` | `structlog` configuration with `run_id` contextvar, stdlib bridge for third-party libraries |
 
 ### `migrations/versions/` — Alembic migrations

@@ -10,7 +10,7 @@ This document covers local setup, environment configuration, and day-to-day deve
 - `uv` (preferred) or `pip` for dependency management
 - A Neon Postgres account (free tier) with a project provisioned — see [ADR 0005](decisions/0005-storage-tier-neon-and-r2.md)
 - A Cloudflare account with R2 enabled (free tier) and a bucket created
-- An FDA iRES API key, requested via OII Unified Logon — see [ADR 0012](decisions/0012-extractor-pattern-custom-abc-and-per-source-subclasses.md)
+- An FDA iRES API key, requested via OII Unified Logon — see [ADR 0016](decisions/0016-secrets-management.md)
 - **Optional:** `direnv` for automatic environment loading (see below)
 
 ---
@@ -375,6 +375,105 @@ Same pattern applies to FDA credentials in principle, but FDA only issues one cr
 
 ---
 
+## Source configuration
+
+Source-level configuration — API URLs, timeouts, ETag enabled/disabled, rate limits — lives in `config/sources/*.yaml`. This is distinct from the `.env` secrets and distinct from per-invocation CLI flags. Understanding the three tiers prevents confusion when you want to change one piece of behavior.
+
+### Three-tier configuration hierarchy
+
+| Tier | Lives in | Examples | When it changes |
+|---|---|---|---|
+| 1. Environment | `.env` / `Settings` (env vars) | `NEON_DATABASE_URL`, `R2_*`, `FDA_AUTHORIZATION_*` | Per-environment (dev/prod). Secrets. |
+| 2. Source | `config/sources/<source>.yaml` | `base_url`, `timeout_seconds`, `etag_enabled`, `rate_limit_rps`, `historical_seed_urls` | Per-source API surface. Static across envs. |
+| 3. Run | CLI flags | `--lookback-days`, `--since`, `--change-type` | Per-invocation behavior. |
+
+Env vars and YAML serve different masters: env vars hold per-environment secrets (DB URL, R2 keys, FDA creds) that differ between your dev machine and CI; YAML holds per-source API surface configuration (URLs, timeouts, ETag switches) that is the same regardless of where the pipeline runs. CLI flags layer per-invocation overrides on top of both.
+
+**Acceptance criterion / litmus test:** editing `config/sources/usda.yaml` to change `etag_enabled: true` to `etag_enabled: false` takes effect on the next `recalls extract usda` run with no code change. The loader runs per-invocation; there is no restart, no migration, no rebuild.
+
+### The five YAML files
+
+`config/sources/` contains one file per source:
+
+| File | `source_type` | Pydantic shape |
+|---|---|---|
+| `cpsc.yaml` | `rest_api` | `RestApiSourceConfig` |
+| `fda.yaml` | `rest_api` | `RestApiSourceConfig` |
+| `usda.yaml` | `rest_api` | `RestApiSourceConfig` |
+| `usda_establishments.yaml` | `rest_api` | `RestApiSourceConfig` |
+| `nhtsa.yaml` | `flat_file` | `FlatFileSourceConfig` |
+
+The shape is validated through a Pydantic discriminated union keyed on the `source_type` field, defined in `src/config/source_registry.py`. The loader (`src/config/source_loader.py`'s `load_source_config(source_name)`) reads the file and validates in one step.
+
+### Wired vs. documented-intent fields
+
+Not every YAML field flows into extractor constructors today. Fields are either **wired** (passed to the extractor at construction time) or **documented intent** (validated by Pydantic, carried on the config object, but excluded from constructor kwargs by `build_extractor_kwargs`'s `model_fields` introspection). Future waves can wire documented-intent fields without YAML schema changes.
+
+**`RestApiSourceConfig` fields** (`source_type: rest_api`):
+
+| Field | Status | Notes |
+|---|---|---|
+| `source_name` | identifier | Must match the `extraction_runs.source` value and the YAML filename |
+| `source_type: rest_api` | discriminator | |
+| `base_url` | wired | Passed to extractor constructor |
+| `timeout_seconds` | wired | Default 30.0; FDA YAML sets 60.0 |
+| `rate_limit_rps` | wired | Currently `null` everywhere; reserved for future use |
+| `etag_enabled` | wired (USDA recall + establishments only) | CPSC/FDA don't declare the field; `model_fields` introspection filters it out automatically |
+| `incremental_filter_param` | documented intent | E.g., `LastPublishDateStart` for CPSC, `eventlmdfrom` for FDA — the URL/POST parameter name |
+| `incremental_filter_format` | documented intent | strftime format for the date filter |
+| `default_lookback_days` | documented intent | Currently a module constant in each extractor (`_DEFAULT_LOOKBACK_DAYS`) |
+| `format_param` | documented intent | E.g., `format=json` for CPSC |
+| `credentials` | documented intent | E.g., `{header_user: fda_authorization_user, header_key: fda_authorization_key}` for FDA |
+
+**`FlatFileSourceConfig` fields** (`source_type: flat_file`):
+
+| Field | Status | Notes |
+|---|---|---|
+| `source_name` | identifier | |
+| `source_type: flat_file` | discriminator | |
+| `file_url` | wired | The primary archive URL (= POST_2010 for NHTSA) |
+| `timeout_seconds` | wired | Default 120.0 (longer than REST to account for large ZIP downloads) |
+| `rate_limit_rps` | wired | |
+| `historical_seed_urls` | wired (NhtsaDeepRescanLoader only) | URLs downloaded in addition to `file_url` on the deep-rescan path. Length-1 invariant today (PRE_2010 archive). |
+| `expected_field_count` | documented intent | NHTSA TSV column count (29) — currently a module constant |
+| `etag_enabled` | documented intent | NHTSA: `false` (ZIP wrappers are non-deterministic); typed but unused at the extractor level |
+| `incremental_filter_param`, `incremental_filter_format`, `default_lookback_days`, `format_param`, `credentials` | documented intent | Same as REST table |
+
+### How to safely edit a YAML
+
+The loader is invoked per `recalls` invocation — there is no running process to restart. Edit the file and the next run picks it up.
+
+Example: temporarily disable USDA recall ETag to debug a suspected false-304.
+
+```bash
+# Disable ETag for one debug run
+$EDITOR config/sources/usda.yaml          # change etag_enabled: true → false
+recalls extract usda                       # next run skips If-None-Match
+$EDITOR config/sources/usda.yaml          # change back to true
+recalls extract usda                       # If-None-Match resumes
+```
+
+No code edit, no restart, no migration.
+
+### `extra="forbid"` strictness
+
+A typo in a YAML key (e.g., `etagh_enabled` instead of `etag_enabled`) raises a Pydantic `ValidationError` at CLI startup with the exact offending field name. The process exits before any DB or HTTP work begins. This is the same fail-loud posture as `Settings`'s `extra="forbid"` — see [Design rationale — strict scope on `.env`](#design-rationale--strict-scope-on-env) above.
+
+This contract also reinforces why `Settings` really is the complete env-var specification: source URLs, timeouts, and ETag flags moved out of env vars into YAML in Wave 2. If you find yourself wanting to put a URL or timeout in `.env`, put it in `config/sources/<source>.yaml` instead.
+
+### Per-environment overlays — deferred
+
+Today the loader reads exactly one YAML per source. Layered `<source>.<env>.yaml` overlays (where a production overlay could differ from the base file) are tracked as a Phase 7 prerequisite in `project_scope/implementation_plan.md`, to land before production cron turns on. The current `Settings()` env-var indirection covers the legitimate per-env knobs (DB URL, R2 keys, FDA creds); URLs, timeouts, and ETag values don't differ across dev and prod today.
+
+### Cross-references
+
+- [ADR 0012](decisions/0012-extractor-pattern-custom-abc-and-per-source-subclasses.md) — "Implementation notes — source-config loader and registry (Wave 2, landed 2026-05-10)" section
+- `src/config/source_registry.py` — source of truth for the Pydantic schema
+- [`cli.md`](cli.md) § Source configuration — operator-facing CLI flag reference
+- [`commands.md`](commands.md) § recalls — project CLI — quick reference
+
+---
+
 ## Running tests
 
 ```bash
@@ -541,10 +640,20 @@ uv run recalls extract cpsc
 uv run recalls extract fda
 uv run recalls extract usda
 uv run recalls extract usda_establishments
+uv run recalls extract nhtsa
 
 # Override the watermark with a lookback window (useful when iterating)
+# Honored by CPSC and FDA only; other sources accept the flag and print a notice.
 uv run recalls extract cpsc --lookback-days 7
 uv run recalls extract fda --lookback-days 30
+
+# NHTSA-only: dev-mode RCDATE filter (drops rows older than the date)
+uv run recalls extract nhtsa --since 2024-01-01
+
+# ETag audit run (USDA recall + USDA establishments only) — forces an
+# unconditional GET so the audit-check SQL can verify ETag honesty.
+uv run recalls extract usda --change-type=etag_audit
+uv run recalls extract usda_establishments --change-type=etag_audit
 
 # Inspect the extractor's effect: did rows land?
 psql $NEON_DATABASE_URL -c "

@@ -63,7 +63,7 @@ from typing import Any
 
 import sqlalchemy as sa
 import structlog
-from pydantic import PrivateAttr, ValidationError
+from pydantic import Field, PrivateAttr, ValidationError
 from sqlalchemy.dialects import postgresql
 
 from src.bronze.invariants import check_date_sanity, check_null_source_id
@@ -585,9 +585,17 @@ class NhtsaDeepRescanLoader(NhtsaExtractor):
     """
 
     source_name: str = _NHTSA_SOURCE
-    # `file_url` is inherited from NhtsaExtractor; the deep-rescan loader
-    # downloads two URLs but the parent's `file_url` field is required by
-    # the FlatFileExtractor base class. Left at the default; never used.
+    # `file_url` is inherited from NhtsaExtractor; the deep-rescan loader uses
+    # it as the POST_2010 (incremental) URL. `historical_seed_urls` lists URLs
+    # downloaded IN ADDITION to `file_url` — currently exactly one entry, the
+    # PRE_2010 archive. NHTSA has only ever exposed two flat files; if a third
+    # is published the list extends and the per-archive wrapper/hash plumbing
+    # below grows accordingly.
+    historical_seed_urls: list[str] = Field(
+        default_factory=lambda: [_HISTORICAL_PRE_2010_URL],
+        min_length=1,
+        max_length=1,
+    )
 
     # Bytes for the second wrapper (the parent's _wrapper_bytes holds POST_2010).
     _pre_2010_wrapper_bytes: bytes = PrivateAttr(default=b"")
@@ -599,18 +607,18 @@ class NhtsaDeepRescanLoader(NhtsaExtractor):
         """Download both archives; return concatenated rows.
 
         The forensic capture (``_captured_response_*``) is populated
-        from POST_2010 — the larger and more representative archive.
-        Per-archive inner-content hashes are stashed for the manifest
-        landed in ``land_raw``; the canonical
-        ``response_inner_content_sha256`` is the POST_2010 inner hash
-        (so day-over-day diffs on this column track the rolling-current
+        from the primary archive (``self.file_url``, POST_2010) — the
+        larger and more representative archive. Per-archive inner-content
+        hashes are stashed for the manifest landed in ``land_raw``; the
+        canonical ``response_inner_content_sha256`` is the POST_2010 inner
+        hash (so day-over-day diffs on this column track the rolling-current
         archive, matching the incremental path's semantics).
         """
         import hashlib
 
-        # POST_2010 first — populates _captured_response_* and _wrapper_bytes
-        # via the parent's machinery.
-        post_path, post_response, post_wrapper = self._download_to_temp(_INCREMENTAL_URL)
+        # POST_2010 (self.file_url) first — populates _captured_response_* and
+        # _wrapper_bytes via the parent's machinery.
+        post_path, post_response, post_wrapper = self._download_to_temp(self.file_url)
         try:
             post_inner, _ = self._decompress_zip(post_path, "*.txt")
         finally:
@@ -619,9 +627,10 @@ class NhtsaDeepRescanLoader(NhtsaExtractor):
         self._wrapper_bytes = post_wrapper
         self._post_2010_inner_sha256 = self._captured_response_inner_content_sha256 or ""
 
-        # PRE_2010 — captured into private attrs only; does NOT overwrite
-        # the parent's _captured_response_* state.
-        pre_path, _pre_response, pre_wrapper = self._download_to_temp(_HISTORICAL_PRE_2010_URL)
+        # PRE_2010 (self.historical_seed_urls[0]) — captured into private attrs
+        # only; does NOT overwrite the parent's _captured_response_* state.
+        historical_url = self.historical_seed_urls[0]
+        pre_path, _pre_response, pre_wrapper = self._download_to_temp(historical_url)
         try:
             pre_inner, _ = self._decompress_zip(pre_path, "*.txt")
         finally:
@@ -672,13 +681,13 @@ class NhtsaDeepRescanLoader(NhtsaExtractor):
             "deep_rescan": True,
             "sources": [
                 {
-                    "url": _HISTORICAL_PRE_2010_URL,
+                    "url": self.historical_seed_urls[0],
                     "r2_path": pre_path,
                     "inner_content_sha256": self._pre_2010_inner_sha256,
                     "wrapper_bytes": len(self._pre_2010_wrapper_bytes),
                 },
                 {
-                    "url": _INCREMENTAL_URL,
+                    "url": self.file_url,
                     "r2_path": post_path,
                     "inner_content_sha256": self._post_2010_inner_sha256,
                     "wrapper_bytes": len(self._wrapper_bytes),

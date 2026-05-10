@@ -297,6 +297,23 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
             .values(last_cursor=new_date.isoformat(), updated_at=datetime.now(UTC))
         )
 
+    def override_watermark_lookback(self, days: int) -> None:
+        """Override the source_watermarks cursor to today - N days.
+
+        CLI hook for ``recalls extract cpsc --lookback-days N``. Encapsulates
+        the engine + watermark-table access inside the extractor so the CLI
+        does not need to import private symbols (``_source_watermarks``) or
+        reach into ``_engine``. Writes are committed immediately; the next
+        ``run()`` call will see the overridden cursor.
+        """
+        override_date = datetime.now(UTC).date() - timedelta(days=days)
+        with self._engine.begin() as conn:
+            conn.execute(
+                sa.update(_source_watermarks)
+                .where(_source_watermarks.c.source == _CPSC_SOURCE)
+                .values(last_cursor=override_date.isoformat())
+            )
+
     def _record_run(
         self,
         run_id: str,

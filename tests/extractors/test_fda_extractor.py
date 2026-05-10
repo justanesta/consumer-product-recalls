@@ -282,6 +282,34 @@ class TestUpdateWatermark:
 
 
 # ---------------------------------------------------------------------------
+# override_watermark_lookback() — CLI hook for --lookback-days
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideWatermarkLookback:
+    def test_writes_today_minus_n_days_to_source_watermarks(self, extractor: FdaExtractor) -> None:
+        from datetime import timedelta
+
+        mock_conn = MagicMock()
+        # `_engine` is spec=sa.Engine in the fixture; cast through MagicMock
+        # to access mock-internals like `.return_value` without pyright
+        # complaining about MethodType.
+        mock_engine: MagicMock = extractor._engine  # type: ignore[assignment]
+        mock_engine.begin.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)
+
+        extractor.override_watermark_lookback(7)
+
+        mock_conn.execute.assert_called_once()
+        statement = mock_conn.execute.call_args.args[0]
+        compiled = str(statement.compile(compile_kwargs={"literal_binds": True}))
+        assert "source_watermarks" in compiled
+        assert "'fda'" in compiled
+        expected_date = (datetime.now(UTC).date() - timedelta(days=7)).isoformat()
+        assert expected_date in compiled
+
+
+# ---------------------------------------------------------------------------
 # _capture_error_response()
 # ---------------------------------------------------------------------------
 

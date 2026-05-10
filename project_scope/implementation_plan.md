@@ -295,7 +295,7 @@ per-source workflow:
 2. Schema (`src/schemas/usda_establishment.py` with `false`-sentinel handling
    for `geolocation` / `county` per Finding C and array-whitespace stripping
    for `activities` / `dbas`), extractor (`UsdaEstablishmentExtractor`),
-   `config/sources/usda_establishment.yaml`, Alembic migration
+   `config/sources/usda_establishments.yaml`, Alembic migration
    (`usda_fsis_establishments_bronze` + rejected table), `extract-usda-establishments.yml`
    workflow with `workflow_dispatch` and weekly cron.
 3. First extraction + bronze findings: measure overlap between recall
@@ -448,31 +448,43 @@ Cross-cutting work targeted at specific upcoming phases. Each item is gated to a
 
 | Item | Gated to | Status |
 |---|---|---|
-| ADR 0012 source-config loader and registry | **Phase 6** (preferred) or Phase 7 prerequisite | Pending |
+| ADR 0012 source-config loader and registry | **Phase 6** (preferred) or Phase 7 prerequisite | Implemented 2026-05-10 — Wave 2 MVP; per-environment overlay layering deferred as Phase 7 prerequisite, see "Per-environment YAML overlays" section below |
 | ADR 0026 manifest implementation | **Phase 6** (USDA-only initially per accepted ADR) | Pending |
 | ADR 0027 bronze storage-forced transforms refactor | **Phase 5b.2 Step 4.5** (already on critical path) | Cross-referenced from §5b.2 |
-| `source_watermarks` seeding fix | **Phase 7 prerequisite** | Diagnostic-logging fix Implemented 2026-05-09; constraint redesign (FK vs. CHECK vs. no-constraint) still deferred — see section below |
+| `source_watermarks` seeding fix | **Phase 7 prerequisite** | Diagnostic-logging fix Implemented 2026-05-09; constraint redesign (FK vs. CHECK vs. no-constraint) deferred — no current upstream dependency, no urgency. Revisit during Phase 7 cron-prep when per-new-source seed-migration ritual pain becomes visible (a sixth source would be the natural trigger). See section below for full reopen condition. |
 | FDA firm role reconciliation | **Phase 6 prerequisite** (firm entity resolution) | Implemented 2026-05-09 — see section below |
 | Shared annotated types and invariants audit | **Phase 5c prerequisite** | Resolved 2026-05-01 — documented negative result; see section below |
 | USDA recall ETag re-evaluation | **Phase 7 prerequisite** | Implemented 2026-05-09 — `etag_enabled=True` per Finding P; see section below |
 | USDA establishment ETag enablement | **Phase 7 prerequisite** (gate-paired with USDA recall) | Implemented 2026-05-09 — `etag_enabled=True` per Finding A revision; see section below |
-| `extraction_runs` source-specific column sparsity | **Phase 7 prerequisite** (after USCG forensics shape is known) | Pending |
+| `extraction_runs` source-specific column sparsity | **Phase 7 prerequisite** (was gated on USCG forensics; USCG indefinitely deferred) | Pending — deferred. Original blocker (USCG forensics shape) dissolved with USCG indefinitely deferred; no urgency replaced it. Revisit if Phase 7 cron-prep surfaces a real operational cost or if USCG returns. See section below for full reopen condition. |
 
-### ADR 0012 implementation: source-config loader and registry
+### ADR 0012 implementation: source-config loader and registry — Wave 2, landed 2026-05-10
 
-The `config/sources/*.yaml` files were filed as Phase 1 deliverables, but the loader, Pydantic-discriminated-union dispatch, and registry described in ADR 0012 were never implemented. CLI dispatch in `src/cli/main.py` instantiates extractors with hardcoded constructor kwargs, so YAML edits have no runtime effect. Affects all five sources equally.
+The `config/sources/*.yaml` files were filed as Phase 1 deliverables but were not loaded by any code path until Wave 2. CLI dispatch instantiated extractors with hardcoded constructor kwargs, so YAML edits had no runtime effect. Affects all five sources equally.
 
-Surfaced during Phase 5b USDA extraction when an `etag_enabled: false` YAML edit had no effect on the running extractor; see detour L3 in `documentation/usda/first_extraction_findings.md` and the header comment in `config/sources/usda.yaml`. ADR 0012 amended 2026-05-01 to document the deferral explicitly.
+Originally surfaced during Phase 5b USDA extraction when an `etag_enabled: false` YAML edit had no effect on the running extractor.
 
-**Acceptance criteria:** editing `config/sources/usda.yaml` to set `etag_enabled: true` takes effect on the next extractor run without a code change. CLI invokes a registry lookup keyed on the source's `extractor_type` discriminator. Per-environment overlays (dev vs. prod) are clean.
+**Acceptance criteria met (2026-05-10):** editing `config/sources/usda.yaml` to set `etag_enabled: false` takes effect on the next `recalls extract usda` run with no code change. The CLI dispatch in both `extract` and `deep-rescan` commands now resolves a source name to an extractor class via the static dicts `src.config.source_registry.EXTRACTOR_BY_SOURCE_NAME` and `DEEP_RESCAN_BY_SOURCE_NAME`, then materializes constructor kwargs from `config/sources/<source>.yaml` via `src.config.source_loader.load_source_config`. The `usda.yaml` and `usda_establishments.yaml` "this file is NOT loaded by any code path" header comments are gone — the YAML files are now the live kill switch (and `usda_establishment.yaml` was renamed to `usda_establishments.yaml` so the filename matches the canonical source name in `extraction_runs.source`). As a side effect, the `config/sources/fda.yaml`'s `timeout_seconds: 60.0` declaration now takes effect at runtime (prior runtime used the parent-class default of 30s). See ADR 0012's "Implementation notes — source-config loader and registry (Wave 2, landed 2026-05-10)" section for the full implementation summary.
 
-Best landed in Phase 6 alongside silver work — Phase 6 already touches the extractor configuration surface for cross-source firm resolution and benefits from the cleaner config story. Hard deadline is Phase 7 cron turn-on, after which silent YAML drift between expected and actual config behavior compounds.
+#### Per-environment YAML overlays — Phase 7 prerequisite (deferred from Wave 2)
+
+ADR 0012 mentions per-env overlays (dev vs. prod) as a possible benefit. Wave 2's MVP is single-file-per-source: the loader reads exactly one `config/sources/<source>.yaml`. Layered overlays — `<source>.<env>.yaml` merging or replacing into the base — were deferred deliberately to keep Wave 2 scoped to the loader/registry refactor.
+
+The current `Settings()` env-var indirection covers the legitimate per-env knobs today (DB URL, R2 keys, FDA creds); URL/timeout/etag values don't differ across dev and prod yet. When the first real env divergence appears (or before production cron turns on, whichever comes first), the overlay layer needs to land. Open design questions to resolve at that point:
+
+- **Overlay precedence** — does `<source>.<env>.yaml` replace the entire block, or merge field-by-field?
+- **Env-name source** — env var (e.g., `RECALLS_ENV=dev`)? hostname? CI flag?
+- **Schema-mismatch behavior** — strict failure if overlay declares an unknown field, or warn-and-fall-back?
+
+**Hard deadline: Phase 7 cron turn-on.** Cron-driven runs in production with the same code path as dev increases the silent-drift risk; before that, divergence is operator-visible.
 
 ### ADR 0026 implementation: per-run snapshot-presence manifest
 
 Tracked in `documentation/decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md`. Promoted to Accepted 2026-05-01 with USDA-only initial scope, Option A (separate `extraction_run_identities` table) representation, and Phase 6 timing.
 
 Lands in Phase 6 alongside the silver `recall_event_history` model. Bronze-side change is the new table + a per-run insert in `BronzeLoader.load()`; silver-side change is the `recall_lifecycle.sql` model deriving `first_seen_at`, `last_seen_at`, `is_currently_active`, `was_ever_retracted`, `edit_count` columns.
+
+**Within-Phase-6 ordering:** `recall_lifecycle.sql` depends on `recall_event_history.sql` — the lifecycle model reads from history rows, not vice versa. Order Phase 6 silver work as `recall_event_history` first → `recall_lifecycle` second. Both ride the same dbt build run once they exist.
 
 Manifest backfill from historical R2 payloads is covered by ADR 0028 Mechanism C (`scripts/backfill_manifest.py`).
 
@@ -486,15 +498,20 @@ Tracked in `documentation/decisions/0027-bronze-storage-forced-transforms-only.m
 
 Migration 0001 hardcodes a five-source list (`cpsc/fda/usda/nhtsa/uscg`) and seeds `source_watermarks` with one row per source. `extraction_runs.source` is a FK to that table, so any new source needs a one-row seed migration before its `_record_run` call can succeed (otherwise the FK insert fails silently inside the broad except — surfaced during Phase 5b.2 first extraction when `usda_establishments` warning'd `extraction_run.record_failed` while bronze loaded normally).
 
-Two cleaner long-term options:
+Three options under consideration:
 - **(a)** Drop the FK in favor of a CHECK constraint listing valid sources, updated as sources are added.
 - **(b)** Drop the constraint entirely and let the application enforce the source enum.
+- **(c)** Status quo — one seed migration per new source (like migration 0008 was for `usda_establishments`, like the migration that would be required for a hypothetical sixth source).
 
-Either avoids the per-new-source seed-migration ritual. Also: replicate the diagnostic-logging fix from `src/extractors/usda_establishment.py::_record_run` (capture exception `type` + `message` instead of swallowing) across `cpsc.py`, `fda.py`, `usda.py`. The current swallowing mode predates the fix and would mask similar failures on the older extractors.
+Options (a) and (b) avoid the per-new-source seed-migration ritual. Option (c) accepts the ritual but adds zero new design surface; for a project that may stay at five sources indefinitely, the ritual cost is bounded. Also: replicate the diagnostic-logging fix from `src/extractors/usda_establishment.py::_record_run` (capture exception `type` + `message` instead of swallowing) across `cpsc.py`, `fda.py`, `usda.py`. The current swallowing mode predates the fix and would mask similar failures on the older extractors.
 
 Lands before Phase 7 cron turn-on so `extraction_runs` write-failures during cron are loud, not silent.
 
-**Diagnostic-logging fix Implemented 2026-05-09.** `cpsc.py:331-345`, `fda.py:477-491`, `usda.py:523-537` now mirror `usda_establishment.py:529-544` exactly: `except Exception as exc:` captures the exception, the warning includes `error=str(exc)` and `error_type=type(exc).__name__`, and a comment explains why diagnostic fields matter for FK constraint violations. Tests `test_db_error_does_not_propagate` (cpsc, fda) and `test_db_failure_is_swallowed_and_logged` (usda) extended to assert the new fields are emitted via `structlog.testing.capture_logs()`. Migration 0008 (`migrations/versions/0008_seed_usda_establishments_watermark.py`) had already addressed the `usda_establishments` seed gap that surfaced this bug, so the diagnostic-logging fix is the only remaining piece of this section's near-term work. **Constraint redesign (FK vs. CHECK vs. no-constraint)** is the remaining open question — deferred until Phase 7 cron-prep when actual operational pain (or lack thereof) is visible.
+**Diagnostic-logging fix Implemented 2026-05-09.** `cpsc.py:331-345`, `fda.py:477-491`, `usda.py:523-537` now mirror `usda_establishment.py:529-544` exactly: `except Exception as exc:` captures the exception, the warning includes `error=str(exc)` and `error_type=type(exc).__name__`, and a comment explains why diagnostic fields matter for FK constraint violations. Tests `test_db_error_does_not_propagate` (cpsc, fda) and `test_db_failure_is_swallowed_and_logged` (usda) extended to assert the new fields are emitted via `structlog.testing.capture_logs()`. Migration 0008 (`migrations/versions/0008_seed_usda_establishments_watermark.py`) had already addressed the `usda_establishments` seed gap that surfaced this bug, so the diagnostic-logging fix is the only remaining piece of this section's near-term work.
+
+**Constraint redesign (FK vs. CHECK vs. no-constraint) — deferred.** The original framing was "tackle after USCG so the source enum stabilizes." Two facts now make the upstream-dependency framing moot: (1) USCG was always in migration 0001's hardcoded `_SOURCES` list (a watermark row exists for it even though no extractor does), AND (2) USCG is now indefinitely deferred (USCG website down 2026-05-09). The source enum is therefore as stable as it'll get — the redesign now lacks **urgency**, not **prerequisites**.
+
+**Reopen condition:** revisit during Phase 7 cron-prep when the operational pain (or lack thereof) of the per-new-source seed-migration ritual is visible. Adding a sixth source would be the natural trigger — at that point the cost of (c) status quo (one more seed migration) becomes empirically comparable to (a) or (b) the one-time constraint redesign, and the choice is decidable on data rather than speculation.
 
 ### FDA firm role reconciliation — Phase 6 prerequisite
 
@@ -548,13 +565,18 @@ The establishment endpoint emits `ETag` and `Last-Modified` under browser finger
 
 Best landed alongside the recall ETag flip if both pass viability simultaneously, or independently if one passes and the other doesn't. Cost of leaving disabled through cron is ~810 KB / day downloads on idle days that could have been 304s. Lands before Phase 7 cron turn-on so the daily bandwidth profile is settled before recurring runs accumulate.
 
-**Implemented 2026-05-09.** `etag_viability.sql -v src=usda_establishments` produced the SAFE-TO-ENABLE verdict over 7 transitions (`false_304_count=0`, `false_200_count=3`, one real-update day on 2026-05-06 inserting 7,176 records). `UsdaEstablishmentExtractor.etag_enabled` flipped to `True` at `src/extractors/usda_establishment.py:180`. YAML at `config/sources/usda_establishment.yaml:28` updated for forward-consistency. Test `test_no_conditional_headers_when_etag_disabled` reworked from "default-state" assertion to "explicit-disable" assertion (sets `etag_enabled=False` before sanity check). Empirical disposition documented in `documentation/usda/establishment_api_observations.md` Finding A revision 2026-05-09.
+**Implemented 2026-05-09.** `etag_viability.sql -v src=usda_establishments` produced the SAFE-TO-ENABLE verdict over 7 transitions (`false_304_count=0`, `false_200_count=3`, one real-update day on 2026-05-06 inserting 7,176 records). `UsdaEstablishmentExtractor.etag_enabled` flipped to `True` at `src/extractors/usda_establishment.py:180`. YAML at `config/sources/usda_establishments.yaml:28` updated for forward-consistency. Test `test_no_conditional_headers_when_etag_disabled` reworked from "default-state" assertion to "explicit-disable" assertion (sets `etag_enabled=False` before sanity check). Empirical disposition documented in `documentation/usda/establishment_api_observations.md` Finding A revision 2026-05-09.
 
 ### `extraction_runs` source-specific column sparsity — Phase 7 prerequisite
 
 `extraction_runs` is shaping up as a wide table where some forensic columns apply to only a subset of sources. Migration 0010 added five universal columns (`response_status_code`, `response_etag`, `response_last_modified`, `response_body_sha256`, `response_headers`) populated by every `RestApiExtractor` and `FlatFileExtractor`. Migration 0011 added `response_inner_content_sha256` populated only by flat-file sources (NHTSA today; USCG-adjacent later if its scrape produces an archive shape). The sparsity is structural: REST sources have no wrapper to decompress, so the column will be NULL for all CPSC / FDA / USDA / USDA establishment rows in perpetuity (~99% of `extraction_runs` rows by volume long-term).
 
-Phase 5d may add more source-specific forensic columns (HTTP cache headers from the scraper, scrape-delay metadata, polite-scraper retry counts) which would extend the sparsity pattern further. Designing the split shape now would be premature — the right time is after USCG's forensics surface, so both flat-file and HTML-scraping needs inform the split.
+Original framing assumed USCG (Phase 5d) would land and provide the second source-of-design-evidence — HTML-scraping forensics (HTTP cache headers, scrape-delay metadata, polite-scraper retry counts) that the split design needed alongside flat-file evidence from NHTSA. With USCG indefinitely deferred (USCG website down 2026-05-09), that blocker dissolved, but no urgency replaced it. Two paths now:
+
+- **(a) Wait indefinitely** for USCG to come back. Pure status quo: 1 column (`response_inner_content_sha256`) is NULL for all REST-source rows; minor schema noise; no operational cost. If USCG never returns, this is the permanent state at zero cost.
+- **(b) Proceed with NHTSA-only flat-file design now** (Approach 2 from the alternatives below). Build `extraction_runs_flat_file_forensics`, move `response_inner_content_sha256` to it. Accept that USCG-when-it-returns will need a separate `extraction_runs_html_forensics` migration.
+
+**Recommendation: path (a) wait.** Pending state has zero day-to-day cost. Path (b) trades a minor cosmetic improvement for committing to a design before the second source-of-design-evidence (USCG) is available. If USCG never returns, path (b) was unnecessary work; if USCG returns, path (b) was premature commitment.
 
 **Design alternatives to evaluate when this lands:**
 
@@ -567,7 +589,7 @@ Phase 5d may add more source-specific forensic columns (HTTP cache headers from 
 
 **Acceptance criteria:** forensic queries that span all sources still work via a single LEFT JOIN per source-type table. No NULL sentinel from missing source-type rows is mistaken for "not captured" — captured-but-not-applicable distinguishes from genuinely missing.
 
-Best landed before Phase 7 cron turn-on so the production schema crystallizes before regular runs accumulate large amounts of sparse data. After cron is on, restructuring the table requires data migration in addition to DDL.
+**Reopen condition:** revisit if (1) Phase 7 cron-prep surfaces a real operational cost from the sparsity — e.g., a query that's hard to write because the column is NULL-for-some-rows — or (2) USCG returns and forensics shape becomes known. After cron is on, restructuring the table requires data migration in addition to DDL, so weigh that cost in any future revisit.
 
 ### Shared annotated types and invariants audit — Phase 5c prerequisite
 
@@ -617,6 +639,9 @@ If a fourth source's schema reveals a pattern that meaningfully repeats across t
 - Full dbt test suite per ADR 0015 (60–80 generic tests + 5 singular + freshness)
 - Gold: aggregate views for dashboards, denormalized search index
 - `recall_event_history` silver dbt model per ADR 0022 — uniform `LAG()` window function over bronze snapshot tables for all five sources (CPSC, FDA, USDA, NHTSA, USCG); no source-asymmetric path. Model partitions by `(source, source_recall_id)`, orders by `extraction_timestamp`, and emits one row per changed field per snapshot interval. **Joins to `extraction_runs.change_type` and excludes rows from non-routine runs** (`schema_rebaseline`, `hash_helper_rebaseline`) from edit detection so parser-driven re-version waves don't synthesize false-edit events — see ADR 0027 + `documentation/operations/re_baseline_playbook.md`. FDA's native history endpoints (`/search/productHistory/{productid}` and `/search/eventproducthistory/{eventid}`) were confirmed empty across all tested lifecycle states in Phase 5a; if they ever start populating, file a new ADR and add: (a) an Alembic migration for `fda_product_history_bronze` and `fda_event_product_history_bronze`, (b) an extraction path for those tables, and (c) a `UNION` branch in this model to merge native-history rows with the snapshot-derived rows. Until then those tables do not exist.
+- `extraction_run_identities` table — Alembic migration; one row per `(run_id, source_recall_id)` per ADR 0026, populated by a per-run insert in `BronzeLoader.load()`. USDA-only initial scope per the accepted ADR. Bronze-side half of the lifecycle-tracking work. See § ADR 0026 implementation above for full rationale.
+- `dbt/models/silver/recall_lifecycle.sql` — silver-side half of ADR 0026; derives `first_seen_at`, `last_seen_at`, `is_currently_active`, `was_ever_retracted`, `edit_count`. **Within Phase 6, lands AFTER `recall_event_history`** — `recall_lifecycle` reads from history rows, not vice versa.
+- `scripts/backfill_manifest.py` — historical R2 payload replay per ADR 0028 Mechanism C, used to populate `extraction_run_identities` for runs predating the table's existence.
 - `scripts/re_ingest.py` — re-ingest CLI per ADR 0014 for schema-drift recovery
 - Alembic migrations for all silver and gold tables
 - Create final column-level ERD in `documentation/diagrams/` for silver postgres DB.
