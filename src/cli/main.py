@@ -52,12 +52,10 @@ _LOOKBACK_DAYS_SOURCES = {"cpsc", "fda"}
 _LOOKBACK_NO_OP_MESSAGES: dict[str, str] = {
     "usda": "usda: --lookback-days has no effect (full-dump every run; see Finding D).",
     "usda_establishments": (
-        "usda_establishments: --lookback-days has no effect "
-        "(full-dump every run; see Finding A)."
+        "usda_establishments: --lookback-days has no effect (full-dump every run; see Finding A)."
     ),
     "nhtsa": (
-        "nhtsa: --lookback-days has no effect "
-        "(flat-file full-dump every run; see Findings B + C)."
+        "nhtsa: --lookback-days has no effect (flat-file full-dump every run; see Findings B + C)."
     ),
 }
 
