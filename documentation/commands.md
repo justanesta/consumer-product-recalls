@@ -313,6 +313,10 @@ recalls extract usda_establishments
 psql -f scripts/sql/_pipeline/recent_runs.sql
 psql -f scripts/sql/_pipeline/quarantine_check.sql
 psql -f scripts/sql/_pipeline/watermark_health.sql
+
+# 3. ETag audit force extract for sources that can use it
+recalls extract usda --change-type=etag-audit
+recalls extract usda_establishments --change-type=etag_audit
 ```
 
 Then if anything in the snapshot looks off for a specific source, drill in with that source's `verify_schema_rebaseline_wave.sql` (the file works for any run, not just rebaselines — pass the routine run's run_id from the log).

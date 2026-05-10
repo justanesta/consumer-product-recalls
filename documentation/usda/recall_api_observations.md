@@ -569,7 +569,13 @@ The same artifact would surface on this source the first time the recall endpoin
 
 The flip remains the right call: every 200 transition observed was internally consistent, and the bronze content-hash dedup is a backstop for any false-200 over-fetches. The caveat to record is that the inference is now testable on every future 304 — and the patched script will report those 304 transitions as `consistent_unchanged` rather than fabricating a false-304.
 
-**Future hardening — audit-run pattern.** A genuine false-304 cannot be detected from a 304 row alone, because no body is fetched to compare. Direct measurement requires a periodic audit run that omits `If-None-Match` to force a 200, then compares the fresh body sha against the sha implied by the most recent prior 200's body. Even one weekly audit per source would convert the inferential green-light into a directly measured one. Not implemented; logged here as the natural next-step hardening if Akamai/FSIS behavior ever shifts.
+**Audit-run pattern (implemented 2026-05-10, minimum viable).** A genuine false-304 cannot be detected from a 304 row alone, because no body is fetched to compare. Direct measurement requires a periodic audit run that omits `If-None-Match` to force a 200, then compares the fresh body sha against the sha implied by the most recent prior 200's body. The implementation lives across:
+
+- Migration `0012_add_etag_audit_change_type.py` (allows `change_type='etag_audit'` at the DB level).
+- CLI: `recalls extract usda --change-type=etag_audit` sets `etag_enabled=False` for that run; restricted to the two USDA sources.
+- `scripts/sql/_pipeline/etag_audit_check.sql` produces the verdict per audit run — `POTENTIAL FALSE-304` is the binding alert condition.
+
+See the parallel block in `documentation/usda/establishment_api_observations.md` Finding A addendum for the full description; both sources share the same pipeline. Not yet on a schedule — initial cadence is operator-triggered. A weekly cron (`recalls extract usda --change-type=etag_audit`) plus an alert on `POTENTIAL FALSE-304` rows is the obvious automation step when ready.
 
 ---
 

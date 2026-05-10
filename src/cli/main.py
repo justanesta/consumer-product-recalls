@@ -9,15 +9,24 @@ from src.config.logging import configure_logging
 
 app = typer.Typer(name="recalls", help="Consumer product recalls pipeline CLI")
 
-# Allowed values for extraction_runs.change_type (per ADR 0027 + ADR 0028).
-# DB-level CHECK constraint enforces the same set; the CLI validates here so
-# the operator gets a clear error before the run even starts.
+# Allowed values for extraction_runs.change_type (per ADR 0027 + ADR 0028,
+# extended 2026-05-10 with etag_audit). DB-level CHECK constraint enforces
+# the same set (migrations 0009 + 0012); the CLI validates here so the
+# operator gets a clear error before the run even starts.
 _ALLOWED_CHANGE_TYPES = {
     "routine",
     "schema_rebaseline",
     "hash_helper_rebaseline",
     "historical_seed",
+    "etag_audit",
 }
+
+# Sources that support change_type=etag_audit. Restricted to the two USDA
+# endpoints because they are the only sources currently using HTTP
+# conditional GET (If-None-Match / If-Modified-Since); CPSC and FDA capture
+# ETag headers passively, NHTSA uses content-MD5 on flat files. Audit-run
+# semantics are only meaningful for the conditional-GET case.
+_ETAG_AUDIT_SOURCES = {"usda", "usda_establishments"}
 
 
 def _validate_change_type(value: str) -> str:
@@ -30,6 +39,18 @@ def _validate_change_type(value: str) -> str:
         )
         raise typer.Exit(code=1)
     return value
+
+
+def _validate_etag_audit_source(change_type: str, source: str) -> None:
+    """Reject change_type=etag_audit for sources that don't use conditional GET."""
+    if change_type == "etag_audit" and source not in _ETAG_AUDIT_SOURCES:
+        allowed = ", ".join(sorted(_ETAG_AUDIT_SOURCES))
+        typer.echo(
+            f"--change-type=etag_audit is only supported for: {allowed} "
+            f"(got source={source!r}); other sources don't use HTTP conditional GET.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -52,9 +73,12 @@ def extract(
             help=(
                 "How to label this run in extraction_runs. One of: routine "
                 "(default), schema_rebaseline, hash_helper_rebaseline, "
-                "historical_seed. Required to be set explicitly when re-baselining "
-                "after a schema or hashing-helper change so recall_event_history "
-                "can filter the wave out of edit detection."
+                "historical_seed, etag_audit. Required to be set explicitly when "
+                "re-baselining after a schema or hashing-helper change so "
+                "recall_event_history can filter the wave out of edit detection. "
+                "Use etag_audit (usda + usda_establishments only) to force an "
+                "unconditional GET and verify ETag-validation honesty against the "
+                "most recent prior 200 — see scripts/sql/_pipeline/etag_audit_check.sql."
             ),
         ),
     ] = "routine",
@@ -75,6 +99,7 @@ def extract(
     """Run the incremental extractor for a given source."""
     configure_logging()
     change_type = _validate_change_type(change_type)
+    _validate_etag_audit_source(change_type, source)
 
     if since is not None and source != "nhtsa":
         typer.echo(
@@ -157,6 +182,13 @@ def extract(
             timeout_seconds=60.0,
             settings=settings,
         )
+        if change_type == "etag_audit":
+            # Force unconditional GET so the server cannot return 304; the
+            # captured body sha is then compared against the most recent prior
+            # 200 in scripts/sql/_pipeline/etag_audit_check.sql to verify
+            # ETag-validation honesty (any mismatch with intervening 304s =
+            # confirmed false-304).
+            extractor.etag_enabled = False
         result = extractor.run(change_type=change_type)
         typer.echo(
             f"usda: fetched={result.records_fetched} "
@@ -181,6 +213,9 @@ def extract(
             timeout_seconds=60.0,
             settings=settings,
         )
+        if change_type == "etag_audit":
+            # Mirror UsdaExtractor's audit-run handling — see comment there.
+            extractor.etag_enabled = False
         result = extractor.run(change_type=change_type)
         typer.echo(
             f"usda_establishments: fetched={result.records_fetched} "
