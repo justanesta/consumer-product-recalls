@@ -312,6 +312,8 @@ recalls extract cpsc
 recalls extract fda
 recalls extract usda
 recalls extract usda_establishments
+# In development before paying for new Neon tier keep just a slice of NHTSA data
+recalls extract nhtsa --since=2023-12-01
 
 # 2. Pipeline-health snapshot
 psql -f scripts/sql/_pipeline/recent_runs.sql

@@ -1,6 +1,6 @@
 # Architecture
 
-System-level overview of the consumer-product-recalls ETL pipeline. Covers the four-layer medallion structure, end-to-end data flow, the components that implement each layer, and the load-bearing invariants that hold across them.
+System-level overview of the consumer-product-recalls EtLT medallion pipeline. Covers the four-layer medallion structure, end-to-end data flow, the components that implement each layer, and the load-bearing invariants that hold across them.
 
 This is the reader's-entry-point document. For:
 - **Per-source silver mapping decisions** (column unification, surrogate keys, null-filling) — see [`silver_design_notes.md`](silver_design_notes.md).
@@ -52,6 +52,8 @@ Succinct mental model of data transformations on each layer:
 - **Staging (pre-Silver)** = source-shape normalization (empty strings, sentinels, encoding, dedup, bilingual filter). Per-source cleanup, no cross-source thinking.
 - **Silver** = cross-source unification (surrogate keys, unions, firm dedup, role assignment). The first layer where "give me all recall events across CPSC + FDA + USDA" is one query.       
 - **Gold** = aggregates/reports for dashboards (e.g. recalls_by_month). 
+
+End-to-end, a single record moves like this: the extractor fetches a source payload, lands the raw bytes in R2 untouched (Landing), Pydantic parses and types it, and the validated record is bulk-inserted into a per-source Postgres bronze table (Bronze). On the next dbt run, a per-source staging view normalizes source quirks, silver models union it into the cross-source `recall_event` and friends (Silver), and gold models roll silver into the aggregate views dashboards consume (Gold).
 
 ## End-to-end data flow
 
