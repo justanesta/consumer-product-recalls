@@ -304,6 +304,124 @@ The earlier "Phase 6 decision options (a/b/c)" framing above is **superseded by 
 
 ---
 
+## H. 2026-05-12 — assertion refactor and updated daily-delta sample
+
+7 observation days into bronze (2026-05-05 → 2026-05-12; see `scripts/sql/nhtsa/_pipeline/inner_content_cadence.sql`), the dbt assertion at `dbt/tests/source_assumptions/assert_nhtsa_eleven_tuple_identity_stable.sql` was refactored to use per-path-value-set semantics, and a fresh daily-delta sample (today's `recalls extract nhtsa --since=2023-12-01` against existing bronze) provided a second datapoint for Sections B/D/F's distributional findings.
+
+### H.1 Assertion refactor — per-path-value-set semantics
+
+The original assertion flagged any 10-tuple group where the rotated 11th field took >1 distinct value across >1 `raw_landing_path`. That filter conflated two phenomena from Section G: (a) **structural multi-batch** — one physical component legitimately reporting multiple values, identical value sets across archives; and (b) **real drift** — one component with different value sets per archive. The refactor compares per-archive value sets via `string_agg(distinct ... order by ...)`:
+
+```sql
+having count(distinct raw_landing_path) > 1
+   and count(distinct path_value_set) > 1
+```
+
+Effect on the same bronze corpus: dbt warn count **104 → 9**. No bronze or silver data changes; the suppression is at the assertion layer only. The diagnostic remains available at `scripts/sql/nhtsa/bronze/decompose_eleven_tuple_drift.sql`, which exposes the structural-vs-real-drift split per field for any future investigation.
+
+### H.2 Reclassification of the Section G 2026-05-08 baseline
+
+The Section G "Baseline — 2026-05-08, two runs into bronze (TOTAL = 3)" table had two `mfr_comp_ptno` entries marked "False positive — benign" (Ferrari 12Cilindri side-window, ptnos `000788416 + 000788418`) and one `endman` entry marked "Real drift candidate" (Western Star 47X 2027 battery stud, `2026-02-03 → 2026-04-10`). Under the refactored assertion:
+
+- The **Ferrari `mfr_comp_ptno` cases** are now formally classified as structural multi-batch and suppressed. Both ptnos appear in every archive's per-path value set; silver's `(11-tuple → max(extraction_timestamp))` lookup materializes both correctly. The "False positive — benign" framing was right in spirit; the refactor makes the suppression explicit. ADR 0031's 2026-05-09 baseline characterization of these as "typo correction" is reclassified — the most likely interpretation is that the prior measurement caught a transitional state (pre-correction archive listed only one ptno, post-correction archive listed only the other), and subsequent archives have re-emitted both, converging the per-path value sets and revealing the structural nature of the duplication.
+- The **Western Star `endman` case** remains real_drift, unchanged.
+
+### H.3 Updated baseline — 2026-05-12 (95 structural + 9 real_drift)
+
+After the refactor, against current bronze (~250k rows accumulated over 7 observation days):
+
+| drifting_field | structural_multi_batch | real_drift | total |
+|---|---|---|---|
+| `mfr_comp_ptno` | 95 | 0 | 95 |
+| `bgman` | 0 | 6 | 6 |
+| `endman` | 0 | 3 | 3 |
+| `compname`, `maketxt`, `mfr_comp_desc`, `mfr_comp_name`, `modeltxt`, `rcl_cmpt_id`, `yeartxt` | 0 | 0 | 0 |
+| **TOTAL** | **95** | **9** | **104** |
+
+The 9 real_drift cases concentrate on the batch-window fields exactly as ADR 0031's "Why option 3b" predicted. Cumulative rate: 9 / ~250k ≈ 0.0036%, well under the >0.01%/month threshold. Per-year extrapolation deferred until ≥30 observation days accumulate.
+
+Representative real_drift cases:
+
+- **Chrysler Pacifica `26V189000` airbag** (4 cases): `bgman: 2022-05-10 → 2022-05-17` across 4 ptno variants (`68224526AI/AJ`, `68224527AG/AH`) — one upstream editorial event synced across the side-curtain airbag family.
+- **Western Star 47X `26V079000` battery stud** (1 case): carried forward from the 2026-05-08 baseline; still drifting.
+- **Mack `26V261000` brake-modulator** (4 cases counted; see H.4 + H.5): 5 vehicle tuples with `bgman`/`endman` populated → NULL, all on the same recall.
+
+### H.4 Mack 26V261000 — NULL-regression resolved as H1 (upstream depopulation)
+
+A new real_drift sub-class surfaced on 2026-05-12 and was resolved end-to-end: NHTSA emitting empty `BGMAN`/`ENDMAN` cells in the 2026-05-09 archive for the Mack brake-modulator component (`mfr_comp_ptno = '24710104'`, `compname = 'SERVICE BRAKES, AIR:ANTILOCK:CONTROL UNIT/MODULE'`) under recall 26V261000.
+
+Three candidate mechanisms were considered:
+
+- **H1** — Upstream depopulation: NHTSA emitted empty cells; recall scope-amended to units of unknown manufacturing date.
+- **H2** — Extractor mis-parse: Raw TSV has populated dates, our `FlatFileExtractor` produces NULL — would be a pipeline bug.
+- **H3** — Scope expansion adding rows (not replacement): The new archive added rows at NULL bgman/endman without removing the populated-bgman rows.
+
+Triage workflow:
+
+1. **`scripts/sql/nhtsa/bronze/diagnose_null_regression.sql`** — discriminates H3 from H1/H2 via `rows_in_path` analysis. Q1 showed `rows_in_path = 1` in every (10-tuple, path) cell across the 5 affected tuples → replacement, not additive. H3 ruled out.
+2. **`scripts/nhtsa/tsv_analysis/inspect_archive_row.py`** — discriminates H1 from H2 via TSV-byte inspection. Run against `nhtsa/2026-05-09/78530d14-...zip.gz` (inner SHA `fee0bd2d55fae636`, change_type=routine, records_inserted=130): all NULL bronze cells correspond to literal empty cells in the inner TSV (`BGMAN (raw): '' (len=0)`). The same archive contains both populated (`'20250708'` → `2025-07-08`) and empty (`''` → NULL) cells, and bronze materializes both consistently. H2 ruled out — the extractor is symmetric and correct.
+
+Sanity-check inspection of the prior 2026-05-08 archive (`nhtsa/2026-05-08/4c2d381e-...zip.gz`, inner SHA `c955c37153d1cb1e`) shows all 5 rows with both BGMAN and ENDMAN populated, confirming the pre-amendment state was uniform.
+
+The depopulation pattern is **asymmetric by model-year**, suggesting a considered editorial decision rather than blanket overwrite:
+
+| (maketxt, modeltxt, yeartxt) | 2026-05-08 BGMAN | 2026-05-09 BGMAN | 2026-05-08 ENDMAN | 2026-05-09 ENDMAN |
+|---|---|---|---|---|
+| PIONEER PR 2027 | `20241022` | (empty) | `20260408` | `20260408` |
+| PIONEER PR 2026 | `20241022` | (empty) | `20260408` | (empty) |
+| PIONEER PR 2025 | `20241022` | `20241022` | `20260408` | (empty) |
+| ANTHEM AN 2027 | `20250708` | (empty) | `20260408` | `20260408` |
+| ANTHEM AN 2026 | `20250708` | `20250708` | `20260408` | (empty) |
+
+Reading column-by-column: 2027 model-years lost BGMAN, kept ENDMAN; 2025 model-years kept BGMAN, lost ENDMAN; 2026 model-years split. The pattern argues NHTSA discovered the original date window didn't bound the affected population at one or both edges, and depopulated rather than guess. Operationally normal — exactly the "Why option 3b" trade-off ADR 0031:84 accepted.
+
+This NULL-regression sub-class is also recorded in ADR 0031's "Re-baseline 2026-05-12" subsection; future similar clusters should be triaged through the same `diagnose_null_regression.sql` + `inspect_archive_row.py` pair.
+
+### H.5 Simultaneous multi-field drift — assertion blind spot (n=1)
+
+PIONEER PR 2026 in the H.4 table has **both** BGMAN and ENDMAN regressing in the same amendment. This case falls through the refactored assertion's per-field rotation: when BGMAN is rotated out, the 10-tuple includes ENDMAN; but ENDMAN also differs across paths, so the 10-tuple doesn't match between path A and path B → not flagged. Symmetric reasoning for the ENDMAN rotation. Contributes 0 to the H.3 count of 9.
+
+The "9 real_drift" headline is an undercount by at least 1; the true count of physically regressing rows in the Mack cluster is **5 tuples, not 4**. The case is visible in `diagnose_null_regression.sql` Q1 (which doesn't rotate fields) but invisible to the dbt assertion. Bronze and silver still materialize both versions correctly — Tier 2 detection is just methodologically incomplete on this shape. A future hardening could add an OR condition catching simultaneous multi-field drift, but at n=1 it's not urgent.
+
+### H.6 Daily-delta sample — 2026-05-12 235-row load
+
+Today's `recalls extract nhtsa --since=2023-12-01` against existing bronze inserted 235 rows. Distributional shape parallel to Sections B/D/F (which characterized the 2026-05-08 run):
+
+**B-analogue — net_new vs amendment** (Section B's 2026-05-08 split was 133 / 61 = 69%/31%):
+
+| kind | count | share |
+|---|---|---|
+| net_new (no prior 11-tuple) | 23 | 10% |
+| amendment (existing 11-tuple, content_hash differs) | 212 | 90% |
+
+Near-mirror reversal of the 2026-05-08 ratio. The net_new/amendment split is **not a stable feature** — daily samples should not be calibrated against it.
+
+**D-analogue — fields driving amendments** (Section D's 2026-05-08 leaders were `odate` / `corrective_action` / `conequence_defect`):
+
+| field | amendments where field changed | rate | notes |
+|---|---|---|---|
+| `source_recall_id` | 212 | 100% | Hash-excluded per Section C |
+| `influenced_by` | 122 | 58% | **New dominant field** — Mercedes-Benz instrument-cluster campaign amended `influenced_by` linkage on every component-row |
+| `corrective_action` | 68 | 32% | Carries the KTM `25V598000` Husqvarna Svartpilen/Vitpilen 401 + KTM 390 Adventure **interim→final-remedy lifecycle transition** (4-row family: "Interim notification mailed October 20, 2025" → "Owner notification letters were mailed April 30, 2026") |
+| `odate` | 54 | 25% | Same mechanism as Section D — owner-notification dates flipping past-tense |
+| `rcdate` | 12 | 6% | **First appearance** — recall date corrections |
+| `potaff` | 10 | 5% | Same mechanism as Section D — VIN range firming |
+
+The `corrective_action` change on the KTM family is the highest-value lifecycle signal in the day's load — exactly the kind of state-change the Phase 6 `recall_event_history` model (ADR 0022) is designed to surface. NHTSA's `corrective_action` field appears to be the primary text carrier of recall-stage transitions (interim → final → closed).
+
+**F-analogue — burst distribution** (Section F's 2026-05-08 top: Mercedes-Benz instrument cluster at 122/194 = 63%):
+
+| dimension | top value | share |
+|---|---|---|
+| `mfgname` | Mercedes-Benz USA, LLC | 122 / 235 = 52% |
+| `compname` | `ELECTRICAL SYSTEM: INSTRUMENT CLUSTER/PANEL` | 124 / 235 = 53% |
+| Secondary `mfgname` | KTM North America, Inc. | 31 / 235 = 13% |
+| Secondary `compname` | `VEHICLE SPEED CONTROL:THROTTLE` | 31 / 235 = 13% |
+
+The Mercedes-Benz / instrument-cluster pairing repeats from 2026-05-08 on a *different* recall campaign — reaffirming Section F's burstiness conclusion. The secondary KTM concentration shows that single days can carry multiple distinct bursts.
+
+---
+
 ## Methodology pointer
 
 This document is reproducible from any NHTSA bronze state via:

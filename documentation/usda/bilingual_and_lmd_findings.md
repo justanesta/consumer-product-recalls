@@ -20,7 +20,7 @@ timestamp and must fall back to `extraction_timestamp` (granularity loss).
 Both are also wrapped as dbt singular tests at `severity=warn` under
 `dbt/tests/source_assumptions/`.
 
-## Baseline as of YYYY-MM-DD
+## Baseline as of 2026-05-12
 
 > **Run after**: `psql "$NEON_DATABASE_URL" -f scripts/sql/usda_recalls/bronze/assert_bilingual_atomic_update.sql`
 > and the U3 sibling. Paste Q1, Q2, Q3 outputs below.
@@ -59,6 +59,23 @@ samples — EN is always ahead of ES, never reversed. So FSIS appears
 to edit English-side without translating updates to Spanish,
 indefinitely.
 
+**Cross-refresh stability (2026-05-12).** The 13.31% rate matches ADR
+0026's cited 13.3% to two decimal places, measured on an independently-
+populated corpus several weeks after the original ADR 0026 observation.
+The non-atomic rate is stable across corpus refreshes — neither drifting
+upward nor tightening toward atomicity.
+
+**2021-05 cluster observation.** 4 of the top-10 EN-newer-than-ES
+samples have EN `last_modified_date` on 2021-05-13 or 2021-05-14
+(`010-2017`, `013-2017`, `090-2017`, `104-2018`). This concentration
+smells like an FSIS-side site migration or CMS deploy that touched
+many EN pages simultaneously without translating updates to ES.
+Evidence that EN-newer-than-ES events aren't always per-recall
+editorial actions — infrastructure events can produce them too.
+Worth tracking if future re-measurements surface analogous date
+clusters (suggesting a recurring FSIS publication pattern rather than
+a one-off migration).
+
 This contradicts `documentation/usda/recall_api_observations.md:163-164`'s
 claim that "FSIS updates both records atomically — the watermark moves
 in sync." That observation must have been made on a recently-published
@@ -88,31 +105,60 @@ amended to reflect the empirical 13.3%-structurally-non-atomic reality.
 | `regressed` | 0 | None. |
 | `advanced_from_null` | 0 | None. |
 | `regressed_to_null` | 0 | None. |
-| `unchanged_with_content_change` | **1** | Single observed routine content edit; date did NOT advance. |
+| `unchanged_with_content_change` | **3** | All 3 observed routine content edits; date did NOT advance. |
 | `NULL_to_NULL_with_content_change` | 0 | None. |
 
-**Q3 corpus context**: 2,004 bronze rows / 2,003 distinct (source_recall_id, langcode) pairs / **1 content-edit transition observed**. Only one (recall, language) pair has accumulated >1 routine snapshot.
+**Q3 corpus context (re-measured 2026-05-12)**: 2,007 bronze rows / 2,004 distinct (source_recall_id, langcode) pairs / **3 content-edit transitions observed**. Three Public Health Alert pairs have accumulated >1 routine snapshot; no regular recall has yet.
 
-**Q2 sample (the only data point):**
+**Q2 sample (all 3 observed transitions, 2026-05-12):**
 
 | `source_recall_id` | langcode | prev extraction | new extraction | prev `last_modified_date` | new `last_modified_date` | gap |
 |---|---|---|---|---|---|---|
 | `PHA-04092026-01` | English | 2026-05-01 01:47:19 UTC | 2026-05-01 01:51:37 UTC | 2026-04-09 | 2026-04-09 (unchanged) | 4 minutes |
+| `PHA-05042026-01` | English | 2026-05-05 11:51:57 UTC | 2026-05-10 13:18:18 UTC | 2026-05-04 | 2026-05-04 (unchanged) | 5 days |
+| `PHA-05092026-01` | English | 2026-05-10 13:18:18 UTC | 2026-05-12 12:04:33 UTC | 2026-05-09 | 2026-05-09 (unchanged) | 2 days |
 
-**Critical caveat — n=1.** The headline "100% unreliability rate" is
-statistically meaningless. The denominator is one transition. Two
-honest reads coexist:
+**Updated to n=3, 2026-05-12.** Two additional transitions accumulated
+since the original n=1 baseline: **PHA-05042026-01** (5-day gap,
+2026-05-05 → 2026-05-10) and **PHA-05092026-01** (2-day gap, 2026-05-10
+→ 2026-05-12, today's load). Both fall in the same bucket as the
+original — `unchanged_with_content_change` — for a unanimous 3/3
+(100%) in the only edit class observed. The original "can't conclude
+either way" framing is no longer accurate.
 
-- **Can't conclude U3 is broken** — one data point isn't a population behavior.
-- **Can't conclude U3 holds either** — the one data point is exactly the U3 failure mode.
+**Class-specific scope caveat.** All 3 transitions are Public Health
+Alerts (`PHA-*`), which have `has_spanish: false` and never enter the
+bilingual pair set. The U2 Q3 result above shows 425 EN-only recalls
+in the corpus; PHAs are a meaningful share. We have **no observational
+evidence** about whether regular FSIS recall classes (e.g.,
+`001-2026` style numbering) behave the same way — they simply haven't
+been amended in our observation window. The finding is "USDA
+`last_modified_date` is unreliable on the only edit class observed
+(Public Health Alerts)," not "USDA `last_modified_date` is unreliable
+for all classes." A meaningful caveat for ADR 0026's scope.
 
-**The case itself is already known.** `PHA-04092026-01` is the canonical
-Public Health Alert that ADR 0026 cites as the "edit observed within a
-single 4-hour window in Phase 5b verification" example. The 4-minute
-gap between snapshots is consistent with two extractions during initial
-bronze population (Phase 5b setup, 2026-04-30 to 2026-05-01) — possibly
-an artifact of iterating, possibly a genuine FSIS edit pattern. Hard to
-distinguish from one observation.
+**Reframe — U3 reflects FSIS's data model, not a bug.** Both observed
+sub-pathologies in the payload diff below — the `active_notice` toggle
+and the `None → ""` serialization shift on 5 nullable text fields — are
+not edits *from FSIS's perspective*. `active_notice` is a derived/
+runtime status flag (it toggled false → true → false within minutes/
+days — recomputed live, not a stored attribute). The `None → ""` shift
+on `closed_year`, `distro_list`, `press_release`, `qty_recovered`,
+`en_press_release` is a backend-deploy serialization artifact, not a
+content amendment. Bronze content_hash detects both because Pydantic
+preserves the distinctions; `last_modified_date` doesn't move because
+FSIS doesn't see these as edits. The signal isn't broken — it's
+measuring something different from what our bronze content_hash
+measures. The Phase 6 conclusion (use `extraction_timestamp`) is
+unchanged but now grounded in mechanism rather than just empirical
+absence of advances.
+
+**Historical context (preserved from the n=1 era).** `PHA-04092026-01`
+is the canonical Public Health Alert that ADR 0026 cites as the "edit
+observed within a single 4-hour window in Phase 5b verification"
+example. The 4-minute gap between its snapshots originally seeded this
+analysis. With 3 datapoints now, that case is no longer load-bearing on
+its own.
 
 **Phase 6 recommendation (conservative, given n=1):** do not trust
 `last_modified_date` as the per-record edit signal for USDA. Fall back
