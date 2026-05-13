@@ -1,6 +1,6 @@
 # 0031 — Silver-row fragmentation strategy: per-source surrogate keys, drift detection, and reconciliation tiers
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-05-12 — Tier 2 per-path-value-set refactor; amended 2026-05-13 — silver-grain migration evaluation tracking added)
 - **Date:** 2026-05-08
 - **Supersedes:** —
 - **Superseded by:** —
@@ -144,6 +144,74 @@ Effect on the baseline:
 - **Blind spot in the per-field rotation:** the assertion's mechanism rotates each identity field out of the GROUP BY one at a time and checks per-path value sets on the rotated field. When two fields drift together on the *same* row, neither rotation matches (the "stable" 10-tuple isn't stable for either rotation). Currently 1 such case: Mack `26V261000` PIONEER PR (4) 2026 brake-modulator, where both `bgman` (`2024-10-22 → NULL`) and `endman` (`2026-04-08 → NULL`) regressed in the same 2026-05-09 amendment. The case is visible in `scripts/sql/nhtsa/bronze/diagnose_null_regression.sql` Q1 but contributes 0 to the 9 real_drift count. So the "9" is an undercount by at least 1; the true count of physically regressing rows for the Mack 26V261000 cluster is 5 tuples, not 4. A future hardening could add an OR condition catching simultaneous multi-field drift, but at n=1 it's not urgent and the case isn't operationally lost — silver still materializes both rows, the Tier 2 detection is just methodologically incomplete on this shape.
 
 The threshold itself (>0.01% silver row count fragmented per month, OR systematic drift on a previously-stable field) is unchanged — the refactor cleaned up how the numerator is measured, not what's acceptable.
+
+### Silver-grain migration evaluation (ongoing, started 2026-05-13)
+
+***THIS SHOULDN'T BE MONTHLY, BUT RATHER WITH ~DAILY DATA UPDATES. GO CRITERIA WILL BE MET AFTER A FEW WEEKS***
+
+#### Premise
+
+The "Why option 3b" section above selected `md5(11-tuple)` for v1, consciously accepting batch-window (`bgman`/`endman`) fragmentation as a known limitation. The alternative — `md5(9-tuple)` with `bgman`/`endman` either demoted to a `recall_component_batch` child table or held as Type-1 SCD columns — was deferred without empirical evidence on its viability.
+
+This subsection tracks that evidence as it accumulates, with the goal of producing a clear go / no-go signal for migration. The decision being weighed is **not** "should we change v1" (v1 stands); it is **"under what conditions does the data justify a future migration?"**
+
+#### Snapshots
+
+| Date | Corpus | 11-tuple real_drift | 9-tuple real_drift | Notes |
+|---|---|---|---|---|
+| 2026-05-12 | ~250k bronze rows | 9 | not measured (script pre-refactor) | Tier 2 dbt test refactored to per-path-value-set; 95 structural / 9 real |
+| 2026-05-13 | ~72k bronze rows | 11 (9 baseline + 2 new) | **0** | First measurement with the refactored 9-tuple assertion. New H1 cluster (Nissan CUBE `26V230000` driver-airbag-inflator) confirmed via `diagnose_null_regression.sql`; same H1 pattern as the prior Mack `26V261000`. All 11-tuple real_drift cases live in `bgman`/`endman` — i.e., would collapse to 0 at the 9-tuple grain. |
+
+Future snapshots: append a row monthly, taken from `decompose_eleven_tuple_drift.sql` (11-tuple) and the refactored `assert_nine_tuple_identity_stable.sql` (9-tuple). The 9-tuple number is the load-bearing one — any non-zero value invalidates the migration thesis.
+
+#### Pros of migrating to `md5(9-tuple)` + child/SCD for bgman/endman
+
+1. **Eliminates the only fragmentation class we actually observe in production.** Today's 11 real_drift cases are 100% `bgman`/`endman`. At the 9-tuple grain they vanish. The Phase 6 reconciliation thresholds (`>0.01% silver row count fragmented per month`) would have a much wider headroom.
+2. **Aligns silver row cardinality with logical recall-product semantics.** One silver row per (vehicle × component) regardless of how NHTSA edits the manufacturing window. Downstream "how many products are recalled?" queries return a stable number across archive regenerations.
+3. **Makes the `recall_event_history` model (Phase 6, ADR 0022) cleaner.** Batch-window edits become updates on a single product row rather than appearance/disappearance of multiple rows. The H1 upstream-depopulation pattern (Mack, Nissan — see Re-baseline 2026-05-12 and `diagnose_null_regression.sql`) becomes invisible to history, which matches its semantic reality (scope amendments, not new defect data).
+4. **Resilient to NHTSA's documented scope-amendment pattern.** Two H1 clusters in 7 days suggests this isn't a once-per-quarter event; it's a routine part of how NHTSA evolves recalls. Designing silver to absorb it is a better fit for the upstream behavior.
+5. **The 9-tuple hypothesis has its first empirical support point.** 2026-05-13 measurement: 0 real_drift across 8 9-tuple fields. Doesn't prove durability — but it's the first ≥0 data point against the hypothesis.
+
+#### Cons / risks of migration
+
+1. **One data point is not durability.** A single 9-tuple drift event in the future (e.g., NHTSA normalizing a `maketxt` value like the `'AC DELCO' → 'ACDELCO'` case at TSV grain on 2026-05-08, or a `mfr_comp_desc` rewrite) would invalidate `md5(9-tuple)` as a stable canonical key. The cross-corpus rate observed via `scripts/nhtsa/tsv_analysis/cross_corpus_stability.py` is non-zero (≈1 event in a year-of-archives sample on the TSV substrate, not yet seen on the bronze substrate). A 6-month monthly tracking window is needed before treating "stable" as a property rather than an observation.
+2. **Loss of batch-window grain in silver's primary surface.** Currently a downstream consumer can query `recall_product` and get one row per (vehicle × component × batch). Post-migration, batch-window data lives in a child table or as Type-1 columns on the parent — every query that needs batch info gains a join or accepts that pre-amendment batch values are no longer in silver.
+3. **Migration cost is non-trivial.** Existing silver materializations rebuild. Any downstream consumer keyed on the current `md5(11-tuple)` `recall_product_id` (none yet — pre-Phase-8 — but the Phase 6 `recall_event_history` model is in flight) re-keys. The cost grows the longer we wait.
+4. **The fragmentation cost is currently below the action threshold.** 11/72k = 0.015% as a snapshot; per-month rate over 7 days extrapolates to ~12 events/month, well under the `>0.01%/month` trigger from the Negative consequences section. Migration is a quality-of-design improvement, not an operational fix for a live problem.
+5. **Type-1 SCD alternative dodges the migration.** Keeping `bgman`/`endman` in silver as `max(extraction_timestamp)`-wins (without changing the surrogate key recipe) eliminates the bronze-vs-silver "two rows per product" issue without a schema change. The trade-off: pre-amendment batch values disappear from silver (still in bronze). For most downstream uses this is fine — the "current" batch window is what's queried — but the audit story changes.
+6. **Choosing between (child table) vs (Type-1 SCD) is itself a deferred decision.** Both eliminate fragmentation; they differ on whether pre-amendment batch values stay queryable from silver. Decision logic depends on downstream consumer needs we haven't yet enumerated (Phase 8 API, BI users).
+
+#### Go criteria — conditions that would justify the migration
+
+Migration should be considered when **any** of the following hold:
+
+1. **Empirical durability.** 9-tuple `real_drift = 0` across **≥6 monthly snapshots** (i.e., 6 months of clean assertion runs), AND no cross-corpus drift event on a 9-tuple field surfaces in `scripts/nhtsa/tsv_analysis/cross_corpus_stability.py` over the same period.
+2. **Operational forcing function.** 11-tuple fragmentation rate exceeds **0.01% per month over a ≥30-day window** (the existing Phase 6 trigger from the per-source table). The migration becomes the natural remediation.
+3. **Stakeholder pull.** A downstream consumer (Phase 8 API, future BI surface, the `recall_event_history` model design) explicitly requests vehicle × component grain as the silver primary key, with batch-window data acceptable as a join or Type-1 SCD column.
+
+If **none** of the above holds after 12 months of tracking, the v1 `md5(11-tuple)` decision stands and the tracking section sunsets.
+
+#### Stop criteria — conditions that would invalidate the migration thesis
+
+Migration is **off the table** (and this tracking section sunsets) if:
+
+1. **Any monthly snapshot surfaces non-zero 9-tuple real_drift** that is not explained by a one-off TSV regeneration artifact. The 9-tuple's value-add is its stability; lose stability and the migration's rationale collapses.
+2. **A 9-tuple field flips to "drift-prone"** via cross-corpus analysis (e.g., NHTSA starts routinely normalizing `mfr_comp_desc` or `mfr_comp_name`). Same logic as 1.
+
+#### Implementation sketch (deferred, but noted)
+
+If migration triggers, two implementation paths to choose between:
+
+a. **Child table `recall_component_batch`** — one row per `(recall_product_id, bgman, endman)`. Preserves pre-amendment batch values in silver (audit-quality). Adds a join for any batch-aware query.
+b. **Type-1 SCD on parent** — `bgman`/`endman` stay as columns on `recall_product` but are dropped from the `md5()` recipe and reflect `max(extraction_timestamp)`-wins. Pre-amendment batch values move to bronze-only territory.
+
+Decision between (a) and (b) deferred to migration time. (a) matches ADR 0030's framing more closely; (b) is simpler and likely fits Phase 8's `GET /products/search` semantics better. Both are tractable.
+
+#### What to do now
+
+- **Nothing in code.** v1 stands; `md5(11-tuple)` is the silver canonical key.
+- **Re-run the 9-tuple assertion monthly**, append a row to the Snapshots table above. Trigger: alongside each monthly review of the per-source threshold table per the existing "Threshold revisit policy" section.
+- **When a new H1 cluster surfaces** (i.e., next `bgman`/`endman` populated → NULL event), confirm via `diagnose_null_regression.sql` and note in `documentation/nhtsa/incremental_delta_findings.md` alongside the existing Mack + Nissan write-ups. Don't add a row to the Snapshots table for it — the table tracks the assertion's per-field totals, not individual incidents.
 
 ## Implementation
 

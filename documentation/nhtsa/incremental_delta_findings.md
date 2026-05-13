@@ -420,6 +420,59 @@ The `corrective_action` change on the KTM family is the highest-value lifecycle 
 
 The Mercedes-Benz / instrument-cluster pairing repeats from 2026-05-08 on a *different* recall campaign — reaffirming Section F's burstiness conclusion. The secondary KTM concentration shows that single days can carry multiple distinct bursts.
 
+## I. 2026-05-13 — Nissan CUBE 26V230000 NULL-regression (per-yeartxt asymmetric)
+
+Second H1 NULL-regression cluster surfaced 2026-05-13, fitting the same upstream-depopulation pattern as H.4 (Mack 26V261000) but with a cleaner per-yeartxt asymmetry. The driver-airbag-inflator component `mfr_comp_ptno = '98560-7991C'` (`compname = 'AIR BAGS:FRONTAL:DRIVER SIDE:INFLATOR MODULE'`, `mfr_comp_name = 'Driver Airbag Inflator'`) under recall `26V230000` — a Takata-cascade-style Nissan CUBE 2009-2010 inflator recall — had `bgman`/`endman` cells depopulated across both yeartxt tuples in some upstream archive published between 2026-05-09 and 2026-05-13. (Our bronze captured only the May 8 pre-amendment and May 13 post-amendment snapshots; the exact upstream publication date is bracketed but not pinpointed in current bronze.)
+
+The cases (boundary depopulated per yeartxt):
+
+| (maketxt, modeltxt, yeartxt) | 2026-05-08 BGMAN | 2026-05-13 BGMAN | 2026-05-08 ENDMAN | 2026-05-13 ENDMAN | Boundary lost |
+|---|---|---|---|---|---|
+| NISSAN CUBE 2009 | `20081010` | `20081010` | `20100925` | (empty) | **LATE** (endman) |
+| NISSAN CUBE 2010 | `20081010` | (empty) | `20100925` | `20100925` | **EARLY** (bgman) |
+
+### The asymmetric-flip wrinkle
+
+Unlike H.4 (Mack) where multiple yeartxts lost the *same* fields with some yeartxts losing both (the H.5 multi-field blind spot), Nissan's pattern is cleanly **one field per yeartxt with opposite boundaries**:
+
+- 2009 CUBEs retained the early manufacturing boundary and lost the late one — meaning NHTSA's amendment effectively extends the recall *past* `20100925` to cover units of unknown end-date.
+- 2010 CUBEs retained the late manufacturing boundary and lost the early one — meaning NHTSA's amendment extends the recall *before* `20081010` to cover units of unknown start-date.
+
+The most parsimonious reading: NHTSA discovered the original date window was too narrow at *different* edges for different model years, and depopulated each model year's least-trusted boundary individually. Operationally a considered editorial decision, not a blanket overwrite. Same H1 class as Mack, different shape.
+
+### Classification — H1 high-confidence (pending TSV byte confirmation)
+
+Three converging signals support H1:
+
+1. **`diagnose_null_regression.sql` Q1** — `rows_in_path = 1` for every (10-tuple, path) cell across all 4 affected rows. Replacement, not additive. **H3 ruled out.**
+2. **Inner-content SHA changed** between archives — 2026-05-08 inner SHA `c955c37153d1cb1e` (65,732-record initial seed) → 2026-05-13 inner SHA `65c78969d64bddc4` (48-record amendment, the small daily delta). NHTSA genuinely republished different bytes, not a re-fetch artifact.
+3. **Pattern matches H.4 Mack** — same script trace, same direction (populated → NULL), same Takata-cascade-style amendment fingerprint on an old airbag-inflator recall.
+
+The Nissan case differs from Mack in that **H2 ruling-out has not yet been confirmed at the byte level**. The Mack triage included a TSV-byte inspection via `scripts/nhtsa/tsv_analysis/inspect_archive_row.py` against the 2026-05-09 archive (`BGMAN (raw): '' (len=0)` confirming literal empty cells in the inner TSV). The Nissan triage so far is **pattern-match only**.
+
+### TODO — TSV byte confirmation (deferred)
+
+To upgrade Nissan from "H1 high-confidence" to "H1 confirmed" — and rule out the edge case of a parser regression triggered only by the Nissan rows — run:
+
+```bash
+python -m scripts.nhtsa.tsv_analysis.inspect_archive_row \
+    --archive nhtsa/2026-05-13/09dcca74-21d2-4ba8-bb22-e2f108a4bf7b.zip.gz \
+    --campno 26V230000 \
+    --mfr_comp_ptno 98560-7991C
+```
+
+(Confirm the exact CLI flags against `scripts/nhtsa/tsv_analysis/inspect_archive_row.py --help` — the H.4 invocation was the precedent.)
+
+**Expected:** 2 rows returned (yeartxts 2009, 2010), with the depopulated cells showing `BGMAN (raw): ''` or `ENDMAN (raw): ''` per the table above. If instead the TSV bytes are populated and bronze is NULL, classification flips to **H2 (parser bug)** and warrants a follow-up — the asymmetric-flip pattern (different field per yeartxt) is unusual enough to be worth byte-level verification before classifying it definitively as upstream-driven.
+
+If H1 is confirmed, fold the result into this section (replace "H1 high-confidence" with "H1 confirmed" + the byte-evidence line).
+
+### Cumulative contribution and silver-grain context
+
+The 2 Nissan cases bring the 2026-05-13 11-tuple `real_drift` count to **11** (9 May-12 baseline + 2 new Nissan), still well within the `>0.01%/month` threshold from ADR 0031:84. Both Nissan cases live in `bgman`/`endman` (the batch-window fields), consistent with 100% of real_drift to date being in batch-window fields.
+
+This is the second data point feeding **ADR 0031's "Silver-grain migration evaluation" tracking subsection** (added 2026-05-13). The 9-tuple measurement on this same bronze corpus was `TOTAL = 0` real_drift — all 11 cases would collapse to zero fragmentation at the 9-tuple grain. Future tracking via monthly snapshots; see ADR 0031 for criteria.
+
 ---
 
 ## Methodology pointer

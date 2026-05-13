@@ -3,14 +3,24 @@
 -- involved and discriminates three hypotheses for why a previously-
 -- populated bgman/endman value became NULL in a later bronze row.
 --
--- Default target: Mack `26V261000` brake-modulator component
--- (`mfr_comp_ptno = '24710104'`, `mfr_comp_name = 'Modulator'`,
--- compname = `'SERVICE BRAKES, AIR:ANTILOCK:CONTROL UNIT/MODULE'`).
--- This is the cluster surfaced 2026-05-12 by
--- `decompose_eleven_tuple_drift.sql` as 4 of the 9 real_drift cases
--- against `assert_nhtsa_eleven_tuple_identity_stable.sql`. See
--- `documentation/nhtsa/incremental_delta_findings.md` (Re-baseline
--- 2026-05-12 section) for the framing.
+-- Default target: Nissan CUBE `26V230000` driver-airbag-inflator component
+-- (`mfr_comp_ptno = '98560-7991C'`,
+-- `mfr_comp_name = 'Driver Airbag Inflator'`,
+-- compname = `'AIR BAGS:FRONTAL:DRIVER SIDE:INFLATOR MODULE'`).
+-- This is the cluster surfaced 2026-05-13 by
+-- `decompose_eleven_tuple_drift.sql` as 2 of the 11 real_drift cases
+-- (the +2 delta vs. the 2026-05-12 baseline of 9). Spans two yeartxts:
+--   * yeartxt=2009 — endman drift `2010-09-25 → <NULL>`
+--   * yeartxt=2010 — bgman drift `2008-10-10 → <NULL>`
+-- Both share the same (campno, mfr_comp_ptno), so one diagnose run
+-- covers both 11-tuple drift groups.
+--
+-- Prior default (preserved for reference): Mack `26V261000`
+-- brake-modulator component (`mfr_comp_ptno = '24710104'`,
+-- `mfr_comp_name = 'Modulator'`, compname = `'SERVICE BRAKES,
+-- AIR:ANTILOCK:CONTROL UNIT/MODULE'`). Classified H1 (upstream
+-- depopulation) on 2026-05-12 — see `documentation/nhtsa/incremental_delta_findings.md`
+-- (Re-baseline 2026-05-12 section) and the 2026-05-13 confirmation run.
 --
 -- To adapt to a different NULL-regression cluster, edit the two
 -- `\set` lines below: `campno` selects the recall campaign and
@@ -55,8 +65,8 @@
 \set ON_ERROR_STOP on
 \pset null '<NULL>'
 
-\set campno '26V261000'
-\set mfr_comp_ptno '24710104'
+\set campno '26V230000'
+\set mfr_comp_ptno '98560-7991C'
 
 \echo
 \echo '=== Q1: per-(10-tuple, raw_landing_path) row counts and bgman/endman value sets ==='

@@ -93,6 +93,59 @@ MPI directory refresh per Finding G's interpretation. The 6-year tail of
 distinct dates reflects when each currently-listed inactive establishment
 last appeared in the active directory before going inactive.
 
+### E.1 Finding G addendum (2026-05-13) — `latest_mpi_active_date` behaves as an upstream heartbeat
+
+Two weeks of routine extracts (May 1, 2, 6, 13) revealed that FSIS bumps
+`latest_mpi_active_date` on every Mon/Tues directory republish for ~all
+establishments, regardless of whether anything else about the record
+changed. This makes the field act as an **upstream heartbeat**, not a
+per-record activity timestamp.
+
+**Empirical fingerprint** (run `7fb70de2…` on 2026-05-13;
+`diagnose_rebaseline_column_diffs.sql`):
+
+```
+total_compared              = 7170
+latest_mpi_active_date_diff = 7170   ← 100% of compared records
+everything else             = 0 to 11 ← real edits (duns_number population, phone corrections, etc.)
+```
+
+`sample_old_vs_new_diff_columns.sql` confirms by eye: across May 1 / May 2 /
+May 6 / May 13 versions of the same `source_recall_id`, every other field
+stays constant or shows small isolated real edits, while
+`latest_mpi_active_date` (not in the sample SELECT but inferred from the
+diff fingerprint) moves on every wave.
+
+**Recurring wave pattern, observed in `extraction_runs`:**
+
+| Date | Extracted | Inserted | Notes |
+|---|---|---|---|
+| 2026-05-01 | 7,945 | 6,859 | Initial seed |
+| 2026-05-02 | 7,945 | 7,786 | Wave |
+| 2026-05-03–05 | ~7,945 | 0 | No-op re-fetches |
+| 2026-05-06 (Tue) | 7,956 | 7,176 | Wave |
+| 2026-05-07–12 | ~7,956 | 0 | No-op re-fetches |
+| 2026-05-13 (Tue) | 7,970 | 7,184 | Wave |
+
+Between waves: 0 inserts. On Mon/Tues republish days: ~90% of the corpus
+re-versions in a single batch. The ~10% delta from "100%" is records whose
+`latest_mpi_active_date` happened to stay constant for that wave (e.g.,
+establishments not refreshed in the latest cycle), not real-edit churn.
+
+**Decision** (ADR 0032): `latest_mpi_active_date` is added to
+`hash_exclude_fields` for the establishment `BronzeLoader`. The field
+remains stored in bronze (it's a real piece of FSIS data); only the hash
+input skips it, so its motion alone doesn't cause a re-version. Real edits
+to other fields (`duns_number` population, `phone` correction, etc.) still
+land normally — today's wave included ~5–15 such genuine edits mixed in
+with the 7,184 inserts.
+
+Post-fix validation criterion: next Mon/Tues republish should insert
+0–~50 rows, not 7,000+. If it still inserts hundreds-to-thousands, a
+secondary volatile field exists (candidates: `grant_date`, or
+array-element whitespace pollution in `activities`/`dbas` — observed
+between May 1 and May 2 in the sample, affecting ~5–7 records).
+
 ---
 
 ## F. JSONB array shapes — `activities` and `dbas`

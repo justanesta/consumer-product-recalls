@@ -27,6 +27,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0022 — FDA history endpoints empty; snapshot synthesis for all sources](0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) — supersedes ADR 0007's FDA-specific history path
 - [0026 — Lifecycle tracking via per-run snapshot-presence manifest](0026-lifecycle-tracking-snapshot-presence-manifest.md) — closes bronze's retraction gap; USDA-first, separate `extraction_run_identities` table
 - [0027 — Bronze keeps storage-forced transforms only; value-level normalization moves to silver](0027-bronze-storage-forced-transforms-only.md) — bronze hashes change iff the source changed
+- [0032 — USDA establishment `latest_mpi_active_date` hash exclusion (upstream heartbeat fields)](0032-usda-establishment-heartbeat-field-hash-exclusion.md) — third category of `hash_exclude_fields` use; suppresses weekly ~7k phantom re-versions
 
 ### Pipeline, extraction, and transformation
 
@@ -82,6 +83,9 @@ A new ADR is written when someone reading the code six months later would ask "w
 27. [Bronze keeps storage-forced transforms only; value-level normalization moves to silver](0027-bronze-storage-forced-transforms-only.md)
 28. [Backfill and historical re-extraction semantics](0028-backfill-historical-reextraction-semantics.md)
 29. [Application observability and alerting: v1 stance and upgrade triggers](0029-application-observability-and-alerting.md)
+30. [NHTSA bronze identity: composite tuple + within-batch dedup](0030-nhtsa-bronze-identity-composite-tuple-and-within-batch-dedup.md)
+31. [Silver-row fragmentation strategy: per-source surrogate keys, drift detection, reconciliation tiers](0031-silver-row-fragmentation-strategy.md)
+32. [USDA establishment `latest_mpi_active_date` hash exclusion (upstream heartbeat fields)](0032-usda-establishment-heartbeat-field-hash-exclusion.md)
 
 ---
 
@@ -89,7 +93,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 When adding a new ADR:
 
-1. Pick the next sequential number. **0024 and 0025 are reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). The next free numbers are 0030+.
+1. Pick the next sequential number. **0024 and 0025 are reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). The next free number is 0033.
 2. File name: `NNNN-kebab-case-title.md`.
 3. Use the standard template (see any existing ADR as a model).
 4. Add an entry under the appropriate topic above **and** in the numeric index.

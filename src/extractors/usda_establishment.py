@@ -311,6 +311,11 @@ class UsdaEstablishmentExtractor(RestApiExtractor[UsdaFsisEstablishment]):
             # establishment_id is the stable FSIS FK (Finding F) and never
             # has bilingual siblings or other composite components.
             identity_fields=("source_recall_id",),
+            # FSIS bumps latest_mpi_active_date on every Mon/Tues directory
+            # republish for ~all 7,945 establishments regardless of whether
+            # any other field changed (Finding G addendum; ADR 0032). Treating
+            # the column as content would version-bump ~7k bronze rows weekly.
+            hash_exclude_fields=frozenset({"latest_mpi_active_date"}),
         )
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
