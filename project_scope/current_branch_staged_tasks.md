@@ -98,3 +98,48 @@ Operational recommendations (in priority order, mention-only per project convent
   Names follow the pattern feature/<what-it-builds> — describes the artifact (model, ADR, layer), not the project phase. Good
    branch names answer "what's in this diff?" before you open it.
 
+Recommendation
+
+  A short-lived docs/findings-<date> branch off main, opened and merged within the investigation cycle.
+
+  Branch name pattern: docs/findings-2026-05-15 (or weekly: docs/findings-2026-05-w20)
+  Lifetime: Hours to a day or two
+  What it contains: New diagnostic SQL scripts, findings doc updates, small ADR amendments, small invariant tests
+    (accepted_values), silver hygiene fixes (trim()) — i.e., today's exact diff
+
+  Today's branch effectively WAS this kind of branch, just mis-named as feature/full-silver-gold. Going forward, name them
+  docs/-prefixed so the scope is obvious.
+
+  When an exception is warranted
+
+  Situation: Finding requires a schema migration, extractor change, or hash-exclude rule (today's ADR 0032 would qualify)
+  Branch instead: fix/<specific-thing> — e.g., fix/usda-establishment-hash-exclude-latest-mpi-active-date
+  ────────────────────────────────────────
+  Situation: Finding directly relates to source you're actively building (e.g., observing USCG bronze data while on
+    feature/uscg-bronze)
+  Branch instead: Inline on that branch — it's a within-scope discovery
+  ────────────────────────────────────────
+  Situation: Finding suggests a Phase 6 silver model design change
+  Branch instead: Inline on the relevant Phase 6 sub-branch when it exists; otherwise on docs/findings-<date> for now
+
+  Why not just put findings on feature/uscg-bronze (or whatever's active)?
+
+  Because findings about NHTSA or USDA aren't USCG-bronze work. Mixing them blurs the PR scope and makes the diff hard to
+  review. The docs/findings-<date> pattern keeps each PR a coherent unit.
+
+  Practical workflow
+
+  When a daily extract surfaces something interesting:
+  1. git checkout main && git pull
+  2. git checkout -b docs/findings-2026-05-22 (or whatever the date is)
+  3. Investigate, write scripts, update findings docs
+  4. Commit + push + PR + merge same/next day
+  5. git checkout feature/uscg-bronze && git rebase main to pick up the findings
+  
+  Findings branches stay tiny and ship fast; feature work branches stay focused and don't drift.
+
+  When findings could merge into the current work branch instead
+
+  If you're 90% done with feature/uscg-bronze and a small finding comes up that touches USCG specifically, just commit it on
+  that branch — branch-switching ceremony isn't worth it. The rule of thumb: does the finding's diff make sense in the work 
+  branch's PR description? If yes, inline. If no, separate branch.
