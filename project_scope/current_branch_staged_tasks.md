@@ -47,3 +47,54 @@ Operational recommendations (in priority order, mention-only per project convent
   - The dbt singular test at dbt/tests/source_assumptions/assert_usda_field_last_modified_date_advances_on_edit.sql will fire
    on the 1235 silent edits with severity=warn — expected behavior, but worth knowing it'll be noisy until Phase 6 lands the
   whitespace-normalization filter
+
+  1. Push feature/full-silver-gold to remote if it's not already
+  2. Open the PR to main with the title something like Phase 6 prep: findings, diagnostics, silver hygiene (bb4bc5e..245d073)
+  3. After merge: git checkout main && git pull && git branch -D feature/full-silver-gold && git push origin 
+  :feature/full-silver-gold
+  4. Then branch feature/uscg-bronze off main and start USCG work
+  5. Update ~/.claude/plans/phase-6-execution-plan.md if it has stale "4-source" references — that planning doc is now
+  slightly behind the new sequence
+
+  The "phase" lives in implementation_plan.md and ~/.claude/plans/phase-6-execution-plan.md as the planning artifact. The
+  code lands as a sequence of focused branches, each named for what it actually contains:
+
+  Likely branch: feature/uscg-bronze
+  Scope: The pre-Phase-6 work we just talked about
+  Rough order: 1
+  ────────────────────────────────────────
+  Likely branch: feature/scd-strategy-adr
+  Scope: File the SCD-2 ADR per today's Phase 6 deliverable; design-only, small
+  Rough order: 2
+  ────────────────────────────────────────
+  Likely branch: feature/silver-multi-source-staging
+  Scope: Extend existing CPSC/FDA staging+silver to UNION ALL USDA + NHTSA + USCG; update accepted_values test for 5-source
+  Rough order: 3
+  ────────────────────────────────────────
+  Likely branch: feature/recall-event-history
+  Scope: The ADR 0022 LAG()-based history model + the per-field whitespace-normalization we filed today
+  Rough order: 4
+  ────────────────────────────────────────
+  Likely branch: feature/recall-lifecycle
+  Scope: ADR 0026 silver-side: first_seen_at, last_seen_at, is_currently_active, etc. Bundles with extraction_run_identities
+    Alembic migration since they're the same ADR
+  Rough order: 5
+  ────────────────────────────────────────
+  Likely branch: feature/firm-resolution
+  Scope: FDA firmfeinum anchor + RapidFuzz cross-source matching
+  Rough order: 6
+  ────────────────────────────────────────
+  Likely branch: feature/gold-aggregates
+  Scope: Dashboards + denormalized search index
+  Rough order: 7
+  ────────────────────────────────────────
+  Likely branch: feature/silver-gold-erd
+  Scope: The column-level ERD documentation deliverable
+  Rough order: 8 (or interleaved)
+
+  Each is one PR. Each PR title matches the branch name. Each merge deletes the branch. git log reads as a sequence of Phase
+  6 deliverables, not as "phase 6 mega-merge".
+
+  Names follow the pattern feature/<what-it-builds> — describes the artifact (model, ADR, layer), not the project phase. Good
+   branch names answer "what's in this diff?" before you open it.
+
