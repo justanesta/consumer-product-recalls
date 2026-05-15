@@ -471,7 +471,84 @@ If H1 is confirmed, fold the result into this section (replace "H1 high-confiden
 
 The 2 Nissan cases bring the 2026-05-13 11-tuple `real_drift` count to **11** (9 May-12 baseline + 2 new Nissan), still well within the `>0.01%/month` threshold from ADR 0031:84. Both Nissan cases live in `bgman`/`endman` (the batch-window fields), consistent with 100% of real_drift to date being in batch-window fields.
 
-This is the second data point feeding **ADR 0031's "Silver-grain migration evaluation" tracking subsection** (added 2026-05-13). The 9-tuple measurement on this same bronze corpus was `TOTAL = 0` real_drift — all 11 cases would collapse to zero fragmentation at the 9-tuple grain. Future tracking via monthly snapshots; see ADR 0031 for criteria.
+This is the second data point feeding **ADR 0031's "Silver-grain migration evaluation" tracking subsection** (added 2026-05-13). The 9-tuple measurement on this same bronze corpus was `TOTAL = 0` real_drift — all 11 cases would collapse to zero fragmentation at the 9-tuple grain. Future tracking via daily snapshots (cadence revised 2026-05-15 from monthly to daily); see ADR 0031 for criteria.
+
+## J. 2026-05-15 — daily-delta sample (healthy weekly amendment baseline)
+
+Third tracking-snapshot day. 111 rows inserted out of 72,622 extracted, run_id `955e2e8d-5fd6-44d1-b120-83f526ba9315`. Cleanest baseline observed so far: no new identity-drift clusters, no NULL-regression events, no phantom-edit churn — and a single dominant real-world recall driving 74% of the wave.
+
+### J.1 Wave shape
+
+| Metric | Value |
+|---|---|
+| Rows inserted | 111 |
+| Net_new 11-tuples | 9 (8.1%) |
+| Amendments (existing 11-tuple, content_hash differs) | 102 (91.9%) |
+| RCDATE span | 2025-10-10 to 2026-05-07 |
+| Null RCDATE | 0 |
+
+The 91.9% amendment / 8.1% net_new split sits between Section B's 2026-05-08 ratio (69% / 31%) and Section H.6's 2026-05-12 ratio (10% / 90%). Reaffirms H.6's note that "the net_new/amendment split is **not a stable feature** — daily samples should not be calibrated against it."
+
+### J.2 Driver-field breakdown
+
+Per `explore_incremental_delta.sql` Q3:
+
+| field | amendments where field changed | rate | notes |
+|---|---|---|---|
+| `source_recall_id` | 102 | 100% | Hash-excluded per Section C — confirms NHTSA's RECORD_ID instability at scale, doesn't drive re-versioning |
+| `corrective_action` | 90 | 88% | **Primary driver.** Remedy expansions + lifecycle progression (interim → owner-notification) |
+| `odate` | 20 | 20% | Owner Notification Date progression |
+
+Math check: 90 + 20 = 110, with 102 amendments → 8 amendments changed both, 82 only corrective_action, 12 only odate. **Zero phantom edits.**
+
+Notable lifecycle events visible in Q4 samples:
+
+- **Ford 25V685000** (Lincoln MKC + Explorer + Fusion + Ranger + Lincoln Corsair + Escape + Bronco + Bronco Sport + Maverick engine-block-heater recall): `corrective_action` change adds an alternative remedy option — *"Owners will also have a[n] alternative option to replace engine block heater element with a threaded blanking plug, and remove the block heater electrical cord."* A real remedy expansion, semantically meaningful for downstream consumers.
+- **Chrysler 25V766000** (Jeep Grand Cherokee 4XE + Wrangler 4XE engine recall): `corrective_action` change reflects lifecycle stage progression from "Interim notification letters mailed December 29, 2025" → "Owner notification letters were mailed beginning May 7, 2026." The recall advanced from interim-notice stage to owner-notification stage.
+
+### J.3 Burst distribution — Ford 25V685000 dominates
+
+| dimension | top value | share |
+|---|---|---|
+| `mfgname` | Ford Motor Company | 82 / 111 = **73.9%** |
+| `compname` | `EQUIPMENT:ELECTRICAL:ENGINE BLOCK HEATER` | 82 / 111 = **73.9%** |
+| Secondary `mfgname` | General Motors, LLC | 12 / 111 = 10.8% |
+| Tertiary `mfgname` | Chrysler (FCA US, LLC) | 8 / 111 = 7.2% |
+
+Ford and ENGINE BLOCK HEATER counts are identical (82 each) because all 82 Ford rows belong to recall `25V685000`, a major multi-make multi-year engine-block-heater recall. Reaffirms Section F's burstiness conclusion: single days can be dominated by a single recall campaign's amendment.
+
+### J.4 Identity-stability assertion — no new drift
+
+Per `decompose_eleven_tuple_drift.sql` and `decompose_nine_tuple_drift.sql` against full bronze (~72.7k rows):
+
+| Grain | structural_multi_batch | real_drift | total | Δ vs 2026-05-13 |
+|---|---|---|---|---|
+| 11-tuple | 137 | **11** | 148 | +44 structural (Ford ptno variants), real_drift unchanged |
+| 9-tuple | 139 | **0** | 139 | +42 structural, real_drift unchanged |
+
+**All 11 real_drift cases match the prior documented clusters one-for-one** (Q2 samples verified against H.3 / H.4 / Section I):
+
+- Western Star 26V079000 battery stud: 1 endman case
+- Nissan CUBE 26V230000: 1 endman (2009) + 1 bgman (2010) = 2 cases
+- Mack 26V261000 brake-modulator: 4 cases (2 endman visible in Q2, 2 bgman beyond the limit-5)
+- Chrysler Pacifica 26V189000 airbag: 4 bgman cases
+
+**No new H1/H3 NULL-regression clusters surfaced.** The 11-tuple real_drift count holds steady at 11 across 3 consecutive observation days (5/12: 9, 5/13: 11, 5/15: 11).
+
+### J.5 Ford 25V685000 mfr_comp_ptno structural-multi-batch contribution
+
+The +42 structural_multi_batch increase on `mfr_comp_ptno` (95 → 137 at 11-tuple grain) is dominantly attributable to today's 82-row Ford wave. Q2 samples (`decompose_eleven_tuple_drift.sql` does NOT show samples for structural_multi_batch — those are silent — but `assert_eleven_tuple_identity_stable.sql` Q2 does) show the canonical pattern: same vehicle, same component, two part-number variants both appearing in every archive's per-path value set:
+
+- Ford Bronco 2021 / EQUIPMENT:ELECTRICAL:ENGINE BLOCK HEATER: `GJ7T-6A051-AA` + `GJ7T-6A051-BA`
+- Nissan LEAF 2019/2020 / ELECTRICAL SYSTEM:PROPULSION SYSTEM: `295B0 5SA1C` + `295B0 5SF0A`
+
+Both pairs are textbook supersession patterns — supplier published a revised part number suffix and NHTSA's amended archive lists both as in-scope. Silver's `(11-tuple → max(extraction_timestamp))` lookup materializes both correctly. Identical structural pattern to the Ferrari `12Cilindri` case reclassified in H.2.
+
+### J.6 Third data point feeding the ADR 0031 silver-grain migration evaluation
+
+This is the **third consecutive observation day** in the ADR 0031:160 tracking table (2026-05-12, 2026-05-13, 2026-05-15) and the **second consecutive day with 9-tuple real_drift = 0**. Per the revised cadence (daily snapshots, decision after ≥14 consecutive clean snapshots per ADR 0031 Go-Criterion #1), this is the third row of an expected ~14-21 row evaluation window.
+
+The picture remains coherent: **every observed real_drift case lives in batch-window fields** (`bgman`/`endman`). At the 9-tuple grain those collapse away entirely, validating the hypothesis that `md5(9-tuple)` would yield zero silver fragmentation for the patterns we currently see.
 
 ---
 

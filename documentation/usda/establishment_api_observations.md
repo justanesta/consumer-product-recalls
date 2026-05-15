@@ -281,6 +281,39 @@ In effect: "When was this establishment last confirmed as active in the MPI dire
   stopped being active regulated establishments — useful context for recall enrichment (a 2023 recall
   against an establishment with `LatestMPIActiveDate="2023-08-21"` was likely active at time of recall).
 
+### Finding G addendum (2026-05-15) — `status_regulated_est` flips are publication-window-independent
+
+Observed empirically after the ADR 0032 hash-exclude rebaseline wave on 2026-05-15
+(`scripts/sql/usda_establishments/bronze/list_status_flips.sql`, run_id
+`3d01263e-25ef-4e9f-8cc8-1e35c263aad9`). The diagnostic surfaced 13 `status_regulated_est` flips
+between the prior bronze versions and today's run — all `'' → 'Inactive'`, none in the reverse
+direction, none with a third value (the two-value enum invariant holds).
+
+Two empirical findings:
+
+1. **`status_regulated_est` changes are not gated on the Mon/Tues `LatestMPIActiveDate` heartbeat.**
+   The most recent extraction prior to 2026-05-15 was 2026-05-13 21:41 UTC — there was no
+   Mon/Tues republish between those two runs (the next Mon/Tues window after 5/13 is
+   5/18–5/19), yet 13 establishments transitioned from active to Inactive. FSIS publishes
+   regulatory-status changes outside the LMAD weekly refresh cadence. This is a separate
+   publication channel from the one described in Finding G.
+
+2. **All 13 flipped establishments look like real FSIS-regulated entities going inactive.**
+   Recognizable examples: The Hillshire Brands Company (Pottsville PA, `V34526`), United States
+   Cold Storage (Laredo TX, `V17130`), Rudolph Foods (Henderson NC, `M21288` and `M21288A` —
+   multi-program plant closing as a unit). Geographic distribution spans 10 states/territories
+   with no concentration; the wave is consistent with normal industry churn (~5% annualized
+   closure rate). All establishments had been dormant in bronze for 9–13 days (last seen active
+   on 5/2 or 5/6) before flipping on 5/15.
+
+**Downstream implication:** silver `firm_establishment_attributes` is materialized as `table`
+and re-runs on every `dbt build`, so the 13 establishments will appear with their new
+`'Inactive'` status after the next transform with **no history preserved in silver**. The
+`accepted_values: ['', 'Inactive']` test added to `dbt/models/silver/_silver.yml`
+(2026-05-15) catches a future third-value surprise but does not address the as-of-date
+question. Cross-source dim SCD-2 strategy is the right home for that — tracked as a Phase 6
+deliverable in `project_scope/implementation_plan.md`.
+
 ---
 
 ## Extraction Strategy

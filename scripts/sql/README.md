@@ -90,6 +90,9 @@ without manual demarcation.
 |---|---|---|
 | `usda_recalls/bronze/explore_usda_bronze.sql` | First-extraction shape probe | `documentation/usda/first_extraction_findings.md` |
 | `usda_recalls/bronze/verify_usda_first_extraction.sql` | Post-extraction verification queries | same |
+| `usda_recalls/bronze/probe_recall_id_storage.sql` | Confirm source_recall_id storage shape (leading/trailing whitespace contamination); brackets-wrapped values + length + corpus-wide whitespace summary | — |
+| `usda_recalls/bronze/diagnose_wave_field_drivers.sql` | For a given run, count which JSONB fields actually differ between new and prior bronze versions across ALL re-versioned rows. Authoritative answer to "is this wave driven by one field?" | — |
+| `usda_recalls/bronze/classify_field_diffs_whitespace.sql` | Reusable. For a given run + JSONB field, classify each diff as whitespace_only vs real_content_change vs null_transition. Empirical justification for any hash-exclude proposal (ADR-0032-analog). Parameterized via -v run_id and -v field | — |
 
 ### USDA establishments
 
@@ -98,6 +101,7 @@ without manual demarcation.
 | `usda_establishments/bronze/explore_bronze_shape.sql` | 8-query batch: cardinality, status enum exhaustiveness, per-field nullability, false-sentinel-as-text observations, JSONB array shapes, `latest_mpi_active_date` Finding G verification, state distribution, re-version pattern | `documentation/usda/establishment_first_extraction_findings.md` |
 | `usda_establishments/bronze/explore_rejected_failures.sql` | Diagnose `usda_fsis_establishments_rejected` after a failed extraction; Pydantic ValidationError prefix histogram, sample raw_record, schema-field mention counts | (used standalone during Phase 5b.2 first extraction) |
 | `usda_establishments/bronze/probe_recall_join_coverage.sql` | 6-query batch measuring recall→establishment join coverage; name-only and DBA-fallback rates, per-distinct-name and per-record match counts, sample of unmatched names, multi-hit popularity | `documentation/usda/establishment_join_coverage.md` |
+| `usda_establishments/bronze/list_status_flips.sql` | Enumerate establishments whose `status_regulated_est` changed in a given run (active ↔ Inactive); direction summary, per-establishment detail, geographic distribution. Phase 6 firm-resolution test-case generator | — |
 
 ### NHTSA, USCG, cross_source
 

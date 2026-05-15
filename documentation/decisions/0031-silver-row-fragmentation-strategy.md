@@ -1,6 +1,6 @@
 # 0031 — Silver-row fragmentation strategy: per-source surrogate keys, drift detection, and reconciliation tiers
 
-- **Status:** Accepted (amended 2026-05-12 — Tier 2 per-path-value-set refactor; amended 2026-05-13 — silver-grain migration evaluation tracking added)
+- **Status:** Accepted (amended 2026-05-12 — Tier 2 per-path-value-set refactor; amended 2026-05-13 — silver-grain migration evaluation tracking added; amended 2026-05-15 — tracking cadence revised from monthly/6-month-window to daily/few-week-window)
 - **Date:** 2026-05-08
 - **Supersedes:** —
 - **Superseded by:** —
@@ -145,9 +145,9 @@ Effect on the baseline:
 
 The threshold itself (>0.01% silver row count fragmented per month, OR systematic drift on a previously-stable field) is unchanged — the refactor cleaned up how the numerator is measured, not what's acceptable.
 
-### Silver-grain migration evaluation (ongoing, started 2026-05-13)
+### Silver-grain migration evaluation (ongoing, started 2026-05-13; cadence revised 2026-05-15)
 
-***THIS SHOULDN'T BE MONTHLY, BUT RATHER WITH ~DAILY DATA UPDATES. GO CRITERIA WILL BE MET AFTER A FEW WEEKS***
+**Cadence:** daily snapshots aligned with the daily extractor cron. Earlier draft of this section assumed monthly cadence and a 6-month evaluation window — revised 2026-05-15 to match the project's actual data refresh rate. With NHTSA running daily and the 9-tuple measurement taking <1s to compute, a decision can be reached in a few weeks of clean snapshots rather than half a year.
 
 #### Premise
 
@@ -161,8 +161,9 @@ This subsection tracks that evidence as it accumulates, with the goal of produci
 |---|---|---|---|---|
 | 2026-05-12 | ~250k bronze rows | 9 | not measured (script pre-refactor) | Tier 2 dbt test refactored to per-path-value-set; 95 structural / 9 real |
 | 2026-05-13 | ~72k bronze rows | 11 (9 baseline + 2 new) | **0** | First measurement with the refactored 9-tuple assertion. New H1 cluster (Nissan CUBE `26V230000` driver-airbag-inflator) confirmed via `diagnose_null_regression.sql`; same H1 pattern as the prior Mack `26V261000`. All 11-tuple real_drift cases live in `bgman`/`endman` — i.e., would collapse to 0 at the 9-tuple grain. |
+| 2026-05-15 | ~72.7k bronze rows | 11 (unchanged) | **0** (second consecutive) | Second consecutive 9-tuple = 0. Daily NHTSA wave inserted 111 rows (102 amendments + 9 net_new); Ford `25V685000` engine-block-heater wave (82 rows) brought ~42 new `mfr_comp_ptno` structural_multi_batch groups (137 vs prior 95) — all converged in every archive's per-path value set. All 11 real_drift cases match prior documented clusters one-for-one (Western Star 1, Nissan CUBE 2, Mack 4, Chrysler Pacifica 4). No new H1/H3 NULL-regression clusters surfaced. See Section J of `documentation/nhtsa/incremental_delta_findings.md`. |
 
-Future snapshots: append a row monthly, taken from `decompose_eleven_tuple_drift.sql` (11-tuple) and the refactored `assert_nine_tuple_identity_stable.sql` (9-tuple). The 9-tuple number is the load-bearing one — any non-zero value invalidates the migration thesis.
+Future snapshots: append a row daily, taken from `decompose_eleven_tuple_drift.sql` (11-tuple) and the refactored `assert_nine_tuple_identity_stable.sql` (9-tuple). The 9-tuple number is the load-bearing one — any non-zero value invalidates the migration thesis. Aim for ≥14 consecutive clean daily snapshots (≈2 weeks) before treating the 9-tuple stability as a property rather than an observation.
 
 #### Pros of migrating to `md5(9-tuple)` + child/SCD for bgman/endman
 
@@ -174,7 +175,7 @@ Future snapshots: append a row monthly, taken from `decompose_eleven_tuple_drift
 
 #### Cons / risks of migration
 
-1. **One data point is not durability.** A single 9-tuple drift event in the future (e.g., NHTSA normalizing a `maketxt` value like the `'AC DELCO' → 'ACDELCO'` case at TSV grain on 2026-05-08, or a `mfr_comp_desc` rewrite) would invalidate `md5(9-tuple)` as a stable canonical key. The cross-corpus rate observed via `scripts/nhtsa/tsv_analysis/cross_corpus_stability.py` is non-zero (≈1 event in a year-of-archives sample on the TSV substrate, not yet seen on the bronze substrate). A 6-month monthly tracking window is needed before treating "stable" as a property rather than an observation.
+1. **A short streak of clean snapshots is not durability.** A single 9-tuple drift event in the future (e.g., NHTSA normalizing a `maketxt` value like the `'AC DELCO' → 'ACDELCO'` case at TSV grain on 2026-05-08, or a `mfr_comp_desc` rewrite) would invalidate `md5(9-tuple)` as a stable canonical key. The cross-corpus rate observed via `scripts/nhtsa/tsv_analysis/cross_corpus_stability.py` is non-zero (≈1 event in a year-of-archives sample on the TSV substrate, not yet seen on the bronze substrate). At daily cadence, ≥14 consecutive clean snapshots (~2 weeks) is the minimum window before treating "stable" as a property rather than an observation; longer is better, especially if any of that window overlaps a known NHTSA bulk-republish event.
 2. **Loss of batch-window grain in silver's primary surface.** Currently a downstream consumer can query `recall_product` and get one row per (vehicle × component × batch). Post-migration, batch-window data lives in a child table or as Type-1 columns on the parent — every query that needs batch info gains a join or accepts that pre-amendment batch values are no longer in silver.
 3. **Migration cost is non-trivial.** Existing silver materializations rebuild. Any downstream consumer keyed on the current `md5(11-tuple)` `recall_product_id` (none yet — pre-Phase-8 — but the Phase 6 `recall_event_history` model is in flight) re-keys. The cost grows the longer we wait.
 4. **The fragmentation cost is currently below the action threshold.** 11/72k = 0.015% as a snapshot; per-month rate over 7 days extrapolates to ~12 events/month, well under the `>0.01%/month` trigger from the Negative consequences section. Migration is a quality-of-design improvement, not an operational fix for a live problem.
@@ -185,17 +186,17 @@ Future snapshots: append a row monthly, taken from `decompose_eleven_tuple_drift
 
 Migration should be considered when **any** of the following hold:
 
-1. **Empirical durability.** 9-tuple `real_drift = 0` across **≥6 monthly snapshots** (i.e., 6 months of clean assertion runs), AND no cross-corpus drift event on a 9-tuple field surfaces in `scripts/nhtsa/tsv_analysis/cross_corpus_stability.py` over the same period.
+1. **Empirical durability.** 9-tuple `real_drift = 0` across **≥14 consecutive daily snapshots** (≈2 weeks of clean assertion runs), AND no cross-corpus drift event on a 9-tuple field surfaces in `scripts/nhtsa/tsv_analysis/cross_corpus_stability.py` over the same period. ≥21 daily snapshots (≈3 weeks) is the recommended threshold before a migration PR; the lower 14-day bar is the earliest point at which a migration could be defensibly justified if other criteria also hold.
 2. **Operational forcing function.** 11-tuple fragmentation rate exceeds **0.01% per month over a ≥30-day window** (the existing Phase 6 trigger from the per-source table). The migration becomes the natural remediation.
 3. **Stakeholder pull.** A downstream consumer (Phase 8 API, future BI surface, the `recall_event_history` model design) explicitly requests vehicle × component grain as the silver primary key, with batch-window data acceptable as a join or Type-1 SCD column.
 
-If **none** of the above holds after 12 months of tracking, the v1 `md5(11-tuple)` decision stands and the tracking section sunsets.
+If **none** of the above holds after ~6 weeks of daily tracking (~42 daily snapshots), the v1 `md5(11-tuple)` decision stands and the tracking section sunsets. 6 weeks is the upper bound; if Go criterion #2 (operational forcing function) or #3 (stakeholder pull) is going to fire it will likely fire earlier, and if 9-tuple has stayed clean for 42 consecutive days the durability claim is well-supported.
 
 #### Stop criteria — conditions that would invalidate the migration thesis
 
 Migration is **off the table** (and this tracking section sunsets) if:
 
-1. **Any monthly snapshot surfaces non-zero 9-tuple real_drift** that is not explained by a one-off TSV regeneration artifact. The 9-tuple's value-add is its stability; lose stability and the migration's rationale collapses.
+1. **Any daily snapshot surfaces non-zero 9-tuple real_drift** that is not explained by a one-off TSV regeneration artifact. The 9-tuple's value-add is its stability; lose stability and the migration's rationale collapses. (At daily cadence one non-zero day doesn't sunset the section automatically — investigate the cause via `decompose_nine_tuple_drift.sql`'s Q2 samples first; a transient artifact may rejoin the clean streak. But two or more such events within a tracking window argue the field is genuinely drift-prone.)
 2. **A 9-tuple field flips to "drift-prone"** via cross-corpus analysis (e.g., NHTSA starts routinely normalizing `mfr_comp_desc` or `mfr_comp_name`). Same logic as 1.
 
 #### Implementation sketch (deferred, but noted)
