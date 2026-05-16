@@ -641,6 +641,69 @@ The Pierce event brings the 2026-05-15 11-tuple `real_drift` count to **107** (J
 
 Cumulative real_drift rate: 107 / ~250k = 0.043% on the 11-tuple (vs. ADR 0031:84's prior 0.0036%). 11-fold increase from a single editorial event. ADR 0031:84's ">0.01% silver row count fragmented per month" threshold is materially exceeded depending on how the campaign-burst is weighted — one campaign with 96 events is structurally different from 96 campaigns with 1 event each, and ADR 0031 will likely need to revise the threshold definition to account for this in a future amendment.
 
+## L. 2026-05-16 — first post-Pierce daily snapshot (real_drift stable, structural wave continues)
+
+Fourth tracking-snapshot day, first daily observation following K's editorial event. 259 rows inserted out of 72,658 extracted, run_id `e6d0753f-0771-4333-baac-492d25d0ec8b`. Still under the `--since=2023-12-01` dev-mode RCDATE filter — bronze remains date-bounded.
+
+### L.1 Identity-stability assertion — real_drift bit-identical to K, structural wave continues
+
+| Grain | structural_multi_batch | real_drift | total | Δ vs 2026-05-15 K |
+|---|---|---|---|---|
+| 11-tuple | 194 | **107** | 301 | +57 structural `mfr_comp_ptno`, real_drift unchanged |
+
+### L.2 Real_drift composition matches K one-for-one
+
+Every per-field count and every Q2 sample row matches K's post-event state:
+
+- `mfr_comp_desc` = 96 (Pierce ARROW XT family 26V217000 4×12×2 grid — Q2 samples show the `'' || Software'` per-path value sets)
+- `bgman` = 7 (Chrysler Pacifica 26V189000 ×4 airbag-ptno variants + Nissan CUBE 26V230000 ×1 + Mack 26V261000 ×2)
+- `endman` = 4 (Western Star 26V079000 ×1 + Nissan CUBE 26V230000 ×1 + Mack 26V261000 ×2)
+
+**No new editorial bursts followed K within one day.** This is one negative data point against K being the start of a cluster, not yet a "stable" claim. The field-population class warrants several more daily snapshots before it can be reclassified one-off vs behavior-change.
+
+### L.3 Structural `mfr_comp_ptno` +57 delta
+
+Structural `mfr_comp_ptno` grew 137 → 194 (+57 groups) while real_drift held at 0 for that field. Same shape J.5 anticipated (legit supersession multi-batch, silver-correct, suppressed at the assertion layer). The 259-row wave is the largest in this branch's daily series so far (J=111, K=120, L=259), so a +57 structural increment is consistent with routine amendment activity — but worth attributing to confirm.
+
+New script `scripts/sql/nhtsa/bronze/attribute_structural_drift_by_campno.sql` aggregates structural `mfr_comp_ptno` groups by campno (with maketxt / compname / RCDATE identification baked into the same query). Expected top contributor: Ford 25V685000 engine-block-heater wave (J.5). If a previously-unseen campno appears with non-trivial group count, it merits a brief L.4 follow-up.
+
+### L.4 Structural attribution: L.3 expectation falsified, recall composition broader than predicted
+
+Running `attribute_structural_drift_by_campno.sql` against the 194 structural `mfr_comp_ptno` groups:
+
+| campno | n_groups | makes | sample compname | RCDATE | n_rows |
+|---|---|---|---|---|---|
+| 26V281000 | **61** | Mercedes-Benz, Mercedes-Maybach | ELECTRICAL SYSTEM: INSTRUMENT CLUSTER/PANEL | 2026-05-01 | 244 |
+| 26V191000 | **53** | Van Hool | VISIBILITY:GLASS, SIDE/REAR | 2026-03-26 | 318 |
+| 25V685000 | 36 | Ford, Lincoln | EQUIPMENT:ELECTRICAL:ENGINE BLOCK HEATER (J.5) | 2025-10-10 | 144 |
+| 26V189000 | 18 | Chrysler | AIR BAGS:SIDE/WINDOW:CURTAIN | 2026-03-26 | 80 |
+| 26V012000 | 5 | Ford | EQUIPMENT:ELECTRICAL:ENGINE BLOCK HEATER | 2026-01-15 | 20 |
+| 24V700000 | 4 | Nissan | LEAF propulsion (2 compnames) | 2024-09-19 → 2024-11-14 | 24 |
+| 25V756000 | 4 | Mack | EXTERIOR LIGHTING:HEADLIGHTS | 2025-11-03 | 24 |
+| 26V160000 | 4 | Hyundai | SEATS:MID/REAR ASSEMBLY:POWER ADJUST | 2026-03-17 | 30 |
+| 26V228000 | 4 | Thomas Built Buses | EXTERIOR LIGHTING:HAZARD FLASHING WARNING LIGHTS | 2026-04-09 | 16 |
+| 26V152000 | 2 | Ferrari | VISIBILITY:GLASS, SIDE/REAR (H.2) | 2026-03-16 | 12 |
+| 26V278000 | 2 | Mercedes-Benz | SEAT BELTS:FRONT:RETRACTOR | 2026-05-01 | 16 |
+| 26E021000 | 1 | MOPAR | ENGINE | 2026-04-16 | 4 |
+| **TOTAL** | **194** | | | | |
+
+**L.3's "Ford 25V685000 is the expected top contributor" claim is materially wrong.** Ford is #3 (36 groups, 19% of structural total). The top two — Mercedes 26V281000 (61, 31%) and Van Hool 26V191000 (53, 27%) — together contribute 59% and were undocumented in J.5 or earlier.
+
+Structural observations:
+
+- **Three of the top four campnos have 2026 RCDATEs** (26V281000 on 2026-05-01, 26V191000 on 2026-03-26, 26V189000 on 2026-03-26). Multi-batch is not exclusively an aging-amendment phenomenon — recent recalls are being published multi-batch from the start. Reframes J.5's "Ford supersession wave" as one shape among several rather than the canonical case. The structural pattern's underlying mechanism is supplier supersession at publication time, and that can happen on day-1 just as readily as months in.
+- **26V189000 contributes to two drift classes simultaneously.** The Chrysler Pacifica recall appears here with 18 structural `mfr_comp_ptno` groups AND in L.2's real_drift `bgman` cluster (4 cases) — same recall, independent identity facets. H.3's narrative on Pacifica focused on the bgman boundary edit; the ptno-multiplicity component was not flagged. Worth noting as a precedent: a single recall can land in both structural and real_drift columns of the decomposition without any contradiction.
+- **26V278000 (Mercedes seat belts) has `avg_distinct_ptnos_per_group = 4.0`**, double the corpus norm of 2.0. Could be a 4-variant supplier-line shape (e.g., left/right × front-row × two suppliers) rather than the typical 2-variant supersession pair. n=2 groups so far — worth monitoring in future snapshots.
+- **Manufacturer diversity is broad** — Mercedes (twice), Van Hool, Ford (twice), Chrysler, Nissan, Mack, Hyundai, Thomas Built, Ferrari, MOPAR. No single OEM dominates the way Ford did in J.5's 82-row engine-block-heater wave. Van Hool's appearance is notable — a Belgian bus manufacturer with low US fleet count but apparently amendment-active enough to contribute 53 structural groups (318 bronze rows on a single side-glass recall).
+
+**+57 attribution remains underdetermined.** Without a 2026-05-15 snapshot of this same script, the day-over-day delta can't be pinned to a specific campno. The most plausible RCDATE-recency candidates are the two Mercedes recalls (both 2026-05-01) freshly crossing the multi-batch threshold today — but partial growth on any of the existing campnos is equally consistent with +57. **Operational recommendation:** add this script to the daily-snapshot reflex (run after `decompose_eleven_tuple_drift.sql`) so future per-campno deltas are mechanical.
+
+No drift-class change: every campno's `avg_distinct_ptnos_per_group ∈ [2.0, 4.0]` and `max_landing_paths_per_group ∈ {2, 3}` — same silver-correct supplier-supersession shape across the board. ADR 0031 implication (next section) is unchanged.
+
+### L.5 ADR 0031 implication
+
+The migration-tracking subsection sunset in K — this snapshot doesn't reopen it. No ADR 0031 amendment warranted from today's results; post-K monitoring continues in this file via further Section-L-style daily rows if a subsequent snapshot adds anything novel.
+
 ---
 
 ## Methodology pointer
