@@ -177,9 +177,102 @@ I also need more thinking, context, and information on this: "Does Phase 6 recon
 
   It seems various 11-tuple key fields get updated at random cadences and depths in the NHTSA data. What are ways we can track updates and changes so that 1. We are always serving the most current information to users/consumers and 2. We are keeping a proper log/audit of changes in relevant fields. Does this relate to slowly changing dimenions (SCD). How is this issue presenting with the other sources and how are we handling it? Are there tools in dbt or something else that provide a more robust industry standard way of handling this phenomenon? 
 
-
+Look into these work steps:
   - Per-day drift-spike dbt assertion (2d from earlier analysis) — would have caught this in real time; worth considering
   when the dbt assertion suite gets revisited.
   - Optional ADR 0033 for the real_drift taxonomy — not yet created. The taxonomy is now informally documented across
   incremental_delta_findings.md Sections H/I/K and the ADR 0031 Re-baseline subsection. If you want a single canonical
   ADR-weight document for it, that's a separate piece of work.
+
+
+  ┌─────────────────┬──────────────────────────────────────────────┬───────────────────────────┬────────────────────────┐
+  │      Layer      │               What you produce               │  What it commits you to   │     Reversibility      │
+  ├─────────────────┼──────────────────────────────────────────────┼───────────────────────────┼────────────────────────┤
+  │ 1 — SCD framing │ An ADR (0033) framing fragmentation as an    │ Nothing operationally.    │ Fully reversible —     │
+  │  documentation  │ SCD problem; documents the proposed v1.5     │ Just shared conceptual    │ it's just words        │
+  │                 │ architecture as design intent                │ ground.                   │                        │
+  ├─────────────────┼──────────────────────────────────────────────┼───────────────────────────┼────────────────────────┤
+  │                 │ nhtsa_recall_product_snapshot +              │ Maintaining the snapshot  │ Reversible — drop the  │
+  │ 2 — Parallel    │ silver/recall_product_v15 +                  │ table (small ongoing      │ parallel models, no    │
+  │ v1.5 prototype  │ silver/recall_product_history running        │ cost; backups, schema     │ consumer impact        │
+  │                 │ alongside existing v1 silver                 │ migration awareness)      │                        │
+  ├─────────────────┼──────────────────────────────────────────────┼───────────────────────────┼────────────────────────┤
+  │                 │                                              │ Real schema/key changes.  │ Hard to reverse — once │
+  │ 3 — Migration   │ Replace silver/recall_product with the v1.5  │ Downstream queries keyed  │  consumers re-key,     │
+  │                 │ mechanism; update consumers                  │ on old md5(11-tuple)      │ going back means       │
+  │                 │                                              │ break.                    │ re-keying again        │
+  └─────────────────┴──────────────────────────────────────────────┴───────────────────────────┴────────────────────────┘
+
+
+  Trade-offs and risks
+
+  ┌────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────┐
+  │                            Pro                             │                           Con                           │
+  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+  │ Eliminates Pierce-class fragmentation (96 rows saved per   │ AC DELCO-class normalization still fragments at 6-tuple │
+  │ such event)                                                │  grain — not drift-immune, just much less drift-prone   │
+  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+  │ Cleaner consumer-facing semantics (1 row per logical       │ Migration cost — silver model rewrite, downstream       │
+  │ product)                                                   │ queries that reference current md5(11-tuple) keys break │
+  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+  │ Aligns with industry-standard SCD pattern                  │ Stateful dbt snapshots add operational complexity       │
+  │                                                            │ (don't delete the snapshot table casually)              │
+  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+  │                                                            │ Pre-2008 records have NULL rcl_cmpt_id — need defensive │
+  │ Full history preserved (Type 2 in snapshot table)          │  collapse to 5-tuple for those (one ADR-level edge      │
+  │                                                            │ case)                                                   │
+  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+  │ Phase 6 reconciliation rules become simpler (most classes  │ Initial dbt snapshot run on existing bronze creates one │
+  │ degenerate to "latest wins"; only AC DELCO-class needs     │  history version per existing 11-tuple — needs careful  │
+  │ fuzzy match)                                               │ initialization                                          │
+  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+  │ dbt snapshot is a well-trodden path (good docs, active     │ Snapshot tables grow over time — retention policy       │
+  │ maintenance)                                               │ needed                                                  │
+  └────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────┬──────────────────────────────┬─────────────────────────────────────────────────┐
+  │             Drift class             │   Under v1 (md5(11-tuple))   │      Under v1.5 (md5(6-tuple) + snapshot)       │
+  ├─────────────────────────────────────┼──────────────────────────────┼─────────────────────────────────────────────────┤
+  │ Population (empty → value)          │ 96 fragmented rows; Phase 6  │ Snapshot transitions empty→value; no            │
+  │                                     │ must reconcile               │ fragmentation; reconciliation = none needed     │
+  ├─────────────────────────────────────┼──────────────────────────────┼─────────────────────────────────────────────────┤
+  │ Depopulation (value → empty)        │ Fragments at 11-tuple; Phase │ Snapshot transitions value→empty; latest wins   │
+  │                                     │  6 reconciles                │ automatically                                   │
+  ├─────────────────────────────────────┼──────────────────────────────┼─────────────────────────────────────────────────┤
+  │ Value edit (A → B) on attribute     │ Fragments at 11-tuple        │ Snapshot transitions A→B; latest wins           │
+  │ field                               │                              │                                                 │
+  ├─────────────────────────────────────┼──────────────────────────────┼─────────────────────────────────────────────────┤
+  │ Normalization (AC DELCO → ACDELCO)  │ Fragments at every grain     │ Still fragments at 6-tuple; this is the only    │
+  │ on 6-tuple anchor field             │                              │ class needing fuzzy reconciliation              │
+  └─────────────────────────────────────┴──────────────────────────────┴─────────────────────────────────────────────────┘
+
+
+  ┌───────────────────────┬───────────────────────────────────────────────────┬─────────────────────────────────────────┐
+  │         Work          │                      Branch                       │                Rationale                │
+  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
+  │ Today's findings docs │                                                   │                                         │
+  │  (Section K, ADR 0031 │ docs/findings-2025-05-w3 ← current                │ Already there; matches the branch theme │
+  │  updates, Section I   │                                                   │                                         │
+  │ update)               │                                                   │                                         │
+  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
+  │                       │                                                   │ Pure documentation; same conceptual     │
+  │ Layer 1 — ADR 0033 +  │ docs/findings-2025-05-w3 ← same branch            │ theme ("documenting what we learned     │
+  │ plan doc              │                                                   │ from Pierce"); ships with the findings  │
+  │                       │                                                   │ work in one merge                       │
+  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
+  │                       │                                                   │ Actual code changes (new snapshot + 2-3 │
+  │ Layer 2 — v1.5 dbt    │ New branch off main after end-of-week merge —     │  new models); needs its own             │
+  │ prototype             │ e.g., feature/silver-v15-scd-prototype            │ review/merge cycle; isolated from       │
+  │                       │                                                   │ unrelated work                          │
+  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
+  │                       │ Future branch (deferred); e.g.,                   │ Real schema/key changes affecting       │
+  │ Layer 3 — migration   │ feature/silver-v15-migration off whatever the     │ downstream consumers; deserves its own  │
+  │                       │ latest silver state is at trigger time            │ ADR (0034) and review                   │
+  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
+  │                       │ Independent branch off main — e.g.,               │ Different source, no overlap with the   │
+  │ USCG work             │ feature/uscg-bronze                               │ v1.5 prototype scope; can run fully in  │
+  │                       │                                                   │ parallel                                │
+  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
+  │ Next-week daily       │ New branch off main after this week's merge —     │ Consistent with your weekly-findings    │
+  │ findings              │ e.g., docs/findings-2025-05-w4                    │ cadence pattern                         │
+  └───────────────────────┴───────────────────────────────────────────────────┴─────────────────────────────────────────┘
