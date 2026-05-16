@@ -143,3 +143,43 @@ Recommendation
   If you're 90% done with feature/uscg-bronze and a small finding comes up that touches USCG specifically, just commit it on
   that branch — branch-switching ceremony isn't worth it. The rule of thumb: does the finding's diff make sense in the work 
   branch's PR description? If yes, inline. If no, separate branch.
+
+  
+
+  
+  I would like to think through ADR  0031 more in light of the: "v1-accepted fragmentation from ADR 0031:83-86 — but ADR 0031:110 estimated "~150 fragmented NHTSA
+  recall_product rows per year." Today added 96 in a single editorial event from one campaign. The estimate is materially
+  stale." This consequence: "select count(*) from recall_product where recall_event_id = md5('NHTSA|26V217000') → inflated by 96" seems unideal,
+  especially if it continues to pop up. 
+
+I also need more thinking, context, and information on this: "Does Phase 6 reconciliation need a population-event handler now? No code change. Worth recording the rule ("populated
+  value supersedes empty value when only difference is a population event") in the Phase 6 design intent — either as a note
+  in ADR 0031 or a new ADR 0033 for the real_drift taxonomy."
+
+  4b. Phase 6 reconciliation rule scaffold (define now, implement later)
+
+  Each class wants a different rule:
+
+  ┌─────────────────────────┬───────────────────────────────────────────────────────────┬───────────────────────────────┐
+  │          Class          │                    Reconciliation rule                    │  recall_event_history event   │
+  │                         │                                                           │             type              │
+  ├─────────────────────────┼───────────────────────────────────────────────────────────┼───────────────────────────────┤
+  │ Population              │ Populated supersedes empty; merge on (11-tuple − amended  │ field_filled                  │
+  │                         │ field)                                                    │                               │
+  ├─────────────────────────┼───────────────────────────────────────────────────────────┼───────────────────────────────┤
+  │ Depopulation            │ Both retained for audit; latest is canonical              │ field_cleared                 │
+  ├─────────────────────────┼───────────────────────────────────────────────────────────┼───────────────────────────────┤
+  │ Value edit              │ Latest wins, or accumulate into production_window range   │ field_edited                  │
+  │ (batch-window)          │                                                           │                               │
+  ├─────────────────────────┼───────────────────────────────────────────────────────────┼───────────────────────────────┤
+  │ Normalization           │ Fuzzy-match required; manual review v1, ML-assisted later │ field_normalized              │
+  └─────────────────────────┴───────────────────────────────────────────────────────────┴───────────────────────────────┘
+
+  It seems various 11-tuple key fields get updated at random cadences and depths in the NHTSA data. What are ways we can track updates and changes so that 1. We are always serving the most current information to users/consumers and 2. We are keeping a proper log/audit of changes in relevant fields. Does this relate to slowly changing dimenions (SCD). How is this issue presenting with the other sources and how are we handling it? Are there tools in dbt or something else that provide a more robust industry standard way of handling this phenomenon? 
+
+
+  - Per-day drift-spike dbt assertion (2d from earlier analysis) — would have caught this in real time; worth considering
+  when the dbt assertion suite gets revisited.
+  - Optional ADR 0033 for the real_drift taxonomy — not yet created. The taxonomy is now informally documented across
+  incremental_delta_findings.md Sections H/I/K and the ADR 0031 Re-baseline subsection. If you want a single canonical
+  ADR-weight document for it, that's a separate piece of work.

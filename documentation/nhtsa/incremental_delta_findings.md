@@ -440,32 +440,33 @@ Unlike H.4 (Mack) where multiple yeartxts lost the *same* fields with some yeart
 
 The most parsimonious reading: NHTSA discovered the original date window was too narrow at *different* edges for different model years, and depopulated each model year's least-trusted boundary individually. Operationally a considered editorial decision, not a blanket overwrite. Same H1 class as Mack, different shape.
 
-### Classification — H1 high-confidence (pending TSV byte confirmation)
+### Classification — H1 confirmed (byte-level, 2026-05-15)
 
-Three converging signals support H1:
+Four converging signals support H1:
 
 1. **`diagnose_null_regression.sql` Q1** — `rows_in_path = 1` for every (10-tuple, path) cell across all 4 affected rows. Replacement, not additive. **H3 ruled out.**
 2. **Inner-content SHA changed** between archives — 2026-05-08 inner SHA `c955c37153d1cb1e` (65,732-record initial seed) → 2026-05-13 inner SHA `65c78969d64bddc4` (48-record amendment, the small daily delta). NHTSA genuinely republished different bytes, not a re-fetch artifact.
 3. **Pattern matches H.4 Mack** — same script trace, same direction (populated → NULL), same Takata-cascade-style amendment fingerprint on an old airbag-inflator recall.
+4. **TSV byte inspection confirms H1 with parser symmetry.** Both archives inspected via `scripts/nhtsa/tsv_analysis/inspect_archive_row.py` on 2026-05-15:
+   - **Pre-amendment (`c955c37153d1…`):** 2 matched rows (yeartxt 2009 + 2010), both with `BGMAN (raw): '20081010'` (len=8) and `ENDMAN (raw): '20100925'` (len=8).
+   - **Post-amendment (`65c78969d64b…`):** 2 matched rows; yeartxt=2009 shows `BGMAN: '20081010'`, `ENDMAN: ''` (len=0); yeartxt=2010 shows `BGMAN: ''` (len=0), `ENDMAN: '20100925'`. Asymmetric flip confirmed at the byte level.
+   - Inner-TSV SHA prefixes match `extraction_runs.response_inner_content_sha256` for both paths — tested the exact bytes that produced bronze.
+   - Parser-symmetry rules out H2: the same post-amendment archive contains both populated dates (`'20081010'`, `'20100925'`) and empty cells (`''`), and bronze materializes both consistently — the FlatFileExtractor is not selectively breaking on Nissan rows.
 
-The Nissan case differs from Mack in that **H2 ruling-out has not yet been confirmed at the byte level**. The Mack triage included a TSV-byte inspection via `scripts/nhtsa/tsv_analysis/inspect_archive_row.py` against the 2026-05-09 archive (`BGMAN (raw): '' (len=0)` confirming literal empty cells in the inner TSV). The Nissan triage so far is **pattern-match only**.
+### Byte-level confirmation (2026-05-15)
 
-### TODO — TSV byte confirmation (deferred)
-
-To upgrade Nissan from "H1 high-confidence" to "H1 confirmed" — and rule out the edge case of a parser regression triggered only by the Nissan rows — run:
+Confirmation run command (post-amendment archive):
 
 ```bash
-python -m scripts.nhtsa.tsv_analysis.inspect_archive_row \
-    --archive nhtsa/2026-05-13/09dcca74-21d2-4ba8-bb22-e2f108a4bf7b.zip.gz \
+python scripts/nhtsa/tsv_analysis/inspect_archive_row.py \
+    --raw-landing-path nhtsa/2026-05-13/09dcca74-21d2-4ba8-bb22-e2f108a4bf7b.zip.gz \
     --campno 26V230000 \
-    --mfr_comp_ptno 98560-7991C
+    --mfr-comp-ptno 98560-7991C
 ```
 
-(Confirm the exact CLI flags against `scripts/nhtsa/tsv_analysis/inspect_archive_row.py --help` — the H.4 invocation was the precedent.)
+Default `--show-field bgman,endman` is correct for this NULL-regression case. Sanity-check run against the pre-amendment archive (`nhtsa/2026-05-08/4c2d381e-91a4-435c-a52e-8f853044f925.zip.gz`) confirmed uniform pre-amendment population — every matched row had both BGMAN and ENDMAN populated, consistent with the asymmetric depopulation being localized to the 2026-05-13 amendment regen.
 
-**Expected:** 2 rows returned (yeartxts 2009, 2010), with the depopulated cells showing `BGMAN (raw): ''` or `ENDMAN (raw): ''` per the table above. If instead the TSV bytes are populated and bronze is NULL, classification flips to **H2 (parser bug)** and warrants a follow-up — the asymmetric-flip pattern (different field per yeartxt) is unusual enough to be worth byte-level verification before classifying it definitively as upstream-driven.
-
-If H1 is confirmed, fold the result into this section (replace "H1 high-confidence" with "H1 confirmed" + the byte-evidence line).
+The sanity-check pattern is now the standing precedent for confirming an H1 cluster end-to-end: post-amendment inspection demonstrates the regression *and* parser symmetry within one archive; pre-amendment inspection demonstrates the editorial event is localized to the post-amendment regen rather than a pre-existing condition.
 
 ### Cumulative contribution and silver-grain context
 
@@ -549,6 +550,96 @@ Both pairs are textbook supersession patterns — supplier published a revised p
 This is the **third consecutive observation day** in the ADR 0031:160 tracking table (2026-05-12, 2026-05-13, 2026-05-15) and the **second consecutive day with 9-tuple real_drift = 0**. Per the revised cadence (daily snapshots, decision after ≥14 consecutive clean snapshots per ADR 0031 Go-Criterion #1), this is the third row of an expected ~14-21 row evaluation window.
 
 The picture remains coherent: **every observed real_drift case lives in batch-window fields** (`bgman`/`endman`). At the 9-tuple grain those collapse away entirely, validating the hypothesis that `md5(9-tuple)` would yield zero silver fragmentation for the patterns we currently see.
+
+**Postscript (2026-05-15, later same day):** This observation describes the run_id `955e2e8d` capture. A second 2026-05-15 NHTSA run (run_id `07af8eb4`) added 96 `mfr_comp_desc` real_drift cases on Pierce ARROW XT family recall 26V217000 — a non-batch-window field that *is* part of the 9-tuple. See Section K. The "every observed real_drift case lives in batch-window fields" claim was true at the J capture but no longer holds after run_id `07af8eb4`; the 9-tuple migration evaluation is materially disqualified per Stop criterion #1.
+
+## K. 2026-05-15 (later run) — Pierce ARROW XT family 26V217000 mfr_comp_desc population (field-population class)
+
+Second 2026-05-15 NHTSA run (run_id `07af8eb4-0568-4286-8b1e-00565f3f784d`, 120 rows inserted) surfaced the first **field-population** event in the real_drift taxonomy — a class structurally distinct from the existing depopulation (Mack H.4, Nissan I) and boundary-edit (Western Star 26V079000, Chrysler Pacifica 26V189000) classes. NHTSA backfilled `mfr_comp_desc` empty → `'Software'` across all 96 vehicle×component rows of Pierce ARROW XT family recall `26V217000`, in a single archive regeneration.
+
+This run followed run_id `955e2e8d` (the 111-row daily-delta capture documented in Section J) by a few hours within the same UTC day. Both ran against the same NHTSA upstream URL but downloaded different inner-TSV bytes — confirming NHTSA published an additional archive between the two runs, consistent with Finding H's intra-day publication observation. The Pierce population event landed only in the second archive.
+
+### Scope: complete 4 × 12 × 2 grid
+
+The 96 affected rows form an exact 4 × 12 × 2 grid covering the entire campaign:
+
+| Dimension | Values | Count |
+|---|---|---|
+| `maketxt × modeltxt` | PIERCE ARROW XT, PIERCE ENFORCER, PIERCE IMPEL, PIERCE VELOCITY | 4 |
+| `yeartxt` | 2015, 2016, …, 2026 | 12 |
+| `compname` | `ELECTRICAL SYSTEM:SOFTWARE`, `EQUIPMENT:MECHANICAL:BOOM/CRANE/LADDER` | 2 |
+| **Total combinations** | | **96** |
+
+Every combination got the population — no partial fill, no per-model variance, no per-yeartxt selection. NHTSA's editorial action treated the whole campaign as a single unit.
+
+### Classification — H1 confirmed (byte-level, 2026-05-15)
+
+Four converging signals support H1:
+
+1. **`diagnose_null_regression.sql` Q1** — every `(10-tuple, raw_landing_path)` cell shows `rows_in_path = 1` across all 192 affected rows (96 logical products × 2 archives). Replacement, not additive. **H3 ruled out.** Q1/Q2 `bgman`/`endman` columns are NULL throughout (Pierce's software-component rows don't carry batch-window dates), but Q3 (`extraction_runs` metadata join) is class-agnostic and correctly identifies the archive pair. Invoked via the script's CLI-override path: `psql -f diagnose_null_regression.sql -v campno=26V217000 -v "mfr_comp_ptno=Any version prior to 08.15"`.
+
+2. **Inner-content SHA changed** between archives — 2026-05-08 inner SHA `c955c37153d1cb1e` (65,732-record initial seed; same archive as the Nissan I pre-amendment baseline) → 2026-05-15 inner SHA `945cac1b3b0bdf19` (120-record daily amendment, today's later wave). NHTSA published the population event in today's regen.
+
+3. **TSV byte inspection confirms H1 with parser symmetry.** Both archives inspected via `scripts/nhtsa/tsv_analysis/inspect_archive_row.py --show-field mfr_comp_desc,mfr_comp_name`:
+   - **Pre-amendment (`c955c37153d1…`):** 96 matched rows, every one with `MFR_COMP_DESC (raw): ''` (len=0) and `MFR_COMP_NAME (raw): 'Software'` (len=8).
+   - **Post-amendment (`945cac1b3b0b…`):** 96 matched rows, every one with `MFR_COMP_DESC (raw): 'Software'` (len=8) and `MFR_COMP_NAME (raw): 'Software'` (len=8).
+   - Inner-TSV SHA prefixes match `extraction_runs.response_inner_content_sha256` for both paths — tested the exact bytes that produced bronze.
+   - Parser-symmetry rules out H2: the post-amendment archive contains both populated and empty `mfr_comp_desc` cells across the broader corpus (Pierce populated, unrelated rows in various states), and bronze materializes all consistently. The FlatFileExtractor is not selectively breaking on Pierce rows.
+
+4. **The empty→`'Software'` direction adds a fourth real_drift class.** Distinct from depopulation (H.4 Mack, I Nissan; populated → NULL), boundary edit (Western Star, Pacifica; populated A → populated B on batch-window fields), and string normalization (AC DELCO → ACDELCO; populated A → populated B on a stable field). **Field population** is the new class: empty → populated on a non-batch-window field.
+
+### Byte-level confirmation (2026-05-15)
+
+Post-amendment inspection command:
+
+```bash
+python scripts/nhtsa/tsv_analysis/inspect_archive_row.py \
+    --raw-landing-path nhtsa/2026-05-15/fe43db1f-9d6f-4b22-bbbc-4a2a1d7a63d1.zip.gz \
+    --campno 26V217000 \
+    --mfr-comp-ptno "Any version prior to 08.15" \
+    --show-field mfr_comp_desc,mfr_comp_name
+```
+
+Pre-amendment sanity check uses the same command against `nhtsa/2026-05-08/4c2d381e-91a4-435c-a52e-8f853044f925.zip.gz` (already cached locally from the Nissan I inspection earlier the same day).
+
+### Structural observations
+
+**Asymmetric population.** `mfr_comp_name` was already populated as `'Software'` across all 96 rows in the pre-amendment seed. Only `mfr_comp_desc` was empty. NHTSA's editorial action specifically backfilled the description column, leaving the name column untouched. This asymmetry makes the event a clean **field-population** class rather than a paired structural change (e.g., adding both `name` and `desc` together for a previously-missing component).
+
+**Contiguous RECORD_ID block in post-amendment.** All 96 affected rows occupy RECORD_IDs `319889` through `319984` in the post-amendment archive — exactly 96 consecutive integers. The pre-amendment archive shows Pierce rows scattered across the TSV with multiple smaller contiguous segments (e.g., 320164-320223, 320320-320327) interleaved with other corpus content. Per Finding K's "RECORD_ID is reassigned per file build", the contiguous block in the post-amendment regen reflects NHTSA's amendment running a single internal query against this campaign and serializing all 96 results back-to-back into the new TSV. Strong structural confirmation that this was **one editorial action**, not 96 independent edits.
+
+**Co-occurrence with other amendments.** The same 120-record amendment archive carried both Pierce's `mfr_comp_desc` population AND additional Ford engine-block-heater amendments (continuation of the J.5 Ford wave). NHTSA's daily regen pipeline batches multiple unrelated editorial actions into a single archive — the Pierce event and the Ford amendments share no logical connection beyond being committed in the same NHTSA-side workflow window.
+
+### Silver fragmentation impact
+
+Per ADR 0031:84's `recall_product_id = md5(11-tuple)` recipe, each of the 96 logical Pierce products now appears twice in silver:
+
+- 96 `recall_product` rows with `mfr_comp_desc = ''` (pre-amendment versions, semantically stale)
+- 96 `recall_product` rows with `mfr_comp_desc = 'Software'` (post-amendment versions, current)
+
+All 192 share the same `recall_event_id` (`md5('NHTSA' || '26V217000')`). `stg_nhtsa_recalls.sql`'s `DISTINCT ON (11-tuple) ORDER BY ... extraction_timestamp DESC` retains both because they're distinct 11-tuples; `DISTINCT ON` cannot disambiguate stale-vs-current when the only differing field is itself a surrogate-key input. Downstream `select count(*) from recall_product where recall_event_id = md5('NHTSA|26V217000')` returns 192 instead of 96.
+
+This is the documented v1-accepted fragmentation from ADR 0031:83-86, but at a much larger scale than the original baseline anticipated. ADR 0031:110's "~150 fragmented NHTSA `recall_product` rows per year" extrapolation is materially stale — a single editorial event added 96 fragmented rows in one day. Phase 6 product-level reconciliation will need a "populated supersedes empty" rule for the population class specifically.
+
+### 9-tuple migration evaluation — disqualified
+
+The 9-tuple migration tracking subsection in ADR 0031:148-216 was monitoring whether `md5(9-tuple)` would eliminate observed fragmentation. The premise at ADR 0031:170: *"Eliminates the only fragmentation class we actually observe in production."* Today's Pierce event materially refutes this — `mfr_comp_desc` is **in the 9-tuple**, so the 96 events fragment silver equally at both 9-tuple and 11-tuple grains. Stop criterion #1 at ADR 0031:199 ("Any daily snapshot surfaces non-zero 9-tuple real_drift") has fired.
+
+The 9-tuple migration alternative loses its compelling case: expected benefit drops from "eliminate 100% of observed fragmentation" to "eliminate ~10% (the 11 batch-window cases out of 107 total)" at the same migration cost. v1 `md5(11-tuple)` stands not because it's structurally better against this event (both grains fragment identically), but because the migration alternative is no longer attractive. Formal sunset of the migration tracking subsection lands in the ADR 0031 2026-05-15 amendment.
+
+### Cumulative contribution
+
+The Pierce event brings the 2026-05-15 11-tuple `real_drift` count to **107** (J.4's 11 batch-window cases + Pierce's 96 `mfr_comp_desc` cases), and the 9-tuple `real_drift` count from `0` to **96**. Per-field breakdown via `decompose_eleven_tuple_drift.sql`:
+
+| Field | structural_multi_batch | real_drift | Total | Drift class |
+|---|---|---|---|---|
+| `mfr_comp_ptno` | 137 | 0 | 137 | structural (Ford supersession + Ferrari + others) |
+| `mfr_comp_desc` | 0 | 96 | 96 | **population (new — Pierce 26V217000)** |
+| `bgman` | 0 | 7 | 7 | depopulation + boundary edit (Pacifica, Nissan, Mack) |
+| `endman` | 0 | 4 | 4 | depopulation + boundary edit (Western Star, Nissan, Mack) |
+| **TOTAL** | **137** | **107** | **244** | — |
+
+Cumulative real_drift rate: 107 / ~250k = 0.043% on the 11-tuple (vs. ADR 0031:84's prior 0.0036%). 11-fold increase from a single editorial event. ADR 0031:84's ">0.01% silver row count fragmented per month" threshold is materially exceeded depending on how the campaign-burst is weighted — one campaign with 96 events is structurally different from 96 campaigns with 1 event each, and ADR 0031 will likely need to revise the threshold definition to account for this in a future amendment.
 
 ---
 

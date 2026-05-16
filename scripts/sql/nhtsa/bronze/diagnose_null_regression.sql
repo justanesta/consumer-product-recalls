@@ -22,11 +22,18 @@
 -- depopulation) on 2026-05-12 — see `documentation/nhtsa/incremental_delta_findings.md`
 -- (Re-baseline 2026-05-12 section) and the 2026-05-13 confirmation run.
 --
--- To adapt to a different NULL-regression cluster, edit the two
--- `\set` lines below: `campno` selects the recall campaign and
--- `mfr_comp_ptno` selects the component within it. Both fields are
--- part of the 11-tuple identity (ADR 0030), so the pair is enough
--- to slice bronze to the affected component family.
+-- To adapt to a different cluster, either pass via CLI override
+-- (`psql -f ... -v campno=<value> -v mfr_comp_ptno=<value>`) or edit
+-- the two `\set` defaults below. `campno` selects the recall campaign
+-- and `mfr_comp_ptno` selects the component within it. Both fields are
+-- part of the 11-tuple identity (ADR 0030), so the pair is enough to
+-- slice bronze to the affected component family.
+--
+-- The Q1/Q2 outputs are tailored to bgman/endman NULL-regression
+-- analysis; for population-event clusters (e.g., Pierce 26V217000
+-- mfr_comp_desc empty→"Software", 2026-05-15) Q1/Q2 are uninformative
+-- but Q3 (extraction_runs metadata join) is class-agnostic and
+-- correctly identifies the pre/post archive pair.
 --
 -- Three hypotheses to distinguish:
 --
@@ -65,8 +72,15 @@
 \set ON_ERROR_STOP on
 \pset null '<NULL>'
 
-\set campno '26V230000'
-\set mfr_comp_ptno '98560-7991C'
+\if :{?campno}
+\else
+    \set campno '26V230000'
+\endif
+
+\if :{?mfr_comp_ptno}
+\else
+    \set mfr_comp_ptno '98560-7991C'
+\endif
 
 \echo
 \echo '=== Q1: per-(10-tuple, raw_landing_path) row counts and bgman/endman value sets ==='

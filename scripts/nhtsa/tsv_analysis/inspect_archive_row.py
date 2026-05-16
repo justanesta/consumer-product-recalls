@@ -1,20 +1,26 @@
 """Inspect raw NHTSA archive rows by (campno, mfr_comp_ptno).
 
 Downloads a NHTSA archive from R2 (or reads a local .zip), filters the inner
-TSV by supplied identity values, and dumps the BGMAN/ENDMAN cells with
-character-level visibility via ``repr()``. Discriminates between two failure
-modes for populated→NULL bronze transitions surfaced by
-``scripts/sql/nhtsa/bronze/diagnose_null_regression.sql``:
+TSV by supplied identity values, and dumps the chosen field cells with
+character-level visibility via ``repr()``. Used for byte-level confirmation
+of bronze-vs-source discrepancies surfaced by
+``scripts/sql/nhtsa/bronze/diagnose_null_regression.sql`` and related drift
+diagnostics. For each matched row, compare the raw TSV cell against what
+bronze stored:
 
-  * H1 — UPSTREAM DEPOPULATION. NHTSA emitted empty cells. BGMAN/ENDMAN
-         render as ``''`` (empty string, len=0). Operationally normal —
-         a recall amendment expanded scope to units of unknown
-         manufacturing date.
-  * H2 — EXTRACTOR MIS-PARSE. NHTSA emitted populated dates but our
-         ``FlatFileExtractor`` produced NULL in bronze. BGMAN/ENDMAN
-         render as a non-empty string (e.g., ``'20250708'``).
-         Operationally a bug — investigate the cell-to-Pydantic-date
-         mapping in ``src/extractors/nhtsa.py``.
+  * H1 — UPSTREAM-DRIVEN. The raw TSV cell matches what bronze stored
+         (e.g., empty bytes for a populated→NULL transition; "Software"
+         for an empty→populated transition; a new date for a value-A→
+         value-B transition). Operationally normal — bronze captures
+         what NHTSA published.
+  * H2 — EXTRACTOR MIS-PARSE. The raw TSV cell differs from what bronze
+         stored. Bug in cell-to-Pydantic mapping in
+         ``src/extractors/nhtsa.py``.
+
+Fields to dump are configurable via ``--show-field`` (CSV of lowercase
+field names from RCL.txt; default ``bgman,endman`` for the original
+NULL-regression workflow). For mfr_comp_desc-class population events use
+``--show-field mfr_comp_desc,mfr_comp_name``.
 
 R2 archives are cached locally under ``data/exploratory/nhtsa/`` (the project's
 gitignored TSV-analysis scratch directory) keyed by the R2 basename with the
@@ -23,17 +29,26 @@ outer gzip wrapper before returning). Repeated invocations against the same
 ``--raw-landing-path`` skip the R2 round-trip. Override the cache directory
 via ``--cache-dir`` if needed.
 
-Use after ``diagnose_null_regression.sql`` confirms ``rows_in_path == 1`` in
-every (10-tuple, path) cell (replacement, not additive). Cross-reference the
-populated/empty cells from this output against the same script's Q2 row dump
-to determine which TSV cells correspond to which bronze NULLs.
+Use after a bronze drift diagnostic confirms ``rows_in_path == 1`` in
+every (10-tuple, path) cell (replacement, not additive). Cross-reference
+the cell values from this output against the diagnostic's Q2 row dump
+to determine which TSV cells correspond to which bronze stored values.
 
-Usage (Mack 2026-05-09 NULL-regression cluster, the canonical case):
+Usage (Mack 2026-05-09 NULL-regression cluster — canonical H1 case;
+default show-field of bgman,endman):
 
     python scripts/nhtsa/tsv_analysis/inspect_archive_row.py \\
         --raw-landing-path nhtsa/2026-05-09/78530d14-7794-4f53-9316-f7eb2a83a89a.zip.gz \\
         --campno 26V261000 \\
         --mfr-comp-ptno 24710104
+
+Usage (Pierce 2026-05-15 mfr_comp_desc empty→"Software" population event):
+
+    python scripts/nhtsa/tsv_analysis/inspect_archive_row.py \\
+        --raw-landing-path <post-amendment-archive>.zip.gz \\
+        --campno 26V217000 \\
+        --mfr-comp-ptno "Any version prior to 08.15" \\
+        --show-field mfr_comp_desc,mfr_comp_name
 
 Usage with a pre-fetched local zip (skips R2 + cache lookup):
 
@@ -63,8 +78,6 @@ MAKETXT_IDX = NAME_TO_INDEX["maketxt"]
 MODELTXT_IDX = NAME_TO_INDEX["modeltxt"]
 YEARTXT_IDX = NAME_TO_INDEX["yeartxt"]
 MFR_COMP_PTNO_IDX = NAME_TO_INDEX["mfr_comp_ptno"]
-BGMAN_IDX = NAME_TO_INDEX["bgman"]
-ENDMAN_IDX = NAME_TO_INDEX["endman"]
 
 DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "exploratory" / "nhtsa"
 
@@ -95,19 +108,27 @@ def _resolve_cached(raw_landing_path: str, cache_dir: Path) -> Path:
     return cached
 
 
-def _inspect(zip_path: Path, campno: str, mfr_comp_ptno: str) -> int:
+def _inspect(
+    zip_path: Path,
+    campno: str,
+    mfr_comp_ptno: str,
+    show_fields: tuple[str, ...],
+) -> int:
     sha = inner_sha256_prefix(zip_path)
     print(f"# Archive:           {zip_path.name}")
     print(f"# Inner-TSV SHA-256: {sha}…")
     print(f"# Filter:            campno={campno!r}, mfr_comp_ptno={mfr_comp_ptno!r}")
+    print(f"# Showing fields:    {', '.join(f.upper() for f in show_fields)}")
     print()
+
+    field_indices: list[tuple[str, int]] = [(name, NAME_TO_INDEX[name]) for name in show_fields]
+    label_width = max(len(name.upper()) for name in show_fields)
+    counters: dict[str, dict[str, int]] = {
+        name: {"empty": 0, "populated": 0} for name in show_fields
+    }
 
     matched = 0
     total = 0
-    empty_bgman = 0
-    populated_bgman = 0
-    empty_endman = 0
-    populated_endman = 0
 
     for fields in iter_tsv_rows(zip_path):
         total += 1
@@ -117,17 +138,11 @@ def _inspect(zip_path: Path, campno: str, mfr_comp_ptno: str) -> int:
             continue
         matched += 1
 
-        bgman_raw = fields[BGMAN_IDX] if len(fields) > BGMAN_IDX else ""
-        endman_raw = fields[ENDMAN_IDX] if len(fields) > ENDMAN_IDX else ""
-
-        if bgman_raw == "":
-            empty_bgman += 1
-        else:
-            populated_bgman += 1
-        if endman_raw == "":
-            empty_endman += 1
-        else:
-            populated_endman += 1
+        cells: list[tuple[str, str]] = []
+        for name, idx in field_indices:
+            raw = fields[idx] if len(fields) > idx else ""
+            cells.append((name, raw))
+            counters[name]["empty" if raw == "" else "populated"] += 1
 
         print(f"--- match #{matched} ---")
         print(f"  RECORD_ID    : {fields[0]}")
@@ -136,28 +151,26 @@ def _inspect(zip_path: Path, campno: str, mfr_comp_ptno: str) -> int:
         print(f"  MODELTXT     : {fields[MODELTXT_IDX]}")
         print(f"  YEARTXT      : {fields[YEARTXT_IDX]}")
         print(f"  MFR_COMP_PTNO: {fields[MFR_COMP_PTNO_IDX]}")
-        print(f"  BGMAN  (raw) : {bgman_raw!r}  (len={len(bgman_raw)})")
-        print(f"  ENDMAN (raw) : {endman_raw!r}  (len={len(endman_raw)})")
+        for name, raw in cells:
+            label = name.upper().ljust(label_width)
+            print(f"  {label} (raw): {raw!r}  (len={len(raw)})")
         print()
 
     print(f"# Total TSV rows scanned: {total}")
     print(f"# Matched rows:           {matched}")
     print()
-    print("# BGMAN distribution among matched rows:")
-    print(f"#   empty ('')           : {empty_bgman}")
-    print(f"#   populated            : {populated_bgman}")
-    print("# ENDMAN distribution among matched rows:")
-    print(f"#   empty ('')           : {empty_endman}")
-    print(f"#   populated            : {populated_endman}")
+    for name in show_fields:
+        print(f"# {name.upper()} distribution among matched rows:")
+        print(f"#   empty ('')           : {counters[name]['empty']}")
+        print(f"#   populated            : {counters[name]['populated']}")
     print()
     print("# Verdict guidance:")
-    print("#   Any matched cell empty AND bronze stored that cell as NULL")
-    print("#     → H1 (upstream depopulation; normal recall amendment).")
-    print("#   Any matched cell populated AND bronze stored that cell as NULL")
-    print("#     → H2 (extractor mis-parse; bug in src/extractors/nhtsa.py).")
-    print("#   Cross-reference each matched (maketxt, modeltxt, yeartxt) row's")
-    print("#   BGMAN/ENDMAN above against diagnose_null_regression.sql Q2 output")
-    print("#   for the same raw_landing_path.")
+    print("#   For each matched row, compare the raw TSV cell value(s) above")
+    print("#   against the corresponding bronze cell:")
+    print("#     TSV value matches bronze stored value")
+    print("#       → H1 (upstream-driven; NHTSA published this).")
+    print("#     TSV value differs from bronze stored value")
+    print("#       → H2 (extractor mis-parse; bug in src/extractors/nhtsa.py).")
 
     return 0
 
@@ -191,6 +204,16 @@ def main() -> int:
         help="Filter TSV rows to this mfr_comp_ptno (e.g. '24710104').",
     )
     parser.add_argument(
+        "--show-field",
+        default="bgman,endman",
+        help=(
+            "Comma-separated lowercase TSV field names to dump per matched row. "
+            "Default 'bgman,endman' matches the original NULL-regression workflow. "
+            "For mfr_comp_desc-class population events use 'mfr_comp_desc,mfr_comp_name'. "
+            "Known fields are listed in scripts/nhtsa/tsv_analysis/_lib.py FIELD_NAMES."
+        ),
+    )
+    parser.add_argument(
         "--cache-dir",
         type=Path,
         default=DEFAULT_CACHE_DIR,
@@ -198,17 +221,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    show_fields = tuple(name.strip().lower() for name in args.show_field.split(","))
+    for name in show_fields:
+        if name not in NAME_TO_INDEX:
+            known = ", ".join(sorted(NAME_TO_INDEX))
+            print(
+                f"ERROR: Unknown --show-field {name!r}. Known fields: {known}",
+                file=sys.stderr,
+            )
+            return 2
+
     if args.raw_landing_path:
         try:
             zip_path = _resolve_cached(args.raw_landing_path, args.cache_dir)
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: R2 fetch failed: {exc}", file=sys.stderr)
             return 2
-        return _inspect(zip_path, args.campno, args.mfr_comp_ptno)
+        return _inspect(zip_path, args.campno, args.mfr_comp_ptno, show_fields)
     if not args.zip.exists():
         print(f"ERROR: {args.zip} not found", file=sys.stderr)
         return 2
-    return _inspect(args.zip, args.campno, args.mfr_comp_ptno)
+    return _inspect(args.zip, args.campno, args.mfr_comp_ptno, show_fields)
 
 
 if __name__ == "__main__":
