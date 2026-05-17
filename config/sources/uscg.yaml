@@ -2,7 +2,7 @@ source_name: uscg
 source_type: html_scraping
 start_url: https://uscgboating.org/content/recalls.php
 timeout_seconds: 30.0
-scrape_delay_seconds: 1.0
+scrape_delay_seconds: 1
 # Phase 5d Step 2 drift fence — listing-page column headers per
 # documentation/uscg/scraping_observations.md Finding A. The parser
 # in src/extractors/uscg.py:_parse_listing_page validates observed

@@ -19,19 +19,17 @@ Schema targets the listing + details merge documented in
   full corpus deferred to Step 1.5 (after this migration lands + the
   first extraction completes).
 
-- **Nullability** follows Finding B's per-field probe across two
-  details-page samples + Finding A's per-column listing probe:
-    - **Required**: ``source_recall_id`` (always present — anchor
-      field), ``company_name`` (38/38 populated in sample listing rows).
-    - **Nullable**: everything else, INCLUDING ``opened_on``. Finding A
-      showed 38/38 populated in the listing-page sample but that's only
-      ~2.2% of the 1,763-record corpus. Defensive nullable for v1; Step
-      1.5 corpus probe will validate, and a follow-up migration can
-      tighten if 1763/1763 populated is confirmed. See
-      `documentation/uscg/scraping_observations.md` Finding A scope caveat.
-      Two probed details pages had empty ``problem_2`` + ``severity`` +
-      ``campaign_close_date``, plus ``model_year`` empty on the 26MF0158
-      sample — marking those required would quarantine real recalls.
+- **Nullability** follows Step 1 sample probes + Step 3 first-extraction
+  corpus evidence:
+    - **Required**: ``source_recall_id`` (always present — anchor field).
+    - **Nullable**: everything else. ``opened_on`` per Finding A scope
+      caveat + Finding O Unix-epoch sentinel pattern (USCG listing
+      renders ``"1970-01-01"`` for no-date case). ``company_name`` per
+      Finding P (33/1763 ≈ 1.9% empty in corpus, mostly pre-2005;
+      R2-byte-confirmed on ``920542T``). Two probed details pages had
+      empty ``problem_2`` + ``severity`` + ``campaign_close_date``, plus
+      ``model_year`` empty on the 26MF0158 sample — marking those
+      required would quarantine real recalls.
 
 - **Storage-forced types per ADR 0027**:
     - ``opened_on`` (listing), ``case_open_date`` / ``case_close_date`` /
@@ -87,16 +85,22 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
         ),
         sa.Column("raw_landing_path", sa.Text, nullable=False),
-        # --- Listing-derived required fields ---
-        sa.Column("company_name", sa.Text, nullable=False),
+        # --- Listing-derived fields (all nullable per Step 3 corpus evidence) ---
+        # ``company_name`` nullable per Finding P — 33/1763 (~1.9%) of
+        # corpus rows have empty ``Company:`` cells, mostly pre-2005.
+        # R2 byte-inspection of ``920542T`` confirmed the cell is
+        # literally empty (Step 3, 2026-05-17).
+        sa.Column("company_name", sa.Text, nullable=True),
         # ``opened_on`` is listing's "Opened On" (YYYY-MM-DD format) —
         # listing parser observed it populated 38/38 in the Step 1
-        # sample but that's only ~2.2% of the corpus. Defensive nullable
-        # for v1; Step 1.5 corpus probe will validate, and a follow-up
-        # migration can tighten if 1763/1763 populated is confirmed.
-        # Distinct from details' ``case_open_date`` (M/D/YYYY format)
-        # which captures the same semantic value; bronze keeps both for
-        # cross-format lineage.
+        # sample but Step 3 surfaced Finding O: USCG renders
+        # ``"1970-01-01"`` as the listing-column sentinel for no-date
+        # cases while leaving details' Case Open Date empty (R2 byte
+        # confirmed on listing page 31, recalls 22MF0627-9). Distinct
+        # from details' ``case_open_date`` (M/D/YYYY format) which
+        # captures the same semantic value via a different encoding;
+        # bronze keeps both for cross-format lineage; silver maps
+        # ``1970-01-01`` → NULL.
         sa.Column("opened_on", sa.TIMESTAMP(timezone=True), nullable=True),
         # --- Listing-derived nullable fields ---
         sa.Column("mic", sa.Text, nullable=True),

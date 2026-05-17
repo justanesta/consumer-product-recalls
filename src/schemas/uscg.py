@@ -132,13 +132,17 @@ class UscgRecallRecord(BaseModel):
     - ``source_recall_id``: required (always present in observed samples
       AND structurally the anchor field — there's no row without a
       recall number).
-    - ``company_name``: required (always populated in 38/38 listing-page
-      sample rows).
-    - ``opened_on``: **nullable** despite being populated 38/38 in the
-      sample. ~2.2% of the corpus isn't enough evidence to mark NOT NULL;
-      Step 1.5 corpus probe will validate (and a follow-up migration can
-      tighten if confirmed). See `documentation/uscg/scraping_observations.md`
-      Finding A.
+    - ``company_name``: **nullable** per Finding P. Step 1's 38-row
+      sample showed 38/38 populated, but Step 3's full corpus surfaced
+      33/1763 (~1.9%) with empty ``Company:`` cells — mostly pre-2005
+      historical records where USCG didn't record manufacturer name. R2
+      byte-inspection of ``920542T`` confirmed the source HTML cell is
+      literally empty (not a parser bug).
+    - ``opened_on``: **nullable** per Finding A scope caveat (38/38 in
+      sample, ~2.2% of corpus). Step 3 confirmed real-null cases via
+      Finding O — USCG's listing renders ``"1970-01-01"`` as the
+      sentinel for the no-date case (R2 byte-confirmed on listing page
+      31, recalls 22MF0627-9). Silver maps 1970-01-01 → NULL.
     - Everything else: nullable. Finding B confirmed many details fields
       are empty on individual recalls (e.g., ``severity`` and ``problem_2``
       were empty for both probed samples).
@@ -146,18 +150,23 @@ class UscgRecallRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    # --- Listing-derived required fields ---
+    # --- Listing-derived fields ---
     # ``source_recall_id`` aliases ``"number"`` from the listing parser's
     # dict (listing column header is "Number"). The same value appears
     # on the details page; the merge in ``extract()`` resolves any
-    # divergence to the listing's value (no divergence observed in
-    # Phase 5d Step 1 probes).
+    # divergence to the details-page value (no divergence observed in
+    # Phase 5d Step 1/3 probes).
     source_recall_id: str = Field(validation_alias="number")
-    company_name: str  # listing "Company Name" / details "Company:" — normalized to one key
 
-    # ``opened_on`` nullable per Finding A scope caveat (38/38 populated
-    # in sample, ~2.2% of corpus). Tighten via follow-up migration if
-    # Step 1.5's corpus probe confirms 1763/1763 populated.
+    # ``company_name`` nullable per Finding P (33/1763 = ~1.9% corpus
+    # empty, mostly pre-2005 historical entries). Listing "Company Name"
+    # / details "Company:" — normalized to one key by the parser.
+    company_name: str | None = Field(default=None)
+
+    # ``opened_on`` nullable per Finding A scope caveat + Finding O
+    # (listing renders "1970-01-01" sentinel for no-date case, details
+    # leaves Case Open Date empty — same logical no-date, two encodings).
+    # Bronze captures verbatim per ADR 0027; silver maps 1970-01-01 → NULL.
     opened_on: _UscgNullableListingDate = Field(default=None)
 
     # --- Listing-derived nullable fields ---

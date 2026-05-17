@@ -421,11 +421,16 @@ FDA's FEI per ADR 0002).
 - Schema drift on HTML structure changes raises `TransientExtractionError` at parse time (drift fence aborts the run cleanly) AND `ValidationError` at Pydantic time via `ConfigDict(extra='forbid', strict=True)` (catches additive drift not surfaced by the parser).
 - Weekly cron workflow — deferred to Step 5d post-Step-4 (cassette suite) per the user's branch sequencing.
 
-**Step 3 — First extraction and bronze findings** (pending; next chunk on the same branch)
-- Run `recalls deep-rescan uscg --change-type=historical_seed` once (~30 min wall time for 1,834 fetches × 1s throttle); verify bronze row count near 1,763 and that the NDJSON R2 artifact reconstructs cleanly.
-- Resolve the two Step 1.5 corpus probes (`source_recall_id` uniqueness; year-prefix invariant) via a one-shot script — fold findings as Section L/M of `scraping_observations.md`.
-- Document observed publication cadence and any HTML structure surprises across multiple daily runs.
-- Re-evaluate items #4 and #9 (see "Architectural follow-ups" below) once real operational data lands.
+**Step 3 — First extraction and bronze findings** (partially landed 2026-05-17 on the same branch)
+- ✓ Ran `recalls deep-rescan uscg --change-type=historical_seed` — 1,763 fetched, 1,512 bronze inserts on first run, 251 quarantined (14.2% rejection rate). Run aborted on threshold but bronze + rejected rows persisted (transaction commits before threshold check).
+- ✓ Investigated rejections via `scripts/sql/uscg/bronze/explore_first_extraction.sql` + `diagnose_rejections.sql` + R2 inspection via `scripts/uscg/inspect_landing_ndjson.py`. Three findings landed in `scraping_observations.md`:
+  - **Finding G (replaced)**: year-prefix invariant falsified across ≥4 distinct mechanisms (fiscal year, prefix=year−1, multi-year re-issues, Unix-epoch sentinel). Invariant removed from `src/extractors/uscg.py`.
+  - **Finding O**: listing-side Unix-epoch sentinel — USCG renders `1970-01-01` literally in the Opened On column when no date is known, while the details page leaves Case Open Date empty. Same logical semantic, two encodings; silver `stg_uscg_recalls.sql` will map `1970-01-01` → NULL.
+  - **Finding P**: `company_name` corpus-nullable (33/1763 ≈ 1.9% empty, mostly pre-2005 historical entries). Schema + migration updated to allow nulls.
+  - **Finding Q (minor)**: listing pages contain occasional non-UTF-8 bytes; production parser handles via BeautifulSoup's encoding auto-detect; forensic inspector hardened with `errors="replace"`.
+- ✓ Step 1.5 corpus probe partially resolved: year-prefix invariant probe folded into Step 3's findings above (Finding G replaced). `source_recall_id` uniqueness probe still deferred.
+- Re-extraction pending after Step 3 fixes — predicted outcome: 0% rejection rate, run completes with `status="success"`, ~1,763 bronze inserts.
+- Re-evaluate items #4 and #9 (see "Architectural follow-ups" below) — still deferred; pragmatic-capture path for `extraction_runs.response_*` columns held up cleanly (`response_etag` + `response_last_modified` correctly NULL per Finding K; no operational pain from sparsity yet).
 
 **Step 4 — Cassettes** (pending)
 - Cassette recording means capturing the real scraped HTML structure (not a hand-crafted fixture), since HTML schema drift is the primary failure mode. Record current-page HTML + a structurally-drifted variant to exercise the scraper's failure path.

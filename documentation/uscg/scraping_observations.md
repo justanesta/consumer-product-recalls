@@ -107,16 +107,28 @@ Schema implication: Pydantic `BeforeValidator`s coerce both formats to UTC `date
 
 Empty cells (e.g., `Case Close Date` on open recalls) parse to `None`.
 
-## G. Year-prefix invariant — DEFER to Step 1.5
+## G. Year-prefix invariant — FALSIFIED + REMOVED (Step 3, 2026-05-17)
 
-The plan asks: does `source_recall_id[:2]` always match `opened_on.year % 100`? Two-sample check:
+**Original Step 1 hypothesis (refuted):** that `source_recall_id[:2]` always matches `opened_on.year % 100` — based on a 2-sample probe:
 
 | Recall | `source_recall_id` | Prefix | `opened_on` | Year-suffix | Match? |
 |---|---|---|---|---|---|
 | 26MF0158 | `26MF0158` | `26` | `2026-03-03` | `26` | ✅ |
 | 25CG0017 | `25CG0017` | `25` | `2025-06-04` | `25` | ✅ |
 
-Defer corpus-wide confirmation to Step 1.5. If 100% adherence holds, enforce as a reject-on-mismatch invariant in `check_invariants`. If exceptions appear (e.g., recall filed late-December coded with next-year prefix), demote to log-and-pass with a quarantine warning row.
+**Step 3 first-extraction falsified the hypothesis** — 218 of 1,763 corpus rows (~12.4%) violate it. The `(prefix, opened_on_year)` heatmap from `scripts/sql/uscg/bronze/diagnose_rejections.sql` Q6 shows at least four distinct mechanisms:
+
+1. **Fiscal-year prefixes on Oct-Dec openings.** USCG FY runs Oct 1 → Sep 30. `23MF0066` opened `2022-10-05`, `82R...` opened `1981-...`. The recall number is assigned in fiscal-year terms; the `opened_on` is calendar.
+
+2. **Prefix = opened_on year − 1 (filing-vs-opened workflow).** Dominant pattern: `04/2005` (14 cases), `95/1996` (14), `94/1995` (10), `03/2004` (9), `97/1998` (8), `02/2003` (8), `92/1993` (7), `96/1997` (7), `00/2001` (7), `98/1999` (6), `93/1994` (6), plus smaller buckets. ~100+ rows. Hypothesis: number assigned at filing (year N), case officially opened later (year N+1).
+
+3. **Multi-year offsets for re-issued / amended recalls.** `00/2002`(4), `03/2005`(4), `04/2006`(4), `96/1998`(2), `04/2003`(2), `040057S` opened `2000-04-01` (4-year offset). Recall number from years ago; the case was re-opened or amended later under the same ID.
+
+4. **Unix-epoch sentinel.** ~45+ cases with `opened_on_year=1970` — see Finding O below. Listing renders `1970-01-01` as a "no opened date known" sentinel; year-prefix invariant fundamentally cannot apply.
+
+R2 byte-confirmation (`scripts/uscg/inspect_landing_ndjson.py --recall-number 23MF0066 --show-field "Case Open Date"`) verified USCG genuinely serves these mismatches — not a parser bug on our side.
+
+**Decision:** the `_check_year_prefix_consistency` invariant was **removed entirely** in `src/extractors/uscg.py`, not relaxed. No single rule captures these patterns, and the underlying USCG numbering scheme is more complex than the Step 1 working hypothesis assumed. Bronze records the mismatches verbatim; downstream consumers that care about the encoding can rebuild whatever fiscal-year vs calendar-year mapping they need from `opened_on` directly.
 
 ## H. robots.txt — 404 not found
 
@@ -190,7 +202,7 @@ Each finding maps to a Step 2 design decision. Cross-reference for review:
 | D | No `hash_exclude` needed for render-stability reasons |
 | E | `last_date` kept in `content_hash` for now; revisit after Step 3 |
 | F | Two `BeforeValidator`s: `_UscgListingDate` + `_UscgDetailsDate` |
-| G | `check_year_prefix_consistency` invariant added with Step 1.5 calibration |
+| G | Step 2 added `_check_year_prefix_consistency` invariant; Step 3 **removed** it after corpus-wide evidence (218/1763 violations) falsified the hypothesis |
 | H | UA + throttle defaults |
 | I | No bronze-side decoding; preserved verbatim per ADR 0027 |
 | J | Future optimization, captured for Phase 6+ |
@@ -201,8 +213,74 @@ Each finding maps to a Step 2 design decision. Cross-reference for review:
 
 ---
 
+## O. Listing-side Unix-epoch sentinel for "no opened date" (Step 3, 2026-05-17)
+
+USCG's listing page renders the literal string `1970-01-01` in the Opened On column when no opening date is recorded for a recall, while the corresponding **details page** leaves Case Open Date empty (blank `<span>` cell). The same logical "no date known" semantic gets two different encodings depending on which page you look at.
+
+**Evidence:** R2 byte-inspection of listing page 31 via `scripts/uscg/inspect_landing_ndjson.py --scan-listings-for 22MF0628`:
+
+```
+--- lines 423..439 (match at 431) ---
+     423            <td><a class="iframe" href="recalls-details.php?id=22MF0627">22MF0627</a></td>
+     424            <td>YDV</td>
+     425            <td>BOMBARDIER RECREATIONAL PRODU</td>
+     426            <td></td>
+     427            <td></td>
+     428            <td>1970-01-01</td>           ← sentinel
+     429          </tr>
+     430                  <tr class="defaultFont">
+>>   431            <td><a class="iframe" href="recalls-details.php?id=22MF0628">22MF0628</a></td>
+     432            <td>YDV</td>
+     433            <td>BOMBARDIER RECREATIONAL PRODU</td>
+     434            <td></td>
+     435            <td></td>
+     436            <td>1970-01-01</td>           ← sentinel
+     437          </tr>
+     438                  <tr class="defaultFont">
+     439            <td><a class="iframe" href="recalls-details.php?id=22MF0629">22MF0629</a></td>
+```
+
+`22MF0627`, `22MF0628`, `22MF0629` all share the literal `1970-01-01` string in the listing's Opened On column, all from the same manufacturer (Bombardier `YDV`). The corresponding details pages (verified for 22MF0628 via `--recall-number 22MF0628`) show `Case Open Date:` literally empty.
+
+**Corpus scale:** ~45+ rows in the 2026-05-17 extraction had `opened_on = 1970-01-01`. The exact distribution is in `diagnose_rejections.sql` Q6's `prefix → opened_on_year=1970` cluster.
+
+**Implications:**
+- Bronze captures verbatim per ADR 0027 — `opened_on=1970-01-01` lands as `1970-01-01 UTC`. The corresponding `case_open_date` (details-page-derived) lands as NULL because the cell is empty.
+- The same logical date thus shows two different bronze values for ~45 rows. This is silver's problem to normalize, not bronze's.
+- Silver `stg_uscg_recalls.sql` should map `opened_on = 1970-01-01` → NULL (canonical "no date known"), then prefer `case_open_date` when both are populated. Document as known fragmentation in the silver staging model.
+
+NHTSA's `ODATE 19010101` sentinel (`documentation/nhtsa/flat_file_observations.md` Finding H) is structurally identical — USCG just picked a different epoch.
+
+## P. `company_name` is corpus-nullable (Step 3, 2026-05-17)
+
+Finding A's 38-row sample showed 38/38 populated `Company Name` cells. **Step 3 first-extraction surfaced 33/1763 (~1.9%) corpus rows with empty `Company:` cells** — Pydantic-quarantined under the Step 2 schema's `company_name: str` requirement. Examples: `20SD0027`, `160001S`, `040099T`, `030119T`, `960112T`, `920542T`, `950359T`, `950354T`, `950355T`, `930140T` — mostly pre-2005 historical entries where USCG didn't record the manufacturer name.
+
+**R2 byte-confirmation** via `scripts/uscg/inspect_landing_ndjson.py --recall-number 920542T --show-field "Company"`:
+
+```
+--- lines 27..35 (match at 31) ---
+      27    <tr>
+      28      <td><span class="defaultFont"><strong>Company:</strong></span></td>
+      29      <td><span class="defaultFont"></span></td>     ← empty cell
+      30      <td>&nbsp;</td>
+>>    31      <td><span class="defaultFont"><strong>Company Official:</strong></span></td>
+      32      <td><span class="defaultFont">PDE</span></td>
+```
+
+The HTML cell is literally empty — not a parser bug. USCG genuinely has no Company value for these rows.
+
+**Decision:** `company_name` made nullable in `src/schemas/uscg.py` + migration 0013 (Step 3 follow-up edit). Same shape as the earlier `opened_on` correction (Finding A scope caveat) — Step 1's small-sample claim of "always populated" didn't hold at corpus scale.
+
+## Q. Listing pages contain non-UTF-8 bytes (Step 3, minor)
+
+Surfaced incidentally during R2 inspection: at least one listing page (page 31 archived 2026-05-17) contains byte `0xbc` (`¼` in Latin-1 / Windows-1252) embedded in a UTF-8-declared page. Common pattern from Word copy-paste sources on `.gov` static pages. The production parser handles this transparently via BeautifulSoup's `lxml` backend (encoding auto-detection from `<meta>` + content sniffing); the forensic inspector originally choked on a naive `bytes.decode("utf-8")` and was fixed to use `errors="replace"`.
+
+Not blocking for any data-quality decision; documented because the inspector now renders `�` in those positions, which is itself a useful diagnostic signal if it ever crops up in narrative text fields that bronze captures verbatim.
+
+---
+
 ## Open items deferred to Step 1.5 / Step 3
 
-- **Step 1.5** (after Step 2 extractor lands, before first formal extraction): a focused script that walks all 71 pages once, asserts (a) `source_recall_id` is corpus-unique (Finding C), (b) year-prefix invariant holds across the corpus (Finding G). Captures findings into this document as appendix entries.
-- **Step 3** (first formal extraction + bronze findings): monitor `last_date` drift across consecutive runs (Finding E). If `last_date` is a re-stamping field, add to `hash_exclude_fields` and document as a re-baseline event.
+- **Step 1.5** (after Step 2 extractor lands, before first formal extraction): a focused script that walks all 71 pages once, asserts `source_recall_id` is corpus-unique (Finding C). Originally Step 1.5 also included the year-prefix invariant check (Finding G) — that resolved in Step 3 by falsification (see Finding G above).
+- **Step 3** (first formal extraction + bronze findings): ✓ completed 2026-05-17. Findings G (replaced), O, P, Q landed. `opened_on` `last_date` drift monitoring (Finding E) deferred to subsequent runs.
 - **Phase 6+** (smart-skip layer): `Records Found` total as a steady-state short-circuit signal (Finding J).

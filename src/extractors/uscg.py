@@ -232,31 +232,21 @@ def _normalize_label(text: str) -> str:
     return text.strip().rstrip(":").strip().lower()
 
 
-def _check_year_prefix_consistency(record: UscgRecallRecord) -> str | None:
-    """Return failure reason if ``source_recall_id[:2]`` doesn't match
-    ``opened_on.year % 100``; else None.
-
-    Year-prefix invariant per Finding G — USCG encodes the recall's
-    opening year in the first two digits of the recall number
-    (e.g., ``26MF0158`` opened in 2026, ``25CG0017`` opened in 2025).
-    Both two-sample probes confirmed adherence; Step 1.5 will validate
-    corpus-wide. Two-digit comparison handles only 2000-2099 — fine
-    for boating recalls under USCG's current numbering scheme.
-    """
-    if record.source_recall_id is None or len(record.source_recall_id) < 2:
-        return None  # null/empty source_recall_id caught by check_null_source_id
-    if record.opened_on is None:
-        return None  # null opened_on — invariant doesn't apply; check elsewhere if added
-    prefix = record.source_recall_id[:2]
-    expected = f"{record.opened_on.year % 100:02d}"
-    if prefix != expected:
-        return (
-            f"USCG year-prefix mismatch: source_recall_id={record.source_recall_id!r} "
-            f"prefix {prefix!r}, but opened_on={record.opened_on.date().isoformat()} "
-            f"year-suffix {expected!r}. Finding G calibration; demote to log-and-pass "
-            "if corpus probes surface legitimate exceptions."
-        )
-    return None
+# Note: a ``_check_year_prefix_consistency`` invariant existed here from
+# Phase 5d Step 2 → removed in Step 3 (2026-05-17). The hypothesis it
+# encoded — that ``source_recall_id[:2]`` always matches
+# ``opened_on.year % 100`` — was empirically falsified for 218/1763 ≈
+# 12.4% of the corpus across at least three distinct mechanisms
+# documented in Finding G (replaced) of
+# ``documentation/uscg/scraping_observations.md``:
+#   * fiscal-year prefixes on Oct-Dec openings (FY runs Oct 1 → Sep 30)
+#   * prefix = opened_on_year − 1 (likely number-on-filing,
+#     opened_on advances later when investigation begins)
+#   * multi-year offsets for re-issued / amended recalls
+#   * the Unix-epoch sentinel pattern (Finding O — listing renders
+#     "1970-01-01" for the no-date case)
+# No single invariant captures these; removed rather than relaxed.
+# Evidence: ``scripts/sql/uscg/bronze/diagnose_rejections.sql`` Q5/Q6.
 
 
 class UscgScrapingExtractor(HtmlScrapingExtractor[UscgRecallRecord]):
@@ -388,14 +378,17 @@ class UscgScrapingExtractor(HtmlScrapingExtractor[UscgRecallRecord]):
     def check_invariants(
         self, records: list[UscgRecallRecord]
     ) -> tuple[list[UscgRecallRecord], list[QuarantineRecord]]:
-        """Apply null-id, date-sanity, and USCG year-prefix invariants."""
+        """Apply null-id and date-sanity invariants.
+
+        A year-prefix-consistency invariant existed here in Step 2 and
+        was removed in Step 3 — see the module-level comment above the
+        class and Finding G (replaced) in scraping_observations.md.
+        """
         passing: list[UscgRecallRecord] = []
         quarantined: list[QuarantineRecord] = []
         for record in records:
-            failure = (
-                check_null_source_id(record.source_recall_id)
-                or check_date_sanity(record.opened_on, "opened_on")
-                or _check_year_prefix_consistency(record)
+            failure = check_null_source_id(record.source_recall_id) or check_date_sanity(
+                record.opened_on, "opened_on"
             )
             if failure:
                 quarantined.append(

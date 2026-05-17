@@ -360,6 +360,15 @@ class TestSchemaCoercion:
         with pytest.raises(ValidationError):
             UscgRecallRecord.model_validate(d)
 
+    def test_null_company_name_accepted(self) -> None:
+        """company_name is corpus-nullable per Step 3 Finding P (33/1763
+        corpus rows have empty Company cells, R2-byte-confirmed on
+        920542T). Prior to Step 3 this would have raised ValidationError."""
+        d = self._base_dict()
+        d["company_name"] = None
+        record = UscgRecallRecord.model_validate(d)
+        assert record.company_name is None
+
     def test_listing_date_validator_accepts_datetime_directly(self) -> None:
         """A datetime input (e.g., already-parsed value from a re-validation
         flow) is returned with UTC stamped if naive, unchanged if tz-aware."""
@@ -509,12 +518,26 @@ class TestExtractLifecycle:
 
 
 # ---------------------------------------------------------------------------
-# Year-prefix invariant
+# Post-Step-3 invariant regression coverage
 # ---------------------------------------------------------------------------
 
 
-class TestYearPrefixInvariant:
-    def _make_record(self, number: str, opened_on_str: str) -> UscgRecallRecord:
+class TestPostStep3Invariants:
+    """Regression coverage for Phase 5d Step 3 invariant changes.
+
+    The ``_check_year_prefix_consistency`` invariant was removed in Step 3
+    (2026-05-17) after the corpus surfaced multiple distinct mismatch
+    mechanisms (fiscal-year prefixes, prefix=year-1 for filing-vs-opened
+    workflow, re-issued recalls, Unix-epoch sentinel) that no single
+    invariant captures. These tests confirm that previously-quarantined
+    record shapes now pass ``check_invariants`` cleanly — regression
+    coverage in case someone re-introduces the invariant later. See
+    ``documentation/uscg/scraping_observations.md`` Finding G (replaced).
+    """
+
+    def _make_record(
+        self, number: str, opened_on_str: str | None = "2026-01-01"
+    ) -> UscgRecallRecord:
         return UscgRecallRecord.model_validate(
             {
                 "number": number,
@@ -524,64 +547,37 @@ class TestYearPrefixInvariant:
             }
         )
 
-    def test_matching_prefix_passes(self, extractor: UscgScrapingExtractor) -> None:
-        """26MF0158 + 2026-03-03 → year-prefix '26' matches year-suffix '26' → passes."""
-        record = self._make_record("26MF0158", "2026-03-03")
+    def test_fiscal_year_prefix_passes(self, extractor: UscgScrapingExtractor) -> None:
+        """23MF0066 opened 2022-10-05 — October = FY23 Q1. Pre-Step-3
+        this was quarantined; now it passes cleanly."""
+        record = self._make_record("23MF0066", "2022-10-05")
         passing, quarantined = extractor.check_invariants([record])
         assert passing == [record]
         assert quarantined == []
 
-    def test_mismatched_prefix_quarantined(self, extractor: UscgScrapingExtractor) -> None:
-        """26MF0158 + 2025-03-03 → year-prefix '26' vs year-suffix '25' → quarantined."""
-        record = self._make_record("26MF0158", "2025-03-03")
-        passing, quarantined = extractor.check_invariants([record])
-        assert passing == []
-        assert len(quarantined) == 1
-        assert "year-prefix mismatch" in quarantined[0].failure_reason
-
-    def test_cg_prefix_25_with_2025_passes(self, extractor: UscgScrapingExtractor) -> None:
-        """25CG0017 + 2025-06-04 → year-prefix '25' matches → passes."""
-        record = self._make_record("25CG0017", "2025-06-04")
+    def test_prefix_minus_one_pattern_passes(self, extractor: UscgScrapingExtractor) -> None:
+        """04V067S (prefix 04) opened 2006-01-11 — multi-year offset
+        from re-issue / amendment. Pre-Step-3 quarantined; now passes."""
+        record = self._make_record("04V067S", "2006-01-11")
         passing, _ = extractor.check_invariants([record])
         assert passing == [record]
 
-    def test_short_source_recall_id_short_circuits(self) -> None:
-        """source_recall_id < 2 chars returns None from the invariant — the
-        null-id check handles the structural problem elsewhere. We test the
-        helper directly because check_null_source_id would short-circuit the
-        invariant chain before _check_year_prefix_consistency runs."""
-        from src.extractors.uscg import _check_year_prefix_consistency
+    def test_unix_epoch_sentinel_passes(self, extractor: UscgScrapingExtractor) -> None:
+        """22MF0628 with opened_on=1970-01-01 (Finding O listing-side
+        sentinel for the no-date case). Pre-Step-3 quarantined as
+        year-prefix mismatch (prefix=22, year-suffix=70); now passes."""
+        record = self._make_record("22MF0628", "1970-01-01")
+        passing, _ = extractor.check_invariants([record])
+        assert passing == [record]
 
-        # 1-character source_recall_id — not empty (so not caught by
-        # check_null_source_id), but too short to extract a year prefix.
-        record = UscgRecallRecord.model_validate(
-            {
-                "number": "X",
-                "company_name": "TEST",
-                "opened_on": "2026-01-01",
-                "details_url": "https://example.invalid/d",
-            }
-        )
-        assert _check_year_prefix_consistency(record) is None
-
-    def test_null_opened_on_short_circuits(self) -> None:
-        """`opened_on` is nullable per Finding A scope caveat (38/38 in
-        sample, ~2.2% of corpus). When it's None, the year-prefix invariant
-        cannot compare and returns None — Step 1.5 corpus probe + a
-        potential follow-up invariant would handle null-opened_on rows
-        explicitly if the corpus surfaces any."""
-        from src.extractors.uscg import _check_year_prefix_consistency
-
-        record = UscgRecallRecord.model_validate(
-            {
-                "number": "26MF0158",
-                "company_name": "TEST",
-                "opened_on": None,
-                "details_url": "https://example.invalid/d",
-            }
-        )
+    def test_null_opened_on_passes_invariants(self, extractor: UscgScrapingExtractor) -> None:
+        """opened_on is nullable. A null opened_on passes check_invariants
+        cleanly (check_date_sanity short-circuits on None)."""
+        record = self._make_record("26MF0158", None)
         assert record.opened_on is None
-        assert _check_year_prefix_consistency(record) is None
+        passing, quarantined = extractor.check_invariants([record])
+        assert passing == [record]
+        assert quarantined == []
 
 
 # ---------------------------------------------------------------------------
