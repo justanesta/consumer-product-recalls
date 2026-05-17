@@ -411,18 +411,28 @@ FDA's FEI per ADR 0002).
 > value-level normalization lives in `stg_uscg_recalls.sql`, not in
 > `src/schemas/uscg.py`.
 
-**Step 1 — Source exploration** (pending)
-- Direct inspection of the USCG target HTML before writing the scraper. Document the observed HTML structure, publication frequency, and whether historical records are accessible via pagination or only the current page. Document in `documentation/uscg/`.
+**Step 1 — Source exploration** ✓ landed 2026-05-16 on branch `feature/uscg-exploration-schema-extractor-migration`
+- Direct inspection of the USCG target HTML before writing the scraper. Findings A-N captured in `documentation/uscg/scraping_observations.md`: static HTML / table-based listing / 71 paginated pages × ~25 rows = 1,763 records / 6 listing fields + 13 details fields / two date formats (`YYYY-MM-DD` listing, `M/D/YYYY` details) / no `robots.txt` / no `Last-Modified` / no `ETag` / details-page render byte-stable across consecutive fetches / pagination boundary returns empty placeholder row. Two findings deferred to Step 1.5 (corpus-wide `source_recall_id` uniqueness, year-prefix invariant) — surface as a one-shot script after Step 2's extractor lands.
 
-**Step 2 — Schema, extractor, migration** (pending)
-- `src/extractors/_html_scraping.py` — `HtmlScrapingExtractor` operation-type subclass of the `Extractor` ABC (deferred from Phase 2 to its first use here). Shape is informed by USCG: polite-scraper throttling → fetch HTML → archive raw to R2 → BeautifulSoup parse → bronze load. Unit-tested in isolation before `UscgScrapingExtractor` lands on top of it.
-- `UscgScrapingExtractor(HtmlScrapingExtractor)` using BeautifulSoup
-- Raw HTML archival to R2 (polite-scraper behavior)
-- Schema drift on HTML structure changes raises `ValidationError`
-- Weekly cron workflow
+**Step 2 — Schema, extractor, migration** ✓ landed 2026-05-16 on branch `feature/uscg-exploration-schema-extractor-migration`
+- `src/extractors/_html_scraping.py` — `HtmlScrapingExtractor` ABC promoted from `_base.py` stub. Polite-scraper throttling (sleep-before-fetch, `scrape_delay_seconds=1.0` default), per-fetch tenacity retry budget (3 attempts × short backoff so a transient 503 mid-walk doesn't restart the full 1,834-fetch walk), single-NDJSON-per-run R2 artifact via `land_raw`, page-0-only forensic capture. Unit-tested in isolation via `tests/extractors/test_html_scraping_base.py` with a minimal `_TestSubclass` fixture stubbing the abstract methods.
+- `UscgScrapingExtractor(HtmlScrapingExtractor)` — concrete subclass with BeautifulSoup (`lxml` backend) parsing of both listing + details. Pagination boundary detected via empty-`id` query parameter (Finding L). Drift fences: listing-page table headers validated against `expected_columns` (`config/sources/uscg.yaml`), details-page labels validated against `_DETAILS_LABEL_MAP`; both raise `TransientExtractionError` on mismatch. USCG-specific year-prefix invariant added (`source_recall_id[:2]` vs `opened_on.year % 100`). `UscgDeepRescanLoader` kept for symmetry with NHTSA/FDA/USDA — same fetches, skips `_touch_freshness`.
+- Raw HTML archival to R2: single NDJSON-per-run artifact, every fetched page's body+envelope serialized as one line, `application/x-ndjson` content-type. Re-ingest reads one R2 file. Migration 0013 adds `uscg_recalls_bronze` + `uscg_recalls_rejected`. `pyproject.toml` adds `beautifulsoup4>=4.12,<5` + `lxml>=5.0,<6` (project version stays at 0.6.0 on the branch — bumped on the merge-to-main PR per the parallel-branch version-coordination convention).
+- Schema drift on HTML structure changes raises `TransientExtractionError` at parse time (drift fence aborts the run cleanly) AND `ValidationError` at Pydantic time via `ConfigDict(extra='forbid', strict=True)` (catches additive drift not surfaced by the parser).
+- Weekly cron workflow — deferred to Step 5d post-Step-4 (cassette suite) per the user's branch sequencing.
 
-**Step 3 — First extraction and bronze findings** (pending)
-- After first extraction, document the observed publication cadence, pagination behavior, and any HTML structure surprises in `documentation/uscg/`.
+**Step 3 — First extraction and bronze findings** (partially landed 2026-05-17 on the same branch)
+- ✓ Ran `recalls deep-rescan uscg --change-type=historical_seed` — 1,763 fetched, 1,512 bronze inserts on first run, 251 quarantined (14.2% rejection rate). Run aborted on threshold but bronze + rejected rows persisted (transaction commits before threshold check).
+- ✓ Investigated rejections via `scripts/sql/uscg/bronze/explore_first_extraction.sql` + `diagnose_rejections.sql` + R2 inspection via `scripts/uscg/inspect_landing_ndjson.py`. Six findings landed in `scraping_observations.md`:
+  - **Finding G (replaced)**: year-prefix invariant falsified across ≥4 distinct mechanisms (fiscal year, prefix=year−1, multi-year re-issues, Unix-epoch sentinel). Invariant removed from `src/extractors/uscg.py`.
+  - **Finding O**: listing-side Unix-epoch sentinel — USCG renders `1970-01-01` literally in the Opened On column when no date is known, while the details page leaves Case Open Date empty. Same logical semantic, two encodings; silver `stg_uscg_recalls.sql` will map `1970-01-01` → NULL.
+  - **Finding P**: `company_name` corpus-nullable (33/1763 ≈ 1.9% empty, mostly pre-2005 historical entries). Schema + migration updated to allow nulls.
+  - **Finding Q (minor)**: listing pages contain occasional non-UTF-8 bytes; production parser handles via BeautifulSoup's encoding auto-detect; forensic inspector hardened with `errors="replace"`.
+  - **Finding R** (silver-layer): `disposition` value case-inconsistency — `Closed`/`Open`/`CLOSED`/`OPEN` all observed (1476/190/95/2 split). Bronze stores verbatim per ADR 0027; silver staging normalizes.
+  - **Finding S** (Phase 6 entity-resolution implication): 23 bronze rows have BOTH `mic`=NULL AND `company_name`=NULL → no firm anchor at all. Three silver treatments enumerated; recommend option 3 (soft-fail with `firm_id=NULL`). Decision deferred to Phase 6 silver landing.
+- ✓ Step 1.5 corpus probe partially resolved: year-prefix invariant probe folded into Step 3's findings above (Finding G replaced). `source_recall_id` uniqueness probe still deferred.
+- Re-extraction pending after Step 3 fixes — predicted outcome: 0% rejection rate, run completes with `status="success"`, ~1,763 bronze inserts.
+- Re-evaluate items #4 and #9 (see "Architectural follow-ups" below) — still deferred; pragmatic-capture path for `extraction_runs.response_*` columns held up cleanly (`response_etag` + `response_last_modified` correctly NULL per Finding K; no operational pain from sparsity yet).
 
 **Step 4 — Cassettes** (pending)
 - Cassette recording means capturing the real scraped HTML structure (not a hand-crafted fixture), since HTML schema drift is the primary failure mode. Record current-page HTML + a structurally-drifted variant to exercise the scraper's failure path.
@@ -430,6 +440,44 @@ FDA's FEI per ADR 0002).
 **Step 5 — Silver** (pending)
 - `models/staging/stg_uscg_recalls.sql` + extend silver models to incorporate USCG
 
+**Step 6 — USCG Finding J short-circuit enhancement** (deferred; no estimated landing date)
+
+**Goal:** drop USCG steady-state run cost from ~36 min (the current always-full-fetch design) to ~3 sec (one HTTP request + one DB lookup), enabling a cadence shift from weekly → daily aligned with the other sources. Without this, USCG dominates total pipeline runtime by ~90%.
+
+**Algorithm — two-part short-circuit check, applied at the top of `UscgScrapingExtractor.extract()`:**
+
+1. **Count check**: fetch page 0 only. Parse `Records Found: NNNN`. Compare against the value from the last successful run.
+2. **Listing-row check**: every recall ID visible in page 0's data rows already exists in `uscg_recalls_bronze` (single `WHERE source_recall_id = ANY(:ids)` lookup, ~25 IDs).
+
+If BOTH pass → short-circuit. `extract()` returns empty list. `_touch_freshness()` still updates `last_successful_extract_at` so monitoring sees the run as successful. `_record_run()` writes a `status="success"` row tagged with the short-circuit (new `change_type` value `"records_count_skip"` or boolean flag column on `extraction_runs`).
+
+If EITHER fails → fall through to the existing full 1,834-fetch walk. Correctness preserved either way.
+
+**Where the "previous count" lives**: either a new `last_records_count` field on `source_watermarks` (schema migration), OR derived at query-time from the most recent `extraction_runs` row's metadata (no migration, slightly more SQL each run). Pick the simpler one at implementation time.
+
+**Failure modes + mitigations:**
+
+- **Details-only edit on an existing recall**: USCG amends a details-page field (e.g., `Disposition: Open → Closed`) without touching the listing row. Neither short-circuit signal catches it. Mitigation: weekly operator-triggered `recalls deep-rescan uscg --change-type=schema_rebaseline` as a periodic safety net — runs the full walk, catches anything the short-circuit missed.
+- **Stale count + reshuffled listing**: USCG removes recall X and adds recall Y on the same run. Total count unchanged. New ID Y appears on page 0 → listing-row check fails → short-circuit correctly skipped. Caught by check (2).
+- **Listing reorders without content changes**: page 0's recall IDs might shift between runs due to sort order. The listing-row check tolerates this (set membership, not order).
+
+**New observability surface needed:**
+- `extraction_runs` should distinguish short-circuited runs from full-walk-with-0-inserts runs. Either: (a) new `change_type` value `"records_count_skip"`, (b) new boolean column `was_short_circuited`, or (c) a new `extraction_runs_skip_reason` text column. Pick at implementation time.
+- Dashboards should be able to answer "when did USCG last do a full walk?" — important for confirming the safety-net cadence is being honored.
+
+**Cadence change enabled:**
+- Move USCG cron from weekly → daily. Steady-state cost: ~21 sec/week (7 days × ~3 sec). vs current ~36 min/week.
+- Schedule weekly deep-walk (cron-triggered `recalls deep-rescan uscg --change-type=schema_rebaseline`) as the safety net.
+
+**Pre-conditions:** Step 4 (cassettes) + Step 5 (silver staging) land first so the short-circuit can be exercised against recorded flows + verified with downstream silver tests. Order: Step 4 → Step 5 → Step 6.
+
+**Implementation surfaces (touch list):**
+- `src/extractors/uscg.py`: new `_short_circuit_eligible()` helper; modify `extract()` to call it before the walk.
+- `src/extractors/uscg.py` or `_record_run`: persist the new short-circuit signal to `extraction_runs`.
+- New Alembic migration: `last_records_count` column on `source_watermarks` (if option (a)) or new column on `extraction_runs` (if option (c)).
+- `src/cli/main.py`: update `_LOOKBACK_NO_OP_MESSAGES["uscg"]` text to reflect short-circuit behavior.
+- `tests/extractors/test_uscg_extractor.py`: new test class for short-circuit eligibility + the fall-through path.
+- `documentation/uscg/scraping_observations.md` Finding J: add a Step-N postscript documenting the empirical short-circuit hit-rate after a few weeks of daily runs.
 ---
 
 ### Quality gates per source
@@ -511,6 +559,8 @@ Lands before Phase 7 cron turn-on so `extraction_runs` write-failures during cro
 
 **Constraint redesign (FK vs. CHECK vs. no-constraint) — deferred.** The original framing was "tackle after USCG so the source enum stabilizes." Two facts now make the upstream-dependency framing moot: (1) USCG was always in migration 0001's hardcoded `_SOURCES` list (a watermark row exists for it even though no extractor does), AND (2) USCG is now indefinitely deferred (USCG website down 2026-05-09). The source enum is therefore as stable as it'll get — the redesign now lacks **urgency**, not **prerequisites**.
 
+**Update 2026-05-16 (USCG reactivation, Phase 5d Steps 1 & 2 landed):** USCG is back online and the bronze extractor + migration 0013 land in this branch. The pre-seed argument holds — USCG required NO new seed migration because migration 0001's hardcoded `_SOURCES` already covered it. So the reactivation neither triggers nor defers this work: the cost of (c) status quo remains zero for the v1 five-source set. Re-evaluate at Phase 5d Step 3 IF either (a) the first formal USCG extraction surfaces an operational pain not captured by the diagnostic-logging fix, or (b) a sixth source is contemplated. Otherwise the original Phase 7 cron-prep reopen condition stands.
+
 **Reopen condition:** revisit during Phase 7 cron-prep when the operational pain (or lack thereof) of the per-new-source seed-migration ritual is visible. Adding a sixth source would be the natural trigger — at that point the cost of (c) status quo (one more seed migration) becomes empirically comparable to (a) or (b) the one-time constraint redesign, and the choice is decidable on data rather than speculation.
 
 ### FDA firm role reconciliation — Phase 6 prerequisite
@@ -590,6 +640,8 @@ Original framing assumed USCG (Phase 5d) would land and provide the second sourc
 **Acceptance criteria:** forensic queries that span all sources still work via a single LEFT JOIN per source-type table. No NULL sentinel from missing source-type rows is mistaken for "not captured" — captured-but-not-applicable distinguishes from genuinely missing.
 
 **Reopen condition:** revisit if (1) Phase 7 cron-prep surfaces a real operational cost from the sparsity — e.g., a query that's hard to write because the column is NULL-for-some-rows — or (2) USCG returns and forensics shape becomes known. After cron is on, restructuring the table requires data migration in addition to DDL, so weigh that cost in any future revisit.
+
+**Update 2026-05-16 (USCG reactivation, Phase 5d Steps 1 & 2 landed):** USCG returned 2026-05-15 — trigger (2) above has fired. Phase 5d Step 2 chose the **pragmatic capture path**: `UscgScrapingExtractor._record_run` populates the existing migration 0010 columns (`response_status_code`, `response_etag`, `response_last_modified`, `response_body_sha256`, `response_headers`) from the page-0 listing fetch, and leaves `response_inner_content_sha256` NULL (HTML has no wrapper/inner distinction). USCG's actual response shape (Finding K — no `Last-Modified`, no `ETag`, `Cache-Control: no-store`) means three of those five columns persist as NULL even when capture succeeds — that's correct semantics, not a missed capture. **Phase 5d Step 3 deliverable:** validate that the pragmatic-capture columns suffice operationally across ≥3 real extractions before committing to or against the Approach-2 (per-source-type extension tables) full redesign. If Step 3 surfaces HTML-specific forensic needs not covered by the existing columns (e.g., per-page retry counts, total NDJSON bytes uploaded, table-header signature for fast drift detection), THAT is the trigger for the redesign — not USCG-just-being-here.
 
 ### Shared annotated types and invariants audit — Phase 5c prerequisite
 

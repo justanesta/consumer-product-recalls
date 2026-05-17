@@ -519,7 +519,12 @@ def test_flat_file_extractor_defaults() -> None:
 
 
 def test_html_scraping_extractor_defaults() -> None:
-    from src.extractors._base import HtmlScrapingExtractor
+    # HtmlScrapingExtractor was promoted from a stub in `_base.py` to its own
+    # module (`_html_scraping.py`) at Phase 5d Step 2 when USCG became its
+    # first concrete user. The two abstract parse methods declared there
+    # (_parse_listing_page, _parse_details_page) must be stubbed alongside
+    # the original 5 lifecycle abstracts.
+    from src.extractors._html_scraping import HtmlScrapingExtractor
 
     class ConcreteHtml(HtmlScrapingExtractor[_FakeSchema]):
         source_name: str = "html"
@@ -548,6 +553,12 @@ def test_html_scraping_extractor_defaults() -> None:
             raw_landing_path: str,
         ) -> int:
             return 0
+
+        def _parse_listing_page(self, body: bytes, page_url: str) -> list[dict[str, Any]]:
+            return []
+
+        def _parse_details_page(self, body: bytes, page_url: str) -> dict[str, Any]:
+            return {}
 
     ext = ConcreteHtml()
     assert ext.start_url == "https://example.com/recalls"

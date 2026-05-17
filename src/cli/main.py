@@ -57,6 +57,10 @@ _LOOKBACK_NO_OP_MESSAGES: dict[str, str] = {
     "nhtsa": (
         "nhtsa: --lookback-days has no effect (flat-file full-dump every run; see Findings B + C)."
     ),
+    "uscg": (
+        "uscg: --lookback-days has no effect (full HTML re-scrape every run; "
+        "no date-cursor surface — see scraping_observations.md Finding K)."
+    ),
 }
 
 # Per-source notices when deep-rescan ignores --start-date/--end-date.
@@ -65,6 +69,10 @@ _DEEP_RESCAN_NO_DATE_WINDOW_MESSAGES: dict[str, str] = {
     "nhtsa": (
         "nhtsa: --start-date / --end-date are ignored "
         "(archives partitioned by DATEA at the source; see Finding H Q2)."
+    ),
+    "uscg": (
+        "uscg: --start-date / --end-date are ignored "
+        "(USCG listing has no date-range query surface; full re-scrape every run)."
     ),
 }
 

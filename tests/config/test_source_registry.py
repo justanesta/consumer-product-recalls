@@ -122,26 +122,66 @@ def test_documented_intent_fields_accepted_on_rest_config() -> None:
 # --- Registry dicts ---
 
 
-def test_extractor_registry_covers_all_five_sources() -> None:
+def test_extractor_registry_covers_all_six_sources() -> None:
+    # Six sources after Phase 5d Step 2 lands USCG (2026-05-16). When the
+    # seventh lands, bump this test and the deep-rescan companion together.
+    from src.extractors.uscg import UscgScrapingExtractor
+
     assert set(EXTRACTOR_BY_SOURCE_NAME.keys()) == {
         "cpsc",
         "fda",
         "usda",
         "usda_establishments",
         "nhtsa",
+        "uscg",
     }
     assert EXTRACTOR_BY_SOURCE_NAME["cpsc"] is CpscExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["fda"] is FdaExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["usda"] is UsdaExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["usda_establishments"] is UsdaEstablishmentExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["nhtsa"] is NhtsaExtractor
+    assert EXTRACTOR_BY_SOURCE_NAME["uscg"] is UscgScrapingExtractor
 
 
-def test_deep_rescan_registry_covers_three_sources() -> None:
-    assert set(DEEP_RESCAN_BY_SOURCE_NAME.keys()) == {"fda", "usda", "nhtsa"}
+def test_deep_rescan_registry_covers_four_sources() -> None:
+    # Four after Phase 5d Step 2 lands USCG (2026-05-16). USCG's deep-rescan
+    # is symmetry-only — same fetches as the incremental path, skips
+    # freshness touch only — but still wired so `recalls deep-rescan uscg`
+    # works uniformly across sources.
+    from src.extractors.uscg import UscgDeepRescanLoader
+
+    assert set(DEEP_RESCAN_BY_SOURCE_NAME.keys()) == {"fda", "usda", "nhtsa", "uscg"}
     assert DEEP_RESCAN_BY_SOURCE_NAME["fda"] is FdaDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["usda"] is UsdaDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["nhtsa"] is NhtsaDeepRescanLoader
+    assert DEEP_RESCAN_BY_SOURCE_NAME["uscg"] is UscgDeepRescanLoader
+
+
+def test_html_scraping_to_extractor_kwargs_returns_full_shape() -> None:
+    """``HtmlScrapingSourceConfig.to_extractor_kwargs`` returns the kwargs
+    dict the registry consumes during extractor instantiation. Mirrors the
+    REST + flat-file variants and ensures every YAML-declared field reaches
+    the extractor (or is filtered out by ``build_extractor_kwargs`` if the
+    extractor class doesn't declare it)."""
+    from src.config.source_registry import HtmlScrapingSourceConfig
+
+    config = HtmlScrapingSourceConfig(
+        source_name="uscg",
+        source_type="html_scraping",
+        start_url="https://example.invalid/listing",
+        timeout_seconds=45.0,
+        scrape_delay_seconds=2.0,
+        expected_columns=["A", "B", "C"],
+        rate_limit_rps=0.5,
+    )
+    kwargs = config.to_extractor_kwargs()
+    assert kwargs == {
+        "start_url": "https://example.invalid/listing",
+        "timeout_seconds": 45.0,
+        "scrape_delay_seconds": 2.0,
+        "expected_columns": ["A", "B", "C"],
+        "rate_limit_rps": 0.5,
+    }
 
 
 def test_extractor_registry_excludes_deep_rescan_only_sources() -> None:
