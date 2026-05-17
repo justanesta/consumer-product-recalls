@@ -93,6 +93,7 @@ without manual demarcation.
 | `usda_recalls/bronze/probe_recall_id_storage.sql` | Confirm source_recall_id storage shape (leading/trailing whitespace contamination); brackets-wrapped values + length + corpus-wide whitespace summary | — |
 | `usda_recalls/bronze/diagnose_wave_field_drivers.sql` | For a given run, count which JSONB fields actually differ between new and prior bronze versions across ALL re-versioned rows. Authoritative answer to "is this wave driven by one field?" | — |
 | `usda_recalls/bronze/classify_field_diffs_whitespace.sql` | Reusable. For a given run + JSONB field, classify each diff as whitespace_only vs real_content_change vs null_transition. Empirical justification for any hash-exclude proposal (ADR-0032-analog). Parameterized via -v run_id and -v field | — |
+| `usda_recalls/bronze/list_inserted_recalls_per_run.sql` | For every USDA run with records_inserted > 0, list the (source_recall_id, langcode) pair(s) it inserted. Maps a "wave" date to specific recall IDs to drive subsequent diagnose_payload_drift_for_recall.sql or scripts/usda_recalls/inspect_raw_landing_for_recall.py probes. | — |
 
 ### USDA establishments
 

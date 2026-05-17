@@ -694,6 +694,53 @@ If a fourth source's schema reveals a pattern that meaningfully repeats across t
 - `extraction_run_identities` table — Alembic migration; one row per `(run_id, source_recall_id)` per ADR 0026, populated by a per-run insert in `BronzeLoader.load()`. USDA-only initial scope per the accepted ADR. Bronze-side half of the lifecycle-tracking work. See § ADR 0026 implementation above for full rationale.
 - `dbt/models/silver/recall_lifecycle.sql` — silver-side half of ADR 0026; derives `first_seen_at`, `last_seen_at`, `is_currently_active`, `was_ever_retracted`, `edit_count`. **Within Phase 6, lands AFTER `recall_event_history`** — `recall_lifecycle` reads from history rows, not vice versa.
 - **Cross-source SCD-2 strategy for silver dimensions.** `recall_event_history` and `recall_lifecycle` cover recall-event-level history, but silver dimensions (`firm`, `firm_establishment_attributes`, `recall_product`) are currently materialized as `table` and re-built on every `dbt build` with **no attribute history preserved**. The 2026-05-15 USDA establishments run made this gap concrete: 13 establishments flipped `status_regulated_est` from `''` to `'Inactive'` (see `documentation/usda/establishment_api_observations.md` Finding G addendum), and after the next transform their prior status is unrecoverable from silver/gold alone. Decide on a uniform strategy across sources: (a) dbt snapshots in `dbt/snapshots/` with `strategy='check'` over a chosen attribute set per dim, OR (b) a per-dim `silver/<dim>_history.sql` model that derives history from bronze via `LAG()` (analogous to `recall_event_history`'s pattern), OR (c) defer entirely and route as-of-date queries to bronze. Decision-forcing analytical use cases: "what was the firm's regulatory status as of recall X's publication date", "did this firm change address between recalls", "when did this product's category last change". File as an ADR before implementing, since the choice ripples across all four sources' silver layers and the as-of-date query surface affects gold model design. Sequence: file the ADR early in Phase 6 (before `recall_event_history` lands, since the implementation may share `LAG()` plumbing); land the implementation alongside or after firm entity resolution, since firm resolution stabilizes the dim grain.
+
+  **Sub-decision the SCD-2 ADR must resolve — value-selection policy for erasable text fields.** Distinct from the storage-architecture choice (a/b/c above), the ADR must also specify *how silver's current-state view selects a value when the source has erased a previously-populated text field mid-lifecycle*. Three policies, in increasing order of analytical fidelity and implementation complexity:
+
+  - **Policy A — naive latest wins.** Silver `current_value = bronze_latest_snapshot.value`, full stop. If FSIS erases `field_establishment` from `"Richelieu Foods, Inc."` to `""`, silver carries `""` and downstream joins against `usda_establishments` go silently lossy. Simplest. Worst for analytical fidelity. Defensible only if value-erasure is provably rare and inconsequential — which our current evidence contradicts.
+  - **Policy B — latest-non-empty wins (per-field).** Silver carries the last populated value forward; an explicit `<field>_is_inferred_from_history` boolean (or analogous flag) marks rows where the live value was overridden. Preserves join capability for the common case (FSIS-side data degradation). Wrong for the case where FSIS *intentionally* cleared the field (e.g., legal redaction, firm misattribution correction). Requires per-field policy declaration in the silver model (not all text fields should be subject to non-empty preservation — `summary` certainly shouldn't be).
+  - **Policy C — latest wins, history is a first-class peer model.** Silver `current_value = bronze_latest_snapshot.value` (same as Policy A), AND a parallel `silver/<dim>_attribute_history.sql` model exposes prior populated values as queryable rows. Downstream consumers that need join resilience use the history model; downstream consumers that want the source-of-truth current state read silver-current. Cleanest separation of concerns: silver represents "what FSIS says is true today," history represents "what FSIS has ever said." No policy decisions baked into silver-current; no inferred-value confusion in downstream joins; the as-of-date query surface composes naturally on top of history.
+
+  **Leading candidate as of 2026-05-17: Policy C.** Rationale: (1) matches the project's existing bronze/silver division of labor — bronze is the passive ledger, silver is the opinionated current-state view; (2) avoids baking policy decisions into silver-current that we don't yet have enough evidence to make confidently (the user's instinct in the 2026-05-17 thread); (3) parallels the existing `recall_event_history` design (history is a peer model, not metadata on the current table); (4) keeps Policy B available as a layered optimization on a per-consumer basis later, once join-coverage measurement quantifies the loss from naive latest. Tradeoff is plumbing cost: every dim that has erasable text fields needs a peer history model. That cost is bounded (the same `LAG()` pattern is reused) and aligns with sub-decision (b) above if (b) is chosen.
+
+  **Motivating empirical evidence for the value-selection sub-decision:**
+
+  - USDA recalls (2026-05-17): `PHA-04302026-01` / English exhibited upstream-FSIS clearing of `field_establishment` (`"Richelieu Foods, Inc."` → `""`) and `field_company_media_contact` (populated HTML block → `""`) between snap 1 (2026-05-01) and snap 2 (2026-05-02), with values remaining empty in snap 3 (2026-05-17). Verification script: `scripts/usda_recalls/inspect_raw_landing_for_recall.py` confirms the erasure originates upstream at the API, not in the bronze Pydantic schema (which preserves `""` verbatim per ADR 0027). Full diagnostic write-up: `documentation/usda/bilingual_and_lmd_findings.md` PHA-04302026-01 subsection.
+  - USDA establishments (2026-05-15): 13 establishments flipped `status_regulated_est` from `''` to `'Inactive'` (the original motivating case for the sub-decision (a/b/c) framing above). Same class of mid-lifecycle attribute change; different field type (status enum vs free-text join key).
+  - Cross-source extrapolation: any source that publishes editorially-maintained records (CPSC, FDA, NHTSA recall narratives) is subject to the same risk. The ADR should specify Policy C as the cross-source default and audit each source's per-field stability profile (an extension of Finding C / its analogues) to identify which fields warrant inclusion in the per-dim history model.
+
+  **Implementation hooks once the ADR lands:**
+
+  - If Policy C: file `dbt/models/silver/<dim>_attribute_history.sql` for each dim with erasable text fields. Schema: `(natural_key, attribute_name, value, first_seen_at, last_seen_at, is_currently_active)`. One row per distinct value per natural_key per contiguous run of snapshots. Sourced from bronze via `LAG()`, reusing the `recall_event_history` plumbing.
+  - Independently of storage architecture: add a "value-erasure stability profile" subsection to each source's findings doc enumerating which text fields have been observed to clear mid-lifecycle. Seed with the USDA observations above; extend per source as evidence accumulates.
+  - Phase 6 quality gate addition: "downstream join against an erasable text field falls back to history when current-snapshot is empty" — verifiable via an e2e test that re-creates the PHA-04302026-01 erasure pattern in test fixtures and asserts the `usda_establishments` join resolves to the pre-erasure firm.
+  - **dbt singular test — continuous join-key erasure warning.** File `dbt/tests/source_assumptions/assert_no_join_key_erasure_<source>.sql` for each source that has join-key text fields prone to erasure, alongside the existing U2/U3 wrappers (`severity=warn` to match convention). Test logic: for each `(natural_key)` in bronze, fail (warn) if a join-key text field is populated in any prior snapshot AND empty (`''` or `NULL`) in the current snapshot. USDA recalls seed fields: `establishment`, `company_media_contact`. USDA establishments seed fields: TBD pending erasure observations there. The test surfaces every new erasure event during the next `dbt build` after extraction — proactive monitoring layer that pairs with the silver `<dim>_attribute_history.sql` model (history captures the value; the test surfaces the event). Without this test, erasures land silently in bronze and surface only when someone runs `inspect_raw_landing_for_recall.py` against a specific recall. Tracker query shape:
+
+    ```sql
+    -- per source, per declared erasure-prone field
+    with snaps as (
+        select source_recall_id, langcode, extraction_timestamp,
+               <field> as value,
+               row_number() over (
+                 partition by source_recall_id, langcode
+                 order by extraction_timestamp desc
+               ) as rn
+        from {{ ref('<bronze_table>') }}
+    )
+    select source_recall_id, langcode
+    from snaps cur
+    where cur.rn = 1
+      and (cur.value is null or cur.value = '')
+      and exists (
+          select 1 from snaps prior
+          where prior.source_recall_id = cur.source_recall_id
+            and prior.langcode = cur.langcode
+            and prior.rn > 1
+            and prior.value is not null and prior.value <> ''
+      )
+    ```
+
+    Generalize via dbt's per-column test config (one test per erasure-prone field, listed in `dbt_project.yml` or in a vars block) so adding a new field-to-monitor is a one-line config change rather than a new test file.
 - `scripts/backfill_manifest.py` — historical R2 payload replay per ADR 0028 Mechanism C, used to populate `extraction_run_identities` for runs predating the table's existence.
 - `scripts/re_ingest.py` — re-ingest CLI per ADR 0014 for schema-drift recovery
 - Alembic migrations for all silver and gold tables
