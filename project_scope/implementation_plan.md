@@ -457,7 +457,7 @@ If EITHER fails → fall through to the existing full 1,834-fetch walk. Correctn
 
 **Failure modes + mitigations:**
 
-- **Details-only edit on an existing recall**: USCG amends a details-page field (e.g., `Disposition: Open → Closed`) without touching the listing row. Neither short-circuit signal catches it. Mitigation: monthly operator-triggered `recalls deep-rescan uscg --change-type=schema_rebaseline` as a periodic safety net — runs the full walk, catches anything the short-circuit missed.
+- **Details-only edit on an existing recall**: USCG amends a details-page field (e.g., `Disposition: Open → Closed`) without touching the listing row. Neither short-circuit signal catches it. Mitigation: weekly operator-triggered `recalls deep-rescan uscg --change-type=schema_rebaseline` as a periodic safety net — runs the full walk, catches anything the short-circuit missed.
 - **Stale count + reshuffled listing**: USCG removes recall X and adds recall Y on the same run. Total count unchanged. New ID Y appears on page 0 → listing-row check fails → short-circuit correctly skipped. Caught by check (2).
 - **Listing reorders without content changes**: page 0's recall IDs might shift between runs due to sort order. The listing-row check tolerates this (set membership, not order).
 
@@ -467,7 +467,7 @@ If EITHER fails → fall through to the existing full 1,834-fetch walk. Correctn
 
 **Cadence change enabled:**
 - Move USCG cron from weekly → daily. Steady-state cost: ~21 sec/week (7 days × ~3 sec). vs current ~36 min/week.
-- Schedule monthly deep-walk (cron-triggered `recalls deep-rescan uscg --change-type=schema_rebaseline`) as the safety net.
+- Schedule weekly deep-walk (cron-triggered `recalls deep-rescan uscg --change-type=schema_rebaseline`) as the safety net.
 
 **Pre-conditions:** Step 4 (cassettes) + Step 5 (silver staging) land first so the short-circuit can be exercised against recorded flows + verified with downstream silver tests. Order: Step 4 → Step 5 → Step 6.
 
