@@ -335,12 +335,7 @@ class RestApiExtractor[T: BaseModel](Extractor[T]):
         self._captured_response_headers = dict(response.headers)
 
 
-class HtmlScrapingExtractor[T: BaseModel](Extractor[T]):
-    """
-    Base for extractors that scrape HTML pages (USCG).
-    scrape_delay_seconds enforces polite-scraper behavior between page requests.
-    """
-
-    start_url: str
-    timeout_seconds: float = 30.0
-    scrape_delay_seconds: float = 1.0
+# NOTE: ``HtmlScrapingExtractor`` lives in ``src/extractors/_html_scraping.py``
+# as of Phase 5d Step 2 (first webscraped source: USCG). Previously declared
+# here as a stub; promoted to its own module alongside ``_flat_file.py`` once
+# concrete usage surfaced. Import from ``src.extractors._html_scraping``.

@@ -44,6 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.extractors.cpsc import CpscExtractor
 from src.extractors.fda import FdaDeepRescanLoader, FdaExtractor
 from src.extractors.nhtsa import NhtsaDeepRescanLoader, NhtsaExtractor
+from src.extractors.uscg import UscgDeepRescanLoader, UscgScrapingExtractor
 from src.extractors.usda import UsdaDeepRescanLoader, UsdaExtractor
 from src.extractors.usda_establishment import UsdaEstablishmentExtractor
 
@@ -61,16 +62,20 @@ EXTRACTOR_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
     "usda": UsdaExtractor,
     "usda_establishments": UsdaEstablishmentExtractor,
     "nhtsa": NhtsaExtractor,
+    "uscg": UscgScrapingExtractor,
 }
 
 # Source-name → deep-rescan loader class for ``recalls deep-rescan <source>``.
-# Three of five sources have a deep-rescan path; CPSC and USDA establishments
+# Four of six sources have a deep-rescan path; CPSC and USDA establishments
 # do not (CPSC has no deep-rescan command branch; establishments has no
-# historical archive).
+# historical archive). USCG's deep-rescan is symmetry-only — same fetches
+# as the incremental path, differs only in not touching freshness; see
+# UscgDeepRescanLoader docstring.
 DEEP_RESCAN_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
     "fda": FdaDeepRescanLoader,
     "usda": UsdaDeepRescanLoader,
     "nhtsa": NhtsaDeepRescanLoader,
+    "uscg": UscgDeepRescanLoader,
 }
 
 
@@ -120,7 +125,7 @@ class RestApiSourceConfig(_BaseSourceConfig):
 
 
 class FlatFileSourceConfig(_BaseSourceConfig):
-    """Config shape for flat-file sources (NHTSA, future USCG-if-it-returns)."""
+    """Config shape for flat-file sources (NHTSA)."""
 
     source_type: Literal["flat_file"]
     file_url: str
@@ -141,14 +146,40 @@ class FlatFileSourceConfig(_BaseSourceConfig):
         }
 
 
+class HtmlScrapingSourceConfig(_BaseSourceConfig):
+    """Config shape for HTML-scraping sources (USCG, Phase 5d Step 2 first use).
+
+    ``start_url`` is the entry point — the listing page for paginated
+    scrape sources. ``scrape_delay_seconds`` enforces polite throttling
+    via ``HtmlScrapingExtractor._throttle()`` (minimum-inter-request
+    interval contract). ``expected_columns`` is the listing-page
+    schema-drift fence — see ``UscgScrapingExtractor._parse_listing_page``.
+    """
+
+    source_type: Literal["html_scraping"]
+    start_url: str
+    timeout_seconds: float = 30.0
+    scrape_delay_seconds: float = 1.0
+    expected_columns: list[str] | None = None
+
+    def to_extractor_kwargs(self) -> dict[str, Any]:
+        return {
+            "start_url": self.start_url,
+            "timeout_seconds": self.timeout_seconds,
+            "scrape_delay_seconds": self.scrape_delay_seconds,
+            "expected_columns": self.expected_columns,
+            "rate_limit_rps": self.rate_limit_rps,
+        }
+
+
 SourceConfig = Annotated[
-    RestApiSourceConfig | FlatFileSourceConfig,
+    RestApiSourceConfig | FlatFileSourceConfig | HtmlScrapingSourceConfig,
     Field(discriminator="source_type"),
 ]
 
 
 def build_extractor_kwargs(
-    config: RestApiSourceConfig | FlatFileSourceConfig,
+    config: RestApiSourceConfig | FlatFileSourceConfig | HtmlScrapingSourceConfig,
     extractor_cls: type[Extractor[Any]],
     settings: Settings,
     *,

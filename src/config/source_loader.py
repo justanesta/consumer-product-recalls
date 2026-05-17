@@ -17,6 +17,7 @@ from pydantic import TypeAdapter
 
 from src.config.source_registry import (
     FlatFileSourceConfig,
+    HtmlScrapingSourceConfig,
     RestApiSourceConfig,
     SourceConfig,
 )
@@ -25,7 +26,9 @@ _CONFIG_DIR = Path(__file__).resolve().parents[2] / "config" / "sources"
 _ADAPTER: TypeAdapter[SourceConfig] = TypeAdapter(SourceConfig)
 
 
-def load_source_config(source_name: str) -> RestApiSourceConfig | FlatFileSourceConfig:
+def load_source_config(
+    source_name: str,
+) -> RestApiSourceConfig | FlatFileSourceConfig | HtmlScrapingSourceConfig:
     """Load and validate ``config/sources/<source_name>.yaml``.
 
     Raises ``FileNotFoundError`` if the YAML file doesn't exist.
