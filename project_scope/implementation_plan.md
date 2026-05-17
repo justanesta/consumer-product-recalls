@@ -440,6 +440,44 @@ FDA's FEI per ADR 0002).
 **Step 5 — Silver** (pending)
 - `models/staging/stg_uscg_recalls.sql` + extend silver models to incorporate USCG
 
+**Step 6 — USCG Finding J short-circuit enhancement** (deferred; no estimated landing date)
+
+**Goal:** drop USCG steady-state run cost from ~36 min (the current always-full-fetch design) to ~3 sec (one HTTP request + one DB lookup), enabling a cadence shift from weekly → daily aligned with the other sources. Without this, USCG dominates total pipeline runtime by ~90%.
+
+**Algorithm — two-part short-circuit check, applied at the top of `UscgScrapingExtractor.extract()`:**
+
+1. **Count check**: fetch page 0 only. Parse `Records Found: NNNN`. Compare against the value from the last successful run.
+2. **Listing-row check**: every recall ID visible in page 0's data rows already exists in `uscg_recalls_bronze` (single `WHERE source_recall_id = ANY(:ids)` lookup, ~25 IDs).
+
+If BOTH pass → short-circuit. `extract()` returns empty list. `_touch_freshness()` still updates `last_successful_extract_at` so monitoring sees the run as successful. `_record_run()` writes a `status="success"` row tagged with the short-circuit (new `change_type` value `"records_count_skip"` or boolean flag column on `extraction_runs`).
+
+If EITHER fails → fall through to the existing full 1,834-fetch walk. Correctness preserved either way.
+
+**Where the "previous count" lives**: either a new `last_records_count` field on `source_watermarks` (schema migration), OR derived at query-time from the most recent `extraction_runs` row's metadata (no migration, slightly more SQL each run). Pick the simpler one at implementation time.
+
+**Failure modes + mitigations:**
+
+- **Details-only edit on an existing recall**: USCG amends a details-page field (e.g., `Disposition: Open → Closed`) without touching the listing row. Neither short-circuit signal catches it. Mitigation: monthly operator-triggered `recalls deep-rescan uscg --change-type=schema_rebaseline` as a periodic safety net — runs the full walk, catches anything the short-circuit missed.
+- **Stale count + reshuffled listing**: USCG removes recall X and adds recall Y on the same run. Total count unchanged. New ID Y appears on page 0 → listing-row check fails → short-circuit correctly skipped. Caught by check (2).
+- **Listing reorders without content changes**: page 0's recall IDs might shift between runs due to sort order. The listing-row check tolerates this (set membership, not order).
+
+**New observability surface needed:**
+- `extraction_runs` should distinguish short-circuited runs from full-walk-with-0-inserts runs. Either: (a) new `change_type` value `"records_count_skip"`, (b) new boolean column `was_short_circuited`, or (c) a new `extraction_runs_skip_reason` text column. Pick at implementation time.
+- Dashboards should be able to answer "when did USCG last do a full walk?" — important for confirming the safety-net cadence is being honored.
+
+**Cadence change enabled:**
+- Move USCG cron from weekly → daily. Steady-state cost: ~21 sec/week (7 days × ~3 sec). vs current ~36 min/week.
+- Schedule monthly deep-walk (cron-triggered `recalls deep-rescan uscg --change-type=schema_rebaseline`) as the safety net.
+
+**Pre-conditions:** Step 4 (cassettes) + Step 5 (silver staging) land first so the short-circuit can be exercised against recorded flows + verified with downstream silver tests. Order: Step 4 → Step 5 → Step 6.
+
+**Implementation surfaces (touch list):**
+- `src/extractors/uscg.py`: new `_short_circuit_eligible()` helper; modify `extract()` to call it before the walk.
+- `src/extractors/uscg.py` or `_record_run`: persist the new short-circuit signal to `extraction_runs`.
+- New Alembic migration: `last_records_count` column on `source_watermarks` (if option (a)) or new column on `extraction_runs` (if option (c)).
+- `src/cli/main.py`: update `_LOOKBACK_NO_OP_MESSAGES["uscg"]` text to reflect short-circuit behavior.
+- `tests/extractors/test_uscg_extractor.py`: new test class for short-circuit eligibility + the fall-through path.
+- `documentation/uscg/scraping_observations.md` Finding J: add a Step-N postscript documenting the empirical short-circuit hit-rate after a few weeks of daily runs.
 ---
 
 ### Quality gates per source

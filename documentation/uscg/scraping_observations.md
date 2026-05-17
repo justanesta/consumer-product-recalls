@@ -142,7 +142,9 @@ Narrative fields preserved verbatim (per ADR 0027 storage-only convention at bro
 
 Confirmed `Records Found: 01763` string at the bottom of page 0. Persists on partial-data pages (page 70). Pagination boundary page 71 also displays the same count — i.e., the count is a global signal not gated by the current page slice.
 
-**Future optimization** (not v1): a steady-state run can HEAD or GET only page 0, scrape `Records Found`, and short-circuit the full walk if the count is unchanged since last run. Documented here for Phase 6+; not implemented in v1.
+**Signal value:** combined with the visible listing-row recall IDs on page 0, this is a cheap two-part change-detection oracle (page-0 count unchanged AND every page-0 row ID already in bronze → no new recalls). Enables a steady-state short-circuit that drops weekly run cost from ~36 min to ~3 sec and unlocks a daily cadence aligned with the other sources.
+
+**Implementation plan:** `project_scope/implementation_plan.md` Step 6 (deferred — depends on Step 4 cassettes + Step 5 silver landing first).
 
 ## K. `Last-Modified` / `ETag` on listing page — NEITHER
 
