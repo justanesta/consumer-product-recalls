@@ -423,11 +423,13 @@ FDA's FEI per ADR 0002).
 
 **Step 3 — First extraction and bronze findings** (partially landed 2026-05-17 on the same branch)
 - ✓ Ran `recalls deep-rescan uscg --change-type=historical_seed` — 1,763 fetched, 1,512 bronze inserts on first run, 251 quarantined (14.2% rejection rate). Run aborted on threshold but bronze + rejected rows persisted (transaction commits before threshold check).
-- ✓ Investigated rejections via `scripts/sql/uscg/bronze/explore_first_extraction.sql` + `diagnose_rejections.sql` + R2 inspection via `scripts/uscg/inspect_landing_ndjson.py`. Three findings landed in `scraping_observations.md`:
+- ✓ Investigated rejections via `scripts/sql/uscg/bronze/explore_first_extraction.sql` + `diagnose_rejections.sql` + R2 inspection via `scripts/uscg/inspect_landing_ndjson.py`. Six findings landed in `scraping_observations.md`:
   - **Finding G (replaced)**: year-prefix invariant falsified across ≥4 distinct mechanisms (fiscal year, prefix=year−1, multi-year re-issues, Unix-epoch sentinel). Invariant removed from `src/extractors/uscg.py`.
   - **Finding O**: listing-side Unix-epoch sentinel — USCG renders `1970-01-01` literally in the Opened On column when no date is known, while the details page leaves Case Open Date empty. Same logical semantic, two encodings; silver `stg_uscg_recalls.sql` will map `1970-01-01` → NULL.
   - **Finding P**: `company_name` corpus-nullable (33/1763 ≈ 1.9% empty, mostly pre-2005 historical entries). Schema + migration updated to allow nulls.
   - **Finding Q (minor)**: listing pages contain occasional non-UTF-8 bytes; production parser handles via BeautifulSoup's encoding auto-detect; forensic inspector hardened with `errors="replace"`.
+  - **Finding R** (silver-layer): `disposition` value case-inconsistency — `Closed`/`Open`/`CLOSED`/`OPEN` all observed (1476/190/95/2 split). Bronze stores verbatim per ADR 0027; silver staging normalizes.
+  - **Finding S** (Phase 6 entity-resolution implication): 23 bronze rows have BOTH `mic`=NULL AND `company_name`=NULL → no firm anchor at all. Three silver treatments enumerated; recommend option 3 (soft-fail with `firm_id=NULL`). Decision deferred to Phase 6 silver landing.
 - ✓ Step 1.5 corpus probe partially resolved: year-prefix invariant probe folded into Step 3's findings above (Finding G replaced). `source_recall_id` uniqueness probe still deferred.
 - Re-extraction pending after Step 3 fixes — predicted outcome: 0% rejection rate, run completes with `status="success"`, ~1,763 bronze inserts.
 - Re-evaluate items #4 and #9 (see "Architectural follow-ups" below) — still deferred; pragmatic-capture path for `extraction_runs.response_*` columns held up cleanly (`response_etag` + `response_last_modified` correctly NULL per Finding K; no operational pain from sparsity yet).

@@ -277,10 +277,41 @@ Surfaced incidentally during R2 inspection: at least one listing page (page 31 a
 
 Not blocking for any data-quality decision; documented because the inspector now renders `�` in those positions, which is itself a useful diagnostic signal if it ever crops up in narrative text fields that bronze captures verbatim.
 
+## R. Disposition value case-inconsistency (Step 3, silver-layer concern)
+
+`Disposition` is rendered by USCG with inconsistent letter case across the corpus. Step 3's clean extraction (`explore_first_extraction.sql` Q6) shows:
+
+| Disposition value | Count | Share |
+|---|---|---|
+| `Closed` | 1,476 | 83.7% |
+| `Open` | 190 | 10.8% |
+| `CLOSED` | 95 | 5.4% |
+| `OPEN` | 2 | 0.1% |
+
+The lowercase-modal forms (`Closed`/`Open`) dominate but the upper-case forms (`CLOSED`/`OPEN`) account for ~5.5% of the corpus. Likely a generational difference in USCG's CMS — pre-some-date entries used uppercase; the modern UI title-cases.
+
+Bronze stores verbatim per ADR 0027. **Silver `stg_uscg_recalls.sql` will normalize** — `lower(disposition)` or canonical title-case + `accepted_values: ['open', 'closed']` (or whatever convention the cross-source `recall_event.status` enum settles on). Same shape as the `mfgname` / `companyname` normalization NHTSA does in its staging model.
+
+## S. Null-firm-anchor cluster (Step 3, Phase 6 entity-resolution implication)
+
+`explore_first_extraction.sql` Q7 surfaced **23 bronze rows where BOTH `mic` AND `company_name` are NULL**. These recalls have no manufacturer code AND no manufacturer name — the row carries `source_recall_id`, `opened_on`, and miscellaneous downstream fields but no firm anchor at all.
+
+Combined with the broader corpus null rates (`null_mic=120`, `null_company_name=33`), the intersection of "no MIC" and "no company" suggests these are pre-USCG-CMS records imported from an older system without the firm metadata fields populated. The 23 rows are a subset of the 120 null-MIC and (partial overlap with) the 33 null-company-name rows.
+
+**Phase 6 firm-entity-resolution implication:** these 23 rows cannot be matched to any `firm` via the cross-source resolution logic (ADR 0022). Three plausible silver-layer treatments:
+
+1. **Synthetic "UNKNOWN" firm anchor.** Assign these rows a deterministic placeholder firm-id (e.g., `firm_id = md5('USCG' || source_recall_id)`). Preserves row count, separates true-unknown from real-firm cases in downstream queries. Recommended.
+2. **Drop from silver.** Lose ~1.3% of corpus to maintain firm-cardinality cleanliness. Aggressive; loses real recalls.
+3. **Soft-fail in entity resolution.** Let the rows land in silver with `firm_id = NULL`; downstream gold queries `JOIN` to firm via OUTER and the rows appear in counts but not firm rollups. Cleanest tradeoff for v1.
+
+Decision deferred to Phase 6 silver landing — document the count + the three options here so it's not a surprise then.
+
 ---
 
 ## Open items deferred to Step 1.5 / Step 3
 
 - **Step 1.5** (after Step 2 extractor lands, before first formal extraction): a focused script that walks all 71 pages once, asserts `source_recall_id` is corpus-unique (Finding C). Originally Step 1.5 also included the year-prefix invariant check (Finding G) — that resolved in Step 3 by falsification (see Finding G above).
-- **Step 3** (first formal extraction + bronze findings): ✓ completed 2026-05-17. Findings G (replaced), O, P, Q landed. `opened_on` `last_date` drift monitoring (Finding E) deferred to subsequent runs.
+- **Step 3** (first formal extraction + bronze findings): ✓ completed 2026-05-17. Findings G (replaced), O, P, Q, R, S landed. `opened_on` `last_date` drift monitoring (Finding E) deferred to subsequent runs.
+- **Phase 5d Step 5** (silver `stg_uscg_recalls.sql`): must handle Finding O (`opened_on = 1970-01-01` → NULL), Finding R (disposition case-normalization), and Finding S (null-firm-anchor decision — recommend option 3 soft-fail). Capture these as the staging model's documented invariants.
+- **Phase 6** (firm entity resolution): Finding S informs how USCG rows participate in cross-source firm rollups.
 - **Phase 6+** (smart-skip layer): `Records Found` total as a steady-state short-circuit signal (Finding J).
