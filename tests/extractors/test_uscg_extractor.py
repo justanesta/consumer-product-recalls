@@ -1094,9 +1094,9 @@ class TestShortCircuit:
         for c in mock_conn.execute.call_args_list:
             if hasattr(c.args[0], "compile"):
                 params = c.args[0].compile().params
-                assert (
-                    "last_records_count" not in params
-                ), "_update_records_count should be a no-op when _records_found_total is None"
+                assert "last_records_count" not in params, (
+                    "_update_records_count should be a no-op when _records_found_total is None"
+                )
 
     def test_deep_rescan_never_short_circuits(self, deep_rescan: UscgDeepRescanLoader) -> None:
         """UscgDeepRescanLoader._should_short_circuit always returns False —
@@ -1126,6 +1126,6 @@ class TestShortCircuit:
         for c in mock_conn.execute.call_args_list:
             if hasattr(c.args[0], "compile"):
                 params = c.args[0].compile().params
-                assert (
-                    "last_records_count" not in params
-                ), "Deep-rescan must not advance last_records_count"
+                assert "last_records_count" not in params, (
+                    "Deep-rescan must not advance last_records_count"
+                )
