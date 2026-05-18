@@ -30,3 +30,24 @@ updates:
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
+
+  # pre-commit hooks in .pre-commit-config.yaml — closes the drift gap from
+  # the 2026-05-18 PR #25 incident (TODO #43) where ruff-pre-commit lagged
+  # uv.lock by months. Manages the two external hooks: astral-sh/ruff-pre-commit
+  # and gitleaks; the four local hooks are unmanaged (no version to bump).
+  #
+  # Drift note: ruff is pinned twice — uv.lock pins the binary, pre-commit
+  # pins the hook wrapper. Dependabot opens separate PRs for each since
+  # they're separate packages; the gap narrows from months to ~1 week.
+  # multi-ecosystem-groups could bundle them atomically (see comment in PR);
+  # deferred pending fuller GitHub docs.
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      pre-commit:
+        patterns: ["*"]
+    labels: ["automated", "pre-commit"]
+    commit-message:
+      prefix: "chore(pre-commit)"
