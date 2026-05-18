@@ -20,6 +20,11 @@
 -- 'manufacturer' role. company_id=null — NHTSA has no analog to FDA's firmfeinum.
 -- The 'AC DELCO' vs 'ACDELCO' drift class (ADR 0031) currently produces two
 -- firm rows; reconciliation is Phase 6 RapidFuzz work per ADR 0002.
+-- USCG contributes coalesce(mic, company_name) as the firm anchor, always
+-- 'manufacturer' role. company_id = mic when populated (USCG's structured
+-- Manufacturer Industry Code), falling back to null when only company_name
+-- exists. Finding S null-anchor rows (both mic AND company_name NULL) are
+-- filtered out — they never reach the firm dimension.
 -- Matching by normalized_name enables implicit cross-source firm deduplication:
 -- a firm that appears in multiple sources with the same normalized name will
 -- collapse to a single row with all company IDs in observed_company_ids.
@@ -91,6 +96,20 @@ nhtsa_normalized as (
       and trim(mfgname) <> ''
 ),
 
+uscg_normalized as (
+    -- Firm anchor = coalesce(mic, company_name) per Finding S. company_id
+    -- is mic when populated (USCG's structured Manufacturer Industry Code,
+    -- a 3-character alpha identifier), null otherwise.
+    select distinct
+        'manufacturer'                                  as role,
+        coalesce(mic, company_name)                     as raw_name,
+        upper(trim(coalesce(mic, company_name)))        as normalized_name,
+        mic                                             as company_id
+    from {{ ref('stg_uscg_recalls') }}
+    where coalesce(mic, company_name) is not null
+      and trim(coalesce(mic, company_name)) <> ''
+),
+
 all_normalized as (
     select * from cpsc_normalized
     union all
@@ -99,6 +118,8 @@ all_normalized as (
     select * from usda_normalized
     union all
     select * from nhtsa_normalized
+    union all
+    select * from uscg_normalized
 )
 
 select

@@ -15,6 +15,12 @@
 --   corrective_action, etc.) are stable across all rows sharing campno, so
 --   the representative-row choice is safe. ADR 0031 documents the silver
 --   layered design.
+-- USCG: source_recall_id = USCG "Number" (year-prefix encoded, e.g. 26MF0158).
+--   One row per recall in bronze after stg_uscg_recalls dedup. status derives
+--   from the (case-folded per Finding R) disposition: 'open' → 'active',
+--   'closed' → 'closed'. announced_at is the staging model's coalesced
+--   case_open_date / opened_on with the 1970-01-01 sentinel mapped to NULL
+--   per Finding O.
 
 with cpsc_events as (
     select
@@ -154,6 +160,55 @@ nhtsa_events as (
         raw_landing_path
     from {{ ref('stg_nhtsa_recalls') }}
     order by campno, extraction_timestamp desc
+),
+
+uscg_events as (
+    -- Filter null-announced_at rows (~2.5% of USCG corpus per Finding O —
+    -- the Unix-epoch sentinel 1970-01-01 maps to NULL in stg_uscg_recalls
+    -- when both listing and details-page case_open_date are absent).
+    -- Those rows remain in bronze for audit and in stg_uscg_recalls for
+    -- direct queries, but the cross-source recall_event view requires a
+    -- known announce date (matches the cross-source not_null contract +
+    -- the precedent of USDA's English-only langcode filter).
+    select
+        md5('USCG' || '|' || source_recall_id)                         as recall_event_id,
+        'USCG'                                                         as source,
+        source_recall_id,
+        announced_at,
+        coalesce(last_date, announced_at)                              as published_at,
+        coalesce(company_name, mic, source_recall_id)
+            || ' — ' || coalesce(model_name, '(no model)')             as title,
+        coalesce(problem_1, problem_2)                                 as description,
+        details_url                                                    as url,
+        cast(null as text)                                             as classification,
+        case
+            when disposition = 'open'   then 'active'
+            when disposition = 'closed' then 'closed'
+            else null
+        end                                                            as status,
+        cast(null as jsonb)                                            as hazards,
+        jsonb_build_object(
+            'mic',                  mic,
+            'company_official',     company_official,
+            'model_year',           model_year,
+            'problem_1',            problem_1,
+            'problem_2',            problem_2,
+            'hin',                  hin,
+            'disposition',          disposition,
+            'case_open_date',       case_open_date,
+            'case_close_date',      case_close_date,
+            'campaign_open_date',   campaign_open_date,
+            'campaign_close_date',  campaign_close_date,
+            'last_date',            last_date,
+            'units',                units,
+            'boat_type',            boat_type,
+            'severity',             severity
+        )                                                              as source_payload_raw,
+        content_hash,
+        extraction_timestamp,
+        raw_landing_path
+    from {{ ref('stg_uscg_recalls') }}
+    where announced_at is not null
 )
 
 select * from cpsc_events
@@ -163,3 +218,5 @@ union all
 select * from usda_events
 union all
 select * from nhtsa_events
+union all
+select * from uscg_events

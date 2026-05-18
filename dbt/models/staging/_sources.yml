@@ -177,3 +177,38 @@ sources:
       - name: usda_fsis_establishments_rejected
         description: Quarantine table for FSIS establishment records that failed validation or invariant checks (ADR 0013).
         loaded_at_field: rejected_at
+
+  - name: uscg
+    description: Bronze layer for USCG (United States Coast Guard) boating recalls scraped by src.extractors.uscg.UscgScrapingExtractor. First HTML-scraped source in the project (Phase 5d).
+    schema: public
+    tables:
+      - name: uscg_recalls_bronze
+        description: >
+          One row per (source_recall_id, content_hash) landed by scraping
+          uscgboating.org/content/recalls.php (listing) + recalls-details.php
+          (per-recall details). source_recall_id = USCG "Number" field
+          (year-prefix encoded per Finding A). hash_exclude_fields={details_url}
+          per ADR 0007 — defense against future URL-scheme rewrites.
+        loaded_at_field: extraction_timestamp
+        freshness:
+          # Initial weekly cadence (~36 min full walk); tightened to daily
+          # warn_after: 2d / error_after: 5d once Phase 5d Step 6 short-circuit
+          # lands. Current SLA covers a missed weekly run + safety margin.
+          warn_after: {count: 8, period: day}
+          error_after: {count: 14, period: day}
+        columns:
+          - name: source_recall_id
+            description: USCG "Number" field (e.g. 26MF0158). Stable across re-extractions per Step 1 Finding C.
+            tests:
+              - not_null
+          - name: content_hash
+            description: SHA-256 of canonicalized record payload (ADR 0007), excluding details_url. Dedup key.
+            tests:
+              - not_null
+          - name: extraction_timestamp
+            description: When the extractor wrote this row.
+            tests:
+              - not_null
+      - name: uscg_recalls_rejected
+        description: Quarantine table for USCG records that failed validation or invariant checks (ADR 0013).
+        loaded_at_field: rejected_at

@@ -58,6 +58,7 @@ left NULL (HTML has no wrapper/inner distinction).
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -135,6 +136,11 @@ _source_watermarks = sa.Table(
     sa.Column("last_etag", sa.Text),
     sa.Column("last_successful_extract_at", sa.TIMESTAMP(timezone=True)),
     sa.Column("updated_at", sa.TIMESTAMP(timezone=True)),
+    # Phase 5d Step 6 — Finding J short-circuit. USCG-only consumer in v1
+    # (other sources keep NULL). Holds the ``Records Found: NNNN`` total
+    # observed on the last successful incremental ``extract`` run; deep-rescan
+    # never advances this column (mirrors the watermark convention).
+    sa.Column("last_records_count", sa.Integer),
 )
 
 _extraction_runs = sa.Table(
@@ -158,15 +164,22 @@ _extraction_runs = sa.Table(
     sa.Column("response_body_sha256", sa.Text),
     sa.Column("response_headers", postgresql.JSONB),
     sa.Column("response_inner_content_sha256", sa.Text),
+    # Phase 5d Step 6 — short-circuit signal. NULL on full-walk-with-0-inserts
+    # runs; TRUE on the page-0 precheck short-circuit path; FALSE on full walks
+    # that completed normally. Other-source runs (CPSC/FDA/USDA/NHTSA) write NULL.
+    sa.Column("was_short_circuited", sa.Boolean),
 )
 
 _USCG_SOURCE = "uscg"
 _USCG_BASE_URL = "https://uscgboating.org/content"
 _USCG_LISTING_URL = f"{_USCG_BASE_URL}/recalls.php"
 
-# Safeguard for the page walk: USCG's current corpus is 1,763 records
+# Default safeguard for the page walk: USCG's current corpus is 1,763 records
 # across 71 pages (Finding A). 200 pages = ~5,000 records, 3× current.
-# Hit before then = pathological pagination / drift; abort.
+# Hit before then = pathological pagination / drift; abort. Exposed as the
+# default for ``UscgScrapingExtractor.max_pages``; the constructor field is
+# the override surface for tests (cassette suite walks 2 real pages + an
+# injected empty boundary). Production never overrides this.
 _MAX_PAGES = 200
 
 # Sanity guard for the record count. The corpus has been stable around
@@ -187,6 +200,14 @@ _EXPECTED_LISTING_COLUMNS = (
     "Problem 1",
     "Opened On",
 )
+
+# Regex for the ``Records Found: NNNN`` cell rendered below the listing
+# table on every paginated USCG listing page (Finding J). Used by Step 6's
+# short-circuit precheck — Gate 1 compares this against the prior run's
+# value persisted to ``source_watermarks.last_records_count``. The leading
+# space in the literal cell text (``"<td> Records Found: 01763</td>"``) is
+# tolerated by ``\s*``; the count is zero-padded but ``int()`` strips that.
+_RECORDS_FOUND_RE = re.compile(r"Records Found:\s*(\d+)")
 
 # Map from normalized details-page label text → dict key emitted by the
 # parser. Normalization rule: strip whitespace, strip trailing ":",
@@ -264,10 +285,23 @@ class UscgScrapingExtractor(HtmlScrapingExtractor[UscgRecallRecord]):
     source_name: str = _USCG_SOURCE
     start_url: str = _USCG_LISTING_URL
     settings: Settings
+    # Production safety guard for the page walk. Default at the module
+    # constant ``_MAX_PAGES``; cassette tests construct with ``max_pages=N``
+    # to bound the walk against a recorded subset of the corpus. Hitting
+    # ``max_pages`` without an empty-row boundary raises
+    # ``TransientExtractionError`` per the original guard semantics.
+    max_pages: int = _MAX_PAGES
 
     _engine: sa.Engine = PrivateAttr()
     _r2_client: R2LandingClient = PrivateAttr()
     _current_landing_path: str = PrivateAttr(default="")
+
+    # Phase 5d Step 6 — Finding J short-circuit state. ``_records_found_total``
+    # is populated as a side effect of ``_parse_listing_page`` (regex match
+    # on the page text). ``_was_short_circuited`` is the flag persisted to
+    # ``extraction_runs.was_short_circuited`` by ``_record_run``.
+    _records_found_total: int | None = PrivateAttr(default=None)
+    _was_short_circuited: bool = PrivateAttr(default=False)
 
     def model_post_init(self, __context: Any) -> None:
         self._engine = sa.create_engine(
@@ -284,7 +318,7 @@ class UscgScrapingExtractor(HtmlScrapingExtractor[UscgRecallRecord]):
         Stop condition (Finding L): a page with zero real rows (every
         ``<a href="recalls-details.php?id=...">`` having empty ``id``)
         signals end-of-pagination. Drift guard: abort if page-count
-        exceeds ``_MAX_PAGES``.
+        exceeds ``self.max_pages`` (default ``_MAX_PAGES``).
 
         Returns:
             One dict per recall, with merged listing + details fields.
@@ -294,7 +328,7 @@ class UscgScrapingExtractor(HtmlScrapingExtractor[UscgRecallRecord]):
         """
         records: list[dict[str, Any]] = []
         page_idx = 0
-        while page_idx < _MAX_PAGES:
+        while page_idx < self.max_pages:
             page_url = f"{self.start_url}?pageNum_allRecalls={page_idx}"
             response, body = self._fetch_page(page_url)
             if page_idx == 0:
@@ -307,6 +341,19 @@ class UscgScrapingExtractor(HtmlScrapingExtractor[UscgRecallRecord]):
             if not listing_rows:
                 # End-of-pagination signal (Finding L).
                 break
+
+            # Phase 5d Step 6 — Finding J short-circuit. After page 0 is
+            # fetched, parsed (which sets ``_records_found_total`` as a side
+            # effect), and archived (so the run still has a forensic anchor
+            # in R2), check the two-gate precheck. If both gates pass, return
+            # ``[]`` so the parent ``Extractor.run()`` template no-ops through
+            # validate / invariants / load_bronze; ``_touch_freshness`` still
+            # runs in load_bronze; ``_record_run`` persists the short-circuit
+            # flag. Mirrors USDA's 304-Not-Modified short-circuit pattern at
+            # ``src/extractors/usda.py:195-227``.
+            if page_idx == 0 and self._should_short_circuit(listing_rows):
+                self._was_short_circuited = True
+                return []
 
             for listing_row in listing_rows:
                 details_url = listing_row["details_url"]
@@ -325,7 +372,7 @@ class UscgScrapingExtractor(HtmlScrapingExtractor[UscgRecallRecord]):
         else:
             # Loop exited without break — page count exceeded guard.
             raise TransientExtractionError(
-                f"USCG listing walk exceeded {_MAX_PAGES} pages without "
+                f"USCG listing walk exceeded {self.max_pages} pages without "
                 "end-of-pagination signal. Possible cause: pagination "
                 "logic drift, or upstream record-count explosion."
             )
@@ -425,6 +472,7 @@ class UscgScrapingExtractor(HtmlScrapingExtractor[UscgRecallRecord]):
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
             self._touch_freshness(conn)
+            self._update_records_count(conn)
         return count
 
     # --- Parsers ---
@@ -442,7 +490,20 @@ class UscgScrapingExtractor(HtmlScrapingExtractor[UscgRecallRecord]):
         placeholder rows USCG returns on out-of-range page numbers.
         Empty return list = end-of-pagination signal for the caller's
         walk loop.
+
+        Side effect (Phase 5d Step 6 — Finding J): if the page contains
+        the ``Records Found: NNNN`` cell, ``self._records_found_total``
+        is updated. The cell is rendered on every paginated listing page
+        so any successful parse populates the value. Used by the page-0
+        short-circuit precheck in ``extract()``.
         """
+        # Side-effect: capture Records Found total before structural parsing.
+        # Done early so that even if the structural parse later raises (drift
+        # fence), the total is still available for diagnostic logging.
+        match = _RECORDS_FOUND_RE.search(body.decode("utf-8", errors="replace"))
+        if match:
+            self._records_found_total = int(match.group(1))
+
         soup = BeautifulSoup(body, "lxml")
         # The recalls table is the one whose header row contains
         # ``<strong>Number</strong>``. There are multiple tables on the
@@ -617,6 +678,84 @@ class UscgScrapingExtractor(HtmlScrapingExtractor[UscgRecallRecord]):
             )
         )
 
+    def _read_last_records_count(self, conn: sa.Connection) -> int | None:
+        """Read ``source_watermarks.last_records_count`` for USCG.
+
+        Returns ``None`` on the first ever run (column NULL by default after
+        migration 0014) — the caller falls through to the full walk and
+        ``_update_records_count`` populates the column for next time.
+        """
+        result = conn.execute(
+            sa.select(_source_watermarks.c.last_records_count).where(
+                _source_watermarks.c.source == _USCG_SOURCE
+            )
+        )
+        row = result.first()
+        return row[0] if row is not None else None
+
+    def _update_records_count(self, conn: sa.Connection) -> None:
+        """Persist the latest observed ``Records Found: NNNN`` to the watermark.
+
+        Idempotent on short-circuit (the new value equals the existing one).
+        Only writes when ``_records_found_total`` is populated — protects
+        against pathological cases where the listing-page parser succeeded
+        but the regex failed (unlikely, but the alternative is silently
+        clobbering the watermark with NULL).
+
+        Deep-rescan overrides ``load_bronze`` to skip this call — same
+        convention as ``_touch_freshness`` (deep-rescan is invisible to
+        monitoring; advancing the count would let the next incremental
+        run short-circuit prematurely if the deep-rescan landed mid-cycle).
+        """
+        if self._records_found_total is None:
+            return
+        conn.execute(
+            sa.update(_source_watermarks)
+            .where(_source_watermarks.c.source == _USCG_SOURCE)
+            .values(
+                last_records_count=self._records_found_total,
+                updated_at=datetime.now(UTC),
+            )
+        )
+
+    def _should_short_circuit(self, page_0_rows: list[dict[str, Any]]) -> bool:
+        """Two-gate Finding J precheck — return True to short-circuit the walk.
+
+        Gate 1 (count): the parsed ``Records Found: NNNN`` total equals the
+        prior run's value persisted in ``source_watermarks.last_records_count``.
+        Gate 2 (membership): every recall ID on page 0 already exists in
+        ``uscg_recalls_bronze``.
+
+        Both gates must pass. Either failing falls through to the full walk.
+
+        Defensive returns ``False``:
+          - First ever run (``last_records_count`` IS NULL) — no baseline.
+          - ``_records_found_total`` IS None — parser regex failed.
+          - ``page_0_rows`` is empty — defensive; ``extract()`` already
+            breaks on empty rows before this is called, so this branch
+            is unreachable in practice. Documented for explicitness.
+
+        Misses by design: a USCG details-only edit (e.g.
+        ``Disposition: Open → Closed`` without touching the listing row)
+        is invisible to both gates. The Phase 7 weekly safety-net
+        ``deep-rescan uscg --change-type=schema_rebaseline`` cron catches
+        those.
+        """
+        if not page_0_rows or self._records_found_total is None:
+            return False
+        with self._engine.connect() as conn:
+            prior_count = self._read_last_records_count(conn)
+            if prior_count is None or self._records_found_total != prior_count:
+                return False
+            page_0_ids = [r["number"] for r in page_0_rows]
+            result = conn.execute(
+                sa.select(sa.func.count(sa.distinct(_uscg_bronze.c.source_recall_id)))
+                .select_from(_uscg_bronze)
+                .where(_uscg_bronze.c.source_recall_id.in_(page_0_ids))
+            )
+            distinct_ids_in_bronze = result.scalar_one()
+        return distinct_ids_in_bronze == len(page_0_ids)
+
     def _record_run(
         self,
         run_id: str,
@@ -643,6 +782,10 @@ class UscgScrapingExtractor(HtmlScrapingExtractor[UscgRecallRecord]):
             "run_id": run_id,
             "error_message": error_message,
             "change_type": change_type,
+            # Phase 5d Step 6 — short-circuit flag. Persisted on every USCG
+            # run (TRUE on the short-circuit path, FALSE on full walks). Other
+            # sources don't populate this column.
+            "was_short_circuited": self._was_short_circuited,
         }
         if result is not None:
             row["records_extracted"] = result.records_fetched
@@ -681,10 +824,23 @@ class UscgDeepRescanLoader(UscgScrapingExtractor):
     operators have a documented path for ``--change-type=schema_rebaseline``
     or ``--change-type=historical_seed`` runs.
 
-    Only behavioral difference: ``load_bronze`` does NOT call
-    ``_touch_freshness``. Matches the NHTSA/FDA/USDA deep-rescan
-    convention so freshness alerts don't reset on a rebaseline run.
+    Behavioral differences vs the incremental path:
+      - ``load_bronze`` does NOT call ``_touch_freshness`` (matches the
+        NHTSA/FDA/USDA convention so freshness alerts don't reset on a
+        rebaseline run).
+      - ``load_bronze`` does NOT call ``_update_records_count`` (same
+        convention — deep-rescan is invisible to monitoring, and advancing
+        the count mid-cycle could let the next incremental short-circuit
+        prematurely).
+      - ``_should_short_circuit`` is overridden to always return ``False``:
+        deep-rescan exists specifically to force a full walk for
+        rebaseline / historical-seed scenarios, so the short-circuit is
+        semantically wrong here.
     """
+
+    def _should_short_circuit(self, page_0_rows: list[dict[str, Any]]) -> bool:
+        """Deep-rescan never short-circuits — always do the full walk."""
+        return False
 
     def load_bronze(
         self,
@@ -692,7 +848,7 @@ class UscgDeepRescanLoader(UscgScrapingExtractor):
         quarantined: list[QuarantineRecord],
         raw_landing_path: str,
     ) -> int:
-        """Same loader config as the incremental path; skip freshness touch."""
+        """Same loader config as the incremental path; skip freshness + count touch."""
         loader = BronzeLoader(
             bronze_table=_uscg_bronze,
             rejected_table=_uscg_rejected,

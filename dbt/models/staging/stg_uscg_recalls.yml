@@ -1,0 +1,30 @@
+version: 2
+
+models:
+  - name: stg_uscg_recalls
+    description: >
+      One row per USCG recall (source_recall_id), latest version from bronze.
+      Applies Finding O (Unix-epoch sentinel → NULL, details-page date preferred
+      over listing date), Finding R (disposition case-folded to lower), and
+      ADR 0027 empty-string normalization. Finding S null-firm-anchor rows
+      flow through intact; recall_event_firm filters them downstream.
+    columns:
+      - name: source_recall_id
+        description: USCG "Number" field (year-prefix encoded, e.g. 26MF0158). Stable across re-extractions per Step 1 Finding C.
+        tests:
+          - not_null
+          - unique
+      - name: disposition
+        description: Case-normalized lifecycle state (Finding R). Either 'open' or 'closed' after the lower() pass.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['open', 'closed']
+      - name: content_hash
+        description: SHA-256 of canonicalized record payload (ADR 0007), excluding details_url. Dedup key.
+        tests:
+          - not_null
+      - name: extraction_timestamp
+        description: When the extractor wrote this row.
+        tests:
+          - not_null

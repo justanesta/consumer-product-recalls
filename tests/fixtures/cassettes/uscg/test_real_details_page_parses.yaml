@@ -1,0 +1,82 @@
+interactions:
+- request:
+    body: ''
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      host:
+      - uscgboating.org
+      user-agent:
+      - 'consumer-product-recalls/0.7.0 (contact: adriannesta@gmail.com)'
+    method: GET
+    uri: https://uscgboating.org/content/recalls-details.php?id=25CG0017
+  response:
+    body:
+      string: "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n<html
+        xmlns=\"http://www.w3.org/1999/xhtml\" lang=\"en\">\n<head>\n<meta http-equiv=\"Content-Type\"
+        content=\"text/html; charset=utf-8\" />\n<title>Stability test (starboard</title>\n<link
+        href=\"../css/frontpage_styles.css\" rel=\"stylesheet\" type=\"text/css\"
+        />\n</head>\n\n<body>\n<table width=\"100%\" border=\"0\" cellpadding=\"1\"
+        cellspacing=\"1\" >\n  <tr>\n    <td colspan=\"5\" align=\"center\"><h2>Stability
+        test (starboard</h2></td>\n  </tr>\n  <tr>\n    <td width=\"73\">&nbsp;</td>\n
+        \   <td width=\"160\">&nbsp;</td>\n    <td>&nbsp;</td>\n    <td width=\"66\">&nbsp;</td>\n
+        \   <td width=\"145\">&nbsp;</td>\n  </tr>\n  <tr>\n    <td><span class=\"defaultFont\"><strong>Number</strong></span></td>\n
+        \   <td><span class=\"defaultFont\">25CG0017</span></td>\n    <td width=\"1\">&nbsp;</td>\n
+        \   <td><span class=\"defaultFont\"><strong>MIC:</strong></span></td>\n    <td><span
+        class=\"defaultFont\">NLP</span></td>\n  </tr>\n  <tr>\n    <td><span class=\"defaultFont\"><strong>Company:</strong></span></td>\n
+        \   <td><span class=\"defaultFont\">TIDEWATER BOATS LLC</span></td>\n    <td>&nbsp;</td>\n
+        \   <td><span class=\"defaultFont\"><strong>Company Official:</strong></span></td>\n
+        \   <td><span class=\"defaultFont\">jlu</span></td>\n  </tr>\n  <tr>\n    <td><span
+        class=\"defaultFont\"><strong>Model Name:</strong></span></td>\n    <td><span
+        class=\"defaultFont\">TIDEWATER 180 CC BAY</span></td>\n    <td>&nbsp;</td>\n
+        \   <td><span class=\"defaultFont\"><strong>Model Year:</strong></span></td>\n
+        \   <td><span class=\"defaultFont\">2025</span></td>\n  </tr>\n  <tr>\n    <td><span
+        class=\"defaultFont\"><strong>Problem 1:</strong></span></td>\n    <td><span
+        class=\"defaultFont\">Stability test (starboard</span></td>\n    <td>&nbsp;</td>\n
+        \   <td>&nbsp;</td>\n    <td>&nbsp;</td>\n  </tr>\n  <tr>\n    <td><span class=\"defaultFont\"><strong>Problem
+        2:</strong></span></td>\n    <td><span class=\"defaultFont\"></span></td>\n
+        \   <td>&nbsp;</td>\n    <td>&nbsp;</td>\n    <td>&nbsp;</td>\n  </tr>\n  <tr>\n
+        \   <td><span class=\"defaultFont\"><strong>HIN</strong></span></td>\n    <td><span
+        class=\"defaultFont\">NLPEC117K425</span></td>\n    <td>&nbsp;</td>\n    <td><span
+        class=\"defaultFont\"><strong>Case Open Date:</strong></span></td>\n    <td><span
+        class=\"defaultFont\">6/4/2025</span></td>\n  </tr>\n  <tr>\n    <td><span
+        class=\"defaultFont\"><strong>Disposition:</strong></span></td>\n    <td><span
+        class=\"defaultFont\">Open</span></td>\n    <td>&nbsp;</td>\n    <td><span
+        class=\"defaultFont\"><strong>Case Close Date:</strong></span></td>\n    <td><span
+        class=\"defaultFont\">7/23/2025</span></td>\n  </tr>\n  <tr>\n    <td><span
+        class=\"defaultFont\"><strong>Units</strong></span></td>\n    <td><span class=\"defaultFont\">401</span></td>\n
+        \   <td>&nbsp;</td>\n    <td><span class=\"defaultFont\"><strong>Campaign
+        Open Date</strong></span></td>\n    <td><span class=\"defaultFont\">8/19/2025</span></td>\n
+        \ </tr>\n  <tr>\n    <td><span class=\"defaultFont\"><strong>Boat Type</strong></span></td>\n
+        \   <td><span class=\"defaultFont\"></span></td>\n    <td>&nbsp;</td>\n    <td><span
+        class=\"defaultFont\"><strong>Campaign Close Date</strong></span></td>\n    <td><span
+        class=\"defaultFont\"></span></td>\n  </tr>\n  <tr>\n    <td><span class=\"defaultFont\"><strong>Severity:</strong></span></td>\n
+        \   <td><span class=\"defaultFont\"></span></td>\n    <td>&nbsp;</td>\n    <td><span
+        class=\"defaultFont\"><strong>Last Date:</strong></span></td>\n    <td><span
+        class=\"defaultFont\">12/2/2025</span></td>\n  </tr>\n  <tr>\n    \n  </tr>\n
+        \ \n</table>\n</body>\n</html>\n"
+    headers:
+      Cache-Control:
+      - no-store, no-cache, must-revalidate
+      Connection:
+      - Keep-Alive
+      Content-Type:
+      - text/html; charset=UTF-8
+      Date:
+      - Mon, 18 May 2026 02:23:47 GMT
+      Expires:
+      - Thu, 19 Nov 1981 08:52:00 GMT
+      Keep-Alive:
+      - timeout=5, max=100
+      Pragma:
+      - no-cache
+      Transfer-Encoding:
+      - chunked
+    status:
+      code: 200
+      message: OK
+version: 1

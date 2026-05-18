@@ -146,6 +146,21 @@ Confirmed `Records Found: 01763` string at the bottom of page 0. Persists on par
 
 **Implementation plan:** `project_scope/implementation_plan.md` Step 6 (deferred — depends on Step 4 cassettes + Step 5 silver landing first).
 
+**Step 6 (landed 2026-05-17 on `feature/uscg-cassettes-silver-timing`):** Two-gate precheck implemented at `src/extractors/uscg.py::UscgScrapingExtractor._should_short_circuit`. Storage: `source_watermarks.last_records_count` (Gate 1) + `extraction_runs.was_short_circuited` (observability) via migration 0014. `_parse_listing_page` extracts the `Records Found: NNNN` total via the `_RECORDS_FOUND_RE` regex as a side effect; the count is persisted to the watermark on every successful incremental `load_bronze` and read at the top of the next `extract()` for comparison. `UscgDeepRescanLoader._should_short_circuit` is overridden to always return `False` so rebaseline / historical-seed runs always do the full walk.
+
+Empirical hit-rate measurement query (run after ~30 days of daily cadence to surface the steady-state short-circuit frequency):
+
+```sql
+SELECT
+    COUNT(*) FILTER (WHERE was_short_circuited)::float / COUNT(*) AS hit_rate,
+    COUNT(*) AS total_runs,
+    COUNT(*) FILTER (WHERE NOT was_short_circuited) AS full_walk_count
+FROM extraction_runs
+WHERE source = 'uscg' AND change_type = 'routine';
+```
+
+Operator helper to force a full walk on the next run (clear the watermark count): `scripts/sql/uscg/operations/force_full_walk.sql`.
+
 ## K. `Last-Modified` / `ETag` on listing page — NEITHER
 
 `curl -I https://uscgboating.org/content/recalls.php` response headers (relevant excerpt):
@@ -244,12 +259,16 @@ USCG's listing page renders the literal string `1970-01-01` in the Opened On col
 
 `22MF0627`, `22MF0628`, `22MF0629` all share the literal `1970-01-01` string in the listing's Opened On column, all from the same manufacturer (Bombardier `YDV`). The corresponding details pages (verified for 22MF0628 via `--recall-number 22MF0628`) show `Case Open Date:` literally empty.
 
-**Corpus scale:** ~45+ rows in the 2026-05-17 extraction had `opened_on = 1970-01-01`. The exact distribution is in `diagnose_rejections.sql` Q6's `prefix → opened_on_year=1970` cluster.
+**Corpus scale:** **82 distinct recalls** (4.7% of the 1,763 corpus) have `opened_on = 1970-01-01` with `case_open_date` NULL — verified Step 5 / 2026-05-17 against the deduped bronze view via `SELECT COUNT(*) FILTER (...) FROM (SELECT DISTINCT ON (source_recall_id) ... FROM uscg_recalls_bronze ORDER BY source_recall_id, extraction_timestamp DESC)`. The exact distribution is in `diagnose_rejections.sql` Q6's `prefix → opened_on_year=1970` cluster.
+
+**Sentinel is the only no-date path.** Same query shows **zero** recalls with `opened_on IS NULL` from the parser. USCG renders `1970-01-01` as the literal cell content for *every* undated recall; the listing parser never emits `NULL` for `opened_on` from a real corpus row (the schema field is nullable per Finding A's defensive widening, but in practice the column is fully populated with either real dates or the sentinel). Silver staging only needs to handle the `1970-01-01` → NULL mapping; there is no separate "blank cell → NULL" path to coalesce against.
+
+**Original count correction (Step 5, 2026-05-17).** The first draft of this finding (Step 3, same day) reported "~45+ rows" — measured from the post-run-1 bronze snapshot at 01:17 (1,512 inserts + 251 quarantined). The since-removed year-prefix invariant rejected sentinel-bearing recalls where `source_recall_id[:2]` didn't match `1970-01-01`'s year-suffix (e.g., `22MF0628` with prefix=22, year-suffix=70 → quarantined as "year-prefix mismatch"). ~37 sentinel rows were hidden in the quarantine table during the original count. Run 3 at 03:35 — after the invariant was removed and the schema relaxed — landed all 1,763 recalls cleanly and the full sentinel population (82) became visible. The original ~45 was a partial-view count, not a measurement error in the methodology.
 
 **Implications:**
 - Bronze captures verbatim per ADR 0027 — `opened_on=1970-01-01` lands as `1970-01-01 UTC`. The corresponding `case_open_date` (details-page-derived) lands as NULL because the cell is empty.
-- The same logical date thus shows two different bronze values for ~45 rows. This is silver's problem to normalize, not bronze's.
-- Silver `stg_uscg_recalls.sql` should map `opened_on = 1970-01-01` → NULL (canonical "no date known"), then prefer `case_open_date` when both are populated. Document as known fragmentation in the silver staging model.
+- The same logical date thus shows two different bronze values for 82 rows. This is silver's problem to normalize, not bronze's.
+- Silver `stg_uscg_recalls.sql` maps `opened_on = 1970-01-01` → NULL (canonical "no date known"), and the cross-source `recall_event` view filters rows where neither `opened_on` nor `case_open_date` resolves to a usable date (82 rows dropped from `recall_event` USCG, leaving 1,681 silver rows from 1,763 bronze recalls).
 
 NHTSA's `ODATE 19010101` sentinel (`documentation/nhtsa/flat_file_observations.md` Finding H) is structurally identical — USCG just picked a different epoch.
 

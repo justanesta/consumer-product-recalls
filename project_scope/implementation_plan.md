@@ -434,13 +434,13 @@ FDA's FEI per ADR 0002).
 - Re-extraction pending after Step 3 fixes — predicted outcome: 0% rejection rate, run completes with `status="success"`, ~1,763 bronze inserts.
 - Re-evaluate items #4 and #9 (see "Architectural follow-ups" below) — still deferred; pragmatic-capture path for `extraction_runs.response_*` columns held up cleanly (`response_etag` + `response_last_modified` correctly NULL per Finding K; no operational pain from sparsity yet).
 
-**Step 4 — Cassettes** (pending)
-- Cassette recording means capturing the real scraped HTML structure (not a hand-crafted fixture), since HTML schema drift is the primary failure mode. Record current-page HTML + a structurally-drifted variant to exercise the scraper's failure path.
+**Step 4 — Cassettes** (done 2026-05-18)
+- ✓ Cassette recording means capturing the real scraped HTML structure (not a hand-crafted fixture), since HTML schema drift is the primary failure mode. Record current-page HTML + a structurally-drifted variant to exercise the scraper's failure path.
 
-**Step 5 — Silver** (pending)
-- `models/staging/stg_uscg_recalls.sql` + extend silver models to incorporate USCG
+**Step 5 — Silver** (done 2026-05-18)
+- ✓ `models/staging/stg_uscg_recalls.sql` + extend silver models to incorporate USCG
 
-**Step 6 — USCG Finding J short-circuit enhancement** (deferred; no estimated landing date)
+**Step 6 — USCG Finding J short-circuit enhancement** (done 2026-05-18) ✓
 
 **Goal:** drop USCG steady-state run cost from ~36 min (the current always-full-fetch design) to ~3 sec (one HTTP request + one DB lookup), enabling a cadence shift from weekly → daily aligned with the other sources. Without this, USCG dominates total pipeline runtime by ~90%.
 
