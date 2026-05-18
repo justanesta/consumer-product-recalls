@@ -655,14 +655,12 @@ class TestExtractGuards:
     def test_max_pages_guard_raises_when_loop_never_breaks(
         self, extractor: UscgScrapingExtractor
     ) -> None:
-        """If pagination never reaches an empty page within ``_MAX_PAGES``
+        """If pagination never reaches an empty page within ``self.max_pages``
         iterations, the while-else clause fires. Easiest to trigger by
-        patching _MAX_PAGES to 0 so the condition is false from the start —
+        setting ``max_pages=0`` so the condition is false from the start —
         no iterations run, else clause fires unconditionally."""
-        with (
-            patch("src.extractors.uscg._MAX_PAGES", 0),
-            pytest.raises(TransientExtractionError, match="exceeded 0 pages"),
-        ):
+        extractor.max_pages = 0
+        with pytest.raises(TransientExtractionError, match="exceeded 0 pages"):
             extractor.extract()
 
     def test_max_incremental_records_guard_raises(
@@ -750,6 +748,34 @@ class TestRecordRun:
         assert values["response_status_code"] == 200
         assert values["response_etag"] == '"abc"'
         assert values["response_body_sha256"] == "deadbeef"
+        # Phase 5d Step 6: was_short_circuited defaults to False on a full walk.
+        assert values["was_short_circuited"] is False
+
+    def test_was_short_circuited_true_when_flag_set(self, extractor: UscgScrapingExtractor) -> None:
+        """When extract() short-circuited, _record_run persists the flag as TRUE."""
+        from datetime import datetime as dt
+
+        # Simulate the state extract() leaves behind on the short-circuit path.
+        extractor._was_short_circuited = True
+        extractor._captured_response_status_code = 200
+        extractor._captured_response_etag = None
+        extractor._captured_response_last_modified = None
+        extractor._captured_response_body_sha256 = "cafef00d"
+        extractor._captured_response_headers = {"content-type": "text/html"}
+
+        mock_conn = MagicMock()
+        with patch.object(extractor._engine, "begin") as mock_begin:
+            mock_begin.return_value.__enter__.return_value = mock_conn
+            extractor._record_run(
+                run_id="test-run-id",
+                started_at=dt(2026, 5, 17, tzinfo=UTC),
+                status="success",
+                result=self._result(),
+                change_type="routine",
+            )
+        insert_stmt = mock_conn.execute.call_args.args[0]
+        values = insert_stmt.compile().params
+        assert values["was_short_circuited"] is True
 
     def test_failed_status_without_response_captured(
         self, extractor: UscgScrapingExtractor
@@ -866,3 +892,240 @@ class TestRegistration:
         # source_type discriminator routes to HtmlScrapingSourceConfig
         assert config.source_type == "html_scraping"  # type: ignore[union-attr]
         assert config.start_url == _USCG_LISTING_URL  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# Phase 5d Step 6 — Finding J short-circuit
+# ---------------------------------------------------------------------------
+
+
+def _make_short_circuit_mock_conn(
+    *, prior_count: int | None, ids_found_in_bronze: int
+) -> MagicMock:
+    """Build a mock connection that answers _should_short_circuit's two queries.
+
+    First query: SELECT last_records_count FROM source_watermarks ... → returns
+      a row with the prior count (or None if first-ever-run).
+    Second query: SELECT count(distinct source_recall_id) FROM uscg_recalls_bronze
+      WHERE source_recall_id IN (...) → returns scalar = ids_found_in_bronze.
+
+    Side-effect order matters because ``conn.execute`` is called twice in
+    ``_should_short_circuit`` (watermark read, then bronze membership query).
+    """
+    watermark_result = MagicMock()
+    watermark_result.first.return_value = (prior_count,) if prior_count is not None else None
+    bronze_result = MagicMock()
+    bronze_result.scalar_one.return_value = ids_found_in_bronze
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = [watermark_result, bronze_result]
+    return mock_conn
+
+
+class TestShortCircuit:
+    """Phase 5d Step 6 — Finding J short-circuit (two-gate page-0 precheck)."""
+
+    def _page_0_rows(self, n: int = 25) -> list[dict[str, Any]]:
+        """Build n fake listing-row dicts with ``number`` populated."""
+        return [{"number": f"26MF{i:04d}", "details_url": f"https://x/d/{i}"} for i in range(n)]
+
+    def test_parse_listing_sets_records_found_total(
+        self, extractor: UscgScrapingExtractor, listing_html: bytes
+    ) -> None:
+        """The listing parser populates _records_found_total as a side effect.
+
+        The fixture contains the literal "Records Found: 01763" cell (see
+        tests/fixtures/uscg/sample_listing_page.html:286). The regex strips the
+        leading zero on int() conversion.
+        """
+        assert extractor._records_found_total is None  # fresh instance default
+        extractor._parse_listing_page(listing_html, "https://example.invalid/")
+        assert extractor._records_found_total == 1763
+
+    def test_short_circuits_when_count_and_ids_match(
+        self, extractor: UscgScrapingExtractor
+    ) -> None:
+        """Gate 1 passes (counts match) + Gate 2 passes (all IDs in bronze) → True."""
+        extractor._records_found_total = 1763
+        page_0_rows = self._page_0_rows(25)
+        mock_conn = _make_short_circuit_mock_conn(prior_count=1763, ids_found_in_bronze=25)
+        with patch.object(extractor._engine, "connect") as mock_connect:
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            result = extractor._should_short_circuit(page_0_rows)
+        assert result is True
+
+    def test_falls_through_when_count_differs(self, extractor: UscgScrapingExtractor) -> None:
+        """Gate 1 fails (records_found_total != last_records_count) → False."""
+        extractor._records_found_total = 1764  # one new recall
+        page_0_rows = self._page_0_rows(25)
+        mock_conn = _make_short_circuit_mock_conn(prior_count=1763, ids_found_in_bronze=25)
+        with patch.object(extractor._engine, "connect") as mock_connect:
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            result = extractor._should_short_circuit(page_0_rows)
+        assert result is False
+        # Gate 1 short-circuits the helper — bronze membership query never runs.
+        assert mock_conn.execute.call_count == 1
+
+    def test_falls_through_when_unknown_id_on_page_0(
+        self, extractor: UscgScrapingExtractor
+    ) -> None:
+        """Gate 2 fails (one ID missing from bronze) → False.
+
+        Catches the 'stale count + reshuffled listing' failure mode: USCG removes
+        recall X and adds recall Y on the same run, count unchanged, but Y is
+        not in bronze.
+        """
+        extractor._records_found_total = 1763
+        page_0_rows = self._page_0_rows(25)
+        # 24 of 25 IDs found in bronze — one is new.
+        mock_conn = _make_short_circuit_mock_conn(prior_count=1763, ids_found_in_bronze=24)
+        with patch.object(extractor._engine, "connect") as mock_connect:
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            result = extractor._should_short_circuit(page_0_rows)
+        assert result is False
+
+    def test_falls_through_on_first_ever_run(self, extractor: UscgScrapingExtractor) -> None:
+        """No prior last_records_count → no baseline → fall through to full walk."""
+        extractor._records_found_total = 1763
+        page_0_rows = self._page_0_rows(25)
+        # source_watermarks row exists but last_records_count is NULL.
+        watermark_result = MagicMock()
+        watermark_result.first.return_value = (None,)
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value = watermark_result
+        with patch.object(extractor._engine, "connect") as mock_connect:
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            result = extractor._should_short_circuit(page_0_rows)
+        assert result is False
+        # Gate 1 short-circuits — no bronze query.
+        assert mock_conn.execute.call_count == 1
+
+    def test_falls_through_when_page_0_empty(self, extractor: UscgScrapingExtractor) -> None:
+        """Defensive — empty page_0_rows returns False without any DB query."""
+        extractor._records_found_total = 1763
+        with patch.object(extractor._engine, "connect") as mock_connect:
+            result = extractor._should_short_circuit([])
+        assert result is False
+        mock_connect.assert_not_called()
+
+    def test_falls_through_when_records_found_total_is_none(
+        self, extractor: UscgScrapingExtractor
+    ) -> None:
+        """Parser regex failed (unlikely but defensive) → fall through."""
+        assert extractor._records_found_total is None  # never populated
+        page_0_rows = self._page_0_rows(25)
+        with patch.object(extractor._engine, "connect") as mock_connect:
+            result = extractor._should_short_circuit(page_0_rows)
+        assert result is False
+        mock_connect.assert_not_called()
+
+    def test_extract_short_circuits_when_should_short_circuit_returns_true(
+        self,
+        extractor: UscgScrapingExtractor,
+        listing_html: bytes,
+    ) -> None:
+        """End-to-end: extract() returns [] and sets _was_short_circuited=True
+        when the precheck passes. Only one fetch happens (page 0)."""
+
+        def _route(url: str, **kwargs: Any) -> httpx.Response:
+            return _make_response(listing_html)
+
+        mock_client = MagicMock()
+        mock_client.return_value.__enter__.return_value.get.side_effect = _route
+
+        with (
+            patch("httpx.Client", mock_client),
+            patch.object(extractor, "_should_short_circuit", return_value=True),
+        ):
+            records = extractor.extract()
+
+        assert records == []
+        assert extractor._was_short_circuited is True
+        # Exactly one fetch: page 0 only.
+        assert mock_client.return_value.__enter__.return_value.get.call_count == 1
+
+    def test_load_bronze_advances_last_records_count(
+        self, extractor: UscgScrapingExtractor
+    ) -> None:
+        """Full-walk load_bronze updates source_watermarks.last_records_count."""
+        extractor._records_found_total = 1764  # newly observed
+        mock_conn = MagicMock()
+        with (
+            patch("src.extractors.uscg.BronzeLoader") as mock_loader_cls,
+            patch.object(extractor._engine, "begin") as mock_begin,
+        ):
+            mock_loader = MagicMock()
+            mock_loader.load.return_value = 1
+            mock_loader_cls.return_value = mock_loader
+            mock_begin.return_value.__enter__.return_value = mock_conn
+            extractor.load_bronze([], [], _FAKE_R2_PATH)
+
+        # Expect three execute calls inside load_bronze:
+        #   (no BronzeLoader.load here because that's mocked at the class level)
+        #   _touch_freshness — one UPDATE on source_watermarks
+        #   _update_records_count — one UPDATE on source_watermarks
+        # Look for the update with last_records_count in the params.
+        update_calls = [
+            c
+            for c in mock_conn.execute.call_args_list
+            if hasattr(c.args[0], "compile")
+            and "last_records_count" in str(c.args[0].compile().params)
+        ]
+        assert update_calls, "_update_records_count UPDATE not issued"
+        params = update_calls[0].args[0].compile().params
+        assert params["last_records_count"] == 1764
+
+    def test_load_bronze_skips_count_update_when_records_found_is_none(
+        self, extractor: UscgScrapingExtractor
+    ) -> None:
+        """If the parser never captured Records Found (None), the UPDATE is skipped."""
+        assert extractor._records_found_total is None  # default
+        mock_conn = MagicMock()
+        with (
+            patch("src.extractors.uscg.BronzeLoader") as mock_loader_cls,
+            patch.object(extractor._engine, "begin") as mock_begin,
+        ):
+            mock_loader = MagicMock()
+            mock_loader.load.return_value = 0
+            mock_loader_cls.return_value = mock_loader
+            mock_begin.return_value.__enter__.return_value = mock_conn
+            extractor.load_bronze([], [], _FAKE_R2_PATH)
+
+        # No UPDATE with last_records_count param should appear.
+        for c in mock_conn.execute.call_args_list:
+            if hasattr(c.args[0], "compile"):
+                params = c.args[0].compile().params
+                assert (
+                    "last_records_count" not in params
+                ), "_update_records_count should be a no-op when _records_found_total is None"
+
+    def test_deep_rescan_never_short_circuits(self, deep_rescan: UscgDeepRescanLoader) -> None:
+        """UscgDeepRescanLoader._should_short_circuit always returns False —
+        the whole point of deep-rescan is to bypass the short-circuit."""
+        deep_rescan._records_found_total = 1763
+        page_0_rows = [{"number": "X", "details_url": "u"}]
+        # No engine mocking needed because the override returns False without
+        # hitting the DB.
+        assert deep_rescan._should_short_circuit(page_0_rows) is False
+
+    def test_deep_rescan_load_bronze_skips_count_update(
+        self, deep_rescan: UscgDeepRescanLoader
+    ) -> None:
+        """Deep-rescan does not advance last_records_count (mirrors freshness convention)."""
+        deep_rescan._records_found_total = 1763
+        mock_conn = MagicMock()
+        with (
+            patch("src.extractors.uscg.BronzeLoader") as mock_loader_cls,
+            patch.object(deep_rescan._engine, "begin") as mock_begin,
+        ):
+            mock_loader = MagicMock()
+            mock_loader.load.return_value = 0
+            mock_loader_cls.return_value = mock_loader
+            mock_begin.return_value.__enter__.return_value = mock_conn
+            deep_rescan.load_bronze([], [], _FAKE_R2_PATH)
+
+        for c in mock_conn.execute.call_args_list:
+            if hasattr(c.args[0], "compile"):
+                params = c.args[0].compile().params
+                assert (
+                    "last_records_count" not in params
+                ), "Deep-rescan must not advance last_records_count"

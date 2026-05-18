@@ -15,6 +15,11 @@
 --   disambiguator (analog to CPSC's product_ordinal). v1 fragmentation rate
 --   ~0.0004%/day (AC DELCO maketxt normalization observed 2026-05-08); see
 --   ADR 0031 + documentation/nhtsa/incremental_delta_findings.md Section G.
+-- USCG: one row per recall in bronze; mirror USDA's one-product-per-recall
+--   grain (recall_product_id = recall_event_id). USCG has no separate product
+--   array — the recall row itself names a single boat model + manufacturer.
+--   Null-announced_at rows are filtered to mirror the recall_event filter
+--   so the FK relationship test on recall_product.recall_event_id holds.
 -- Neither CPSC nor FDA associates UPCs with specific products (CPSC UPCs are recall-level;
 -- FDA does not return them via the bulk POST endpoint), so upc is NULL for both.
 
@@ -129,6 +134,37 @@ nhtsa_products as (
             'fmvss',         fmvss
         )                                             as source_specific_attrs
     from {{ ref('stg_nhtsa_recalls') }}
+),
+
+uscg_products as (
+    select
+        md5('USCG' || '|' || source_recall_id)        as recall_product_id,
+        md5('USCG' || '|' || source_recall_id)        as recall_event_id,
+        'USCG'                                        as source,
+        source_recall_id,
+        model_name                                    as product_name,
+        coalesce(problem_1, problem_2)                as product_description,
+        model_name                                    as model,
+        boat_type                                     as type,
+        cast(null as text)                            as category_id,
+        units::text                                   as number_of_units,
+        cast(null as text)                            as upc,
+        jsonb_build_object(
+            'mic',                  mic,
+            'company_name',         company_name,
+            'company_official',     company_official,
+            'model_year',           model_year,
+            'problem_1',            problem_1,
+            'problem_2',            problem_2,
+            'hin',                  hin,
+            'severity',             severity,
+            'disposition',          disposition,
+            'units',                units,
+            'campaign_open_date',   campaign_open_date,
+            'campaign_close_date',  campaign_close_date
+        )                                             as source_specific_attrs
+    from {{ ref('stg_uscg_recalls') }}
+    where announced_at is not null
 )
 
 select * from cpsc_products
@@ -138,3 +174,5 @@ union all
 select * from usda_products
 union all
 select * from nhtsa_products
+union all
+select * from uscg_products

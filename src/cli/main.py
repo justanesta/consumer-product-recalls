@@ -58,8 +58,8 @@ _LOOKBACK_NO_OP_MESSAGES: dict[str, str] = {
         "nhtsa: --lookback-days has no effect (flat-file full-dump every run; see Findings B + C)."
     ),
     "uscg": (
-        "uscg: --lookback-days has no effect (full HTML re-scrape every run; "
-        "no date-cursor surface — see scraping_observations.md Finding K)."
+        "uscg: --lookback-days has no effect (page-0 precheck + full HTML "
+        "re-scrape on cache miss; see scraping_observations.md Finding J)."
     ),
 }
 
