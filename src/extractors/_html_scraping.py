@@ -162,8 +162,9 @@ class HtmlScrapingExtractor[T: BaseModel](Extractor[T]):
 
         Format: ``consumer-product-recalls/<version> (contact: <email>)``.
         Override in subclasses if a host requires browser-impersonation
-        UAs (none observed for USCG; USDA/FDA use ``_fsis_headers.py``
-        for Akamai Bot Manager workarounds).
+        UAs (none observed for USCG; USDA uses ``_fsis_headers.py`` for
+        Akamai Bot Manager workarounds, FDA sets its own UA constant for
+        a request-rate heuristic).
         """
         try:
             ver = _pkg_version("consumer-product-recalls")

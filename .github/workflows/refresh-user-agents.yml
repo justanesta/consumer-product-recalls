@@ -22,8 +22,8 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
       - run: uv python install
       - run: uv sync --frozen
 
@@ -31,7 +31,7 @@ jobs:
         run: uv run python scripts/refresh_user_agents.py
 
       - name: Open PR if data/user_agents.json changed
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           commit-message: "chore(usda): refresh data/user_agents.json"
           title: "chore(usda): refresh data/user_agents.json"
