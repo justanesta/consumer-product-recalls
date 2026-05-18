@@ -1,0 +1,33 @@
+name: Dependabot auto-merge
+
+# Auto-merges Dependabot PRs that are patch- or minor-level only. Major bumps
+# fall through and stay open for manual review. With grouped updates, the
+# group's update-type is the *highest* bump in the group, so a group that
+# contains any major will not auto-merge — review-required by default.
+#
+# Prerequisites (one-time repo settings):
+#   1. Settings → General → Pull Requests → "Allow auto-merge" enabled
+#   2. Settings → Branches → branch protection on `main` with required status
+#      checks (otherwise `--auto` merges immediately, skipping CI).
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v3
+
+      - name: Enable auto-merge for patch and minor updates
+        if: contains(fromJSON('["version-update:semver-patch", "version-update:semver-minor"]'), steps.metadata.outputs.update-type)
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
