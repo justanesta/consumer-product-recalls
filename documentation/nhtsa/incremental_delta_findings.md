@@ -574,19 +574,12 @@ Every combination got the population — no partial fill, no per-model variance,
 
 ### Classification — H1 confirmed (byte-level, 2026-05-15)
 
-Four converging signals support H1:
+The four-signal H1 rubric from Section I applies here; per-signal evidence:
 
-1. **`diagnose_null_regression.sql` Q1** — every `(10-tuple, raw_landing_path)` cell shows `rows_in_path = 1` across all 192 affected rows (96 logical products × 2 archives). Replacement, not additive. **H3 ruled out.** Q1/Q2 `bgman`/`endman` columns are NULL throughout (Pierce's software-component rows don't carry batch-window dates), but Q3 (`extraction_runs` metadata join) is class-agnostic and correctly identifies the archive pair. Invoked via the script's CLI-override path: `psql -f diagnose_null_regression.sql -v campno=26V217000 -v "mfr_comp_ptno=Any version prior to 08.15"`.
-
-2. **Inner-content SHA changed** between archives — 2026-05-08 inner SHA `c955c37153d1cb1e` (65,732-record initial seed; same archive as the Nissan I pre-amendment baseline) → 2026-05-15 inner SHA `945cac1b3b0bdf19` (120-record daily amendment, today's later wave). NHTSA published the population event in today's regen.
-
-3. **TSV byte inspection confirms H1 with parser symmetry.** Both archives inspected via `scripts/nhtsa/tsv_analysis/inspect_archive_row.py --show-field mfr_comp_desc,mfr_comp_name`:
-   - **Pre-amendment (`c955c37153d1…`):** 96 matched rows, every one with `MFR_COMP_DESC (raw): ''` (len=0) and `MFR_COMP_NAME (raw): 'Software'` (len=8).
-   - **Post-amendment (`945cac1b3b0b…`):** 96 matched rows, every one with `MFR_COMP_DESC (raw): 'Software'` (len=8) and `MFR_COMP_NAME (raw): 'Software'` (len=8).
-   - Inner-TSV SHA prefixes match `extraction_runs.response_inner_content_sha256` for both paths — tested the exact bytes that produced bronze.
-   - Parser-symmetry rules out H2: the post-amendment archive contains both populated and empty `mfr_comp_desc` cells across the broader corpus (Pierce populated, unrelated rows in various states), and bronze materializes all consistently. The FlatFileExtractor is not selectively breaking on Pierce rows.
-
-4. **The empty→`'Software'` direction adds a fourth real_drift class.** Distinct from depopulation (H.4 Mack, I Nissan; populated → NULL), boundary edit (Western Star, Pacifica; populated A → populated B on batch-window fields), and string normalization (AC DELCO → ACDELCO; populated A → populated B on a stable field). **Field population** is the new class: empty → populated on a non-batch-window field.
+1. **`diagnose_null_regression.sql` Q1** — every `(10-tuple, raw_landing_path)` cell shows `rows_in_path = 1` across all 192 affected rows (96 logical products × 2 archives). H3 ruled out. (Q1/Q2 `bgman`/`endman` columns are NULL throughout — Pierce's software-component rows don't carry batch-window dates — but Q3's `extraction_runs` metadata join is class-agnostic and correctly identifies the archive pair.) Invoked via `psql -f diagnose_null_regression.sql -v campno=26V217000 -v "mfr_comp_ptno=Any version prior to 08.15"`.
+2. **Inner-content SHA changed**: 2026-05-08 `c955c37153d1cb1e` (65,732-record seed; same archive as the Nissan I baseline) → 2026-05-15 `945cac1b3b0bdf19` (120-record amendment, today's later wave).
+3. **TSV byte inspection** via `inspect_archive_row.py --show-field mfr_comp_desc,mfr_comp_name`: pre-amendment, `mfr_comp_desc` empty on all 96 rows while `mfr_comp_name` already held `'Software'`; post-amendment, `mfr_comp_desc` populated to `'Software'` across all 96 rows. Inner-TSV SHA prefixes match `extraction_runs.response_inner_content_sha256` for both paths. Parser symmetry confirmed (post-amendment archive contains both populated and empty `mfr_comp_desc` cells across the broader corpus, bronze materializes all consistently).
+4. **New real_drift class**: empty → populated on a non-batch-window field. Distinct from depopulation (H.4 Mack, I Nissan; populated → NULL), boundary edit (Western Star, Pacifica; populated A → populated B on batch-window fields), and string normalization (AC DELCO → ACDELCO).
 
 ### Byte-level confirmation (2026-05-15)
 
@@ -703,6 +696,165 @@ No drift-class change: every campno's `avg_distinct_ptnos_per_group ∈ [2.0, 4.
 ### L.5 ADR 0031 implication
 
 The migration-tracking subsection sunset in K — this snapshot doesn't reopen it. No ADR 0031 amendment warranted from today's results; post-K monitoring continues in this file via further Section-L-style daily rows if a subsequent snapshot adds anything novel.
+
+## M. 2026-05-19 → -25 — three-day amendment series, rcdate-mutable surface, and methodology refinements
+
+Five tracking-snapshot days following Section L. The intervening 5/17 + 5/18 days returned zero inserts (bronze content_hash dedup absorbed both archives — the no-change pattern that motivates M.5's inner-hash refinement). Three substantive days (5/20, 5/21, 5/25) plus the 5/19 forward-edge baseline make up the M series.
+
+### M.1 Five-day shape table
+
+| Date | run_id (short) | n loaded | net_new / amend | RCDATE span | top non-`source_recall_id` Q3 driver | comment |
+|---|---|---|---|---|---|---|
+| 2026-05-19 | `f8d26cc3` | 28 | — | — | — | forward-edge baseline (Q3 not retrieved) |
+| 2026-05-20 | `ce0b1826` | 42 | 25 / 17 | 2025-12-18 → 2026-05-18 | `odate 13 (76%)` | routine forward-edge (J/L template) |
+| 2026-05-21 | `f15b2008` | 368 | 18 / 350 | 2025-08-08 → 2026-05-18 | `corrective_action 343 (98%)` | JLR 160-row concentration + Oxford-comma sub-edits (M.3) |
+| 2026-05-25 | `217e753d` | 478 | 115 / 363 | 2024-10-01 → 2026-05-20 | `rcdate 189 (52%)` | 3 per-recall rcdate corrections; row count inflated by broadcast (M.2) |
+
+Bronze corpus at 5/25 end: 74,107 rows. 5/19 and 5/20 are J/L-template forward-edge baselines (no new pattern). 5/21 and 5/25 surface novel structure documented in M.3 and M.2.
+
+### M.2 2026-05-25 — `rcdate` corrections on three specific recalls (not an archive-regen)
+
+The 5/25 wave reported `rcdate` as the second-most-modified non-`source_recall_id` field — 189 of 363 amendments (52%) shifted the recall date. Section H.6's 5/12 snapshot was the only prior instance with non-zero rcdate amendments (12 of 235 = 6%, explicitly flagged as "first appearance"). Sections I/J/K/L did not see rcdate as a driver. 52% looked like a step-change worth chasing — initially read as an archive-republish event (NHTSA regenerating `RCL_Annual_Rpts.txt` from a master database). **Empirically falsified by `attribute_rcdate_shifts_by_campno.sql` (run_id `217e753d`):**
+
+| campno | makes | n_rows_shifted | n_distinct_pairs | shift |
+|---|---|---|---|---|
+| 25V315000 | FORD, LINCOLN | 88 | 1 | 2025-05-14 → 2025-05-09 (−5 days) |
+| 24V733000 | ITASCA, WINNEBAGO | 83 | 1 | 2024-10-09 → 2024-10-01 (−8 days) |
+| 25V343000 | FORD, LINCOLN | 18 | 1 | 2025-06-13 → 2025-05-23 (−21 days) |
+| **TOTAL** | | **189** | — | — |
+
+**Three recalls, three rcdate corrections, all backward (earlier dates), each with a single uniform shift propagated to every 11-tuple row of the recall.** The 189 / 363 = 52% headline reflects the broadcast mechanism (M.3) inflating a small recall-count into a large row-count, not a bulk regen affecting the whole corpus.
+
+Refinements to the inferential reading above:
+
+1. **The "broad RCDATE backreach into 2024" is one recall** — Winnebago/Itasca 24V733000 contributes all 83 of the 2024 rows. Not a 2024 cohort republish; one specific 2024 recall had its rcdate corrected backward by 8 days.
+2. **The "Q1d year histogram is broad-spectrum" framing was misleading** — the histogram shape reflects three specific recalls (24V733000 / 25V315000 / 25V343000) at three different RCDATE points + the 174 non-rcdate-touching amendments distributed across whatever other recalls hold the corpus's amendment baseline.
+3. **`mfgcampno`'s 14 amendments** (3.9% of 363) are now empirically characterized (`scripts/sql/nhtsa/bronze/attribute_mfgcampno_shifts_by_campno.sql`, 2026-05-25). One recall: Tesla 26V283000, all 14 rows shifted uniformly from `SB-26-00-016` to `SB-26-00-001` (length-delta = 0; prefix `SB-26-00-0` preserved; last 3 chars `016` → `001`). Same per-recall-broadcast pattern as the rcdate cases, on the manufacturer-side service-bulletin identifier rather than NHTSA's metadata. Looks like a sequence-number correction — the interim "016" position renumbered to a canonical "001" on Tesla's side. The 14 mfgcampno amendments and the 189 rcdate amendments are structurally independent (different recalls, different editorial mechanisms) but exhibit the identical "single edit propagated to every 11-tuple row" shape Section M.3 documents for `corrective_action`. Confirms the broadcast mechanism generalizes across all hash-included payload fields.
+
+**Mechanism (revised, empirically grounded):** NHTSA does per-recall editorial corrections, including rcdate corrections, propagated through the daily archive regeneration. The corrections appear to be *backdating* corrections — adjusting a published rcdate to an earlier date (the "true" recall-issuance date as opposed to the date the entry appeared in the public archive). Three independent corrections happened to ship in the same 5/25 archive. Coincidence of timing, not a unifying editorial event.
+
+**rcdate is mutable in practice.** The Sections D / H.6 framing of rcdate as a *rare* amendment field is empirically supported (3 recalls over a 13-day window = ~0.23 recalls/day affected); the 52% row-level rate is a multiplicative artifact of the row-broadcast mechanism, not a frequency increase.
+
+**Reconciliation impact** — `rcdate` is a payload attribute, not part of any candidate identity tuple (11-tuple per ADR 0030/0031, 6-tuple per ADR 0033). It does not fragment silver in either v1 or v1.5. The 189 amendment inserts on these 3 recalls are a **bronze write-volume cost** that ADR 0033's 6-tuple + Type-1-latest-wins design absorbs as attribute updates without fragmentation. The class slots cleanly into the existing "value edit on attribute field" reconciliation rule (`project_scope/silver_v15_migration_plan.md`); no taxonomy extension warranted. The "amendment row count vs. distinct-recalls-affected" gap is a useful metric to surface in `recall_event_history` (Phase 6c) so consumers can see "this rcdate appears to have changed 88 times" vs. "this rcdate changed once and propagated to 88 product-rows of the same recall."
+
+**Empirical closure (Q2 + Q3 captures, 2026-05-25):**
+
+| metric | observed |
+|---|---|
+| `rows_with_rcdate_shift` | 189 |
+| `distinct_campnos_with_shift` | 3 |
+| `distinct_shift_pairs` | 3 |
+| `avg_year_delta` | 0.00 (all shifts intra-year) |
+| Q3 direction | **`backward shift` (100%, n=189)** — zero forward, zero NULL transitions |
+| Q3 day-delta range | min −21, max −5, avg −7.8 |
+
+The Q3 unanimous-backward result is the strongest empirical signal: every one of the 189 rows is a backward correction. If any subset of the 363 amendments were a true archive-regen artifact, we would expect at least a few forward shifts (rcdate forward-corrected on currently-published recalls) or NULL transitions (regen filling previously-missing rcdates). Neither appears. The wave is unambiguously **per-recall editorial backdating** propagated through the M.3 broadcast mechanism.
+
+**`mfgcampno` follow-up closed**: see M.2 narrative point #3 above. Single Tesla recall (26V283000), uniform `SB-26-00-016 → SB-26-00-001` shift via the broadcast mechanism. Structurally independent of the rcdate corrections; same per-recall-edit shape.
+
+### M.3 2026-05-21 — JLR 160-row concentration and the Oxford-comma sub-edit class
+
+The 5/21 wave's burst signature was extreme — **160 of 368 rows (43%) are a single recall** (Jaguar Land Rover STEERING:LINKAGES:KNUCKLE:SPINDLE:ARM). Largest single-recall absolute concentration in the observation window — bigger than J.3's Ford 25V685000 (82 rows of a 111-row day).
+
+The driver-field signature was equally extreme — `corrective_action 343 (98% of amendments)` plus `odate 185 (53%)`. Section J.2's 5/15 sample saw 88% / 20% on the same two fields. The 98% rate on 350 amendments means substantively every amendment touched `corrective_action`.
+
+**The Oxford-comma class** — Q4's BMW X5 Takata sample showed the smallest hash-significant `desc_defect` edit observed yet: *"humidity, temperature, **and** temperature cycling"* (5/21 archive) vs. *"humidity, temperature and temperature cycling"* (prior). One Oxford comma plus its preceding whitespace shift. Both rows of a 2-year-make pair received the change, and the recall's full 160-row roster received parallel `corrective_action` edits. Two implications:
+
+- **NHTSA's amendment workflow broadcasts text edits across every 11-tuple row of a recall**, including microscopic punctuation edits. The Section K mechanism ("single editorial action → 96 bronze rows") generalizes from population events to text-edit amendments. Operationally normal for NHTSA's daily-regen-from-master-database pattern, but worth documenting as a baseline expectation.
+- **Silver must normalize whitespace and punctuation before reaching consumer surfaces** — without it, every Oxford-comma-class edit propagates as N silver-level `field_edited` events (where N is the recall's row count, here 160). Empirical reinforcement of the per-field whitespace-normalization deliverable scoped under Phase 6c's `feature/recall-event-history` work stream (see `project_scope/silver_v15_migration_plan.md` and ADR 0022).
+
+The JLR concentration also qualifies Section F's burst framing: bursts are best characterized by **single-recall (campno) concentration**, not `mfgname` or `compname` concentration. The JLR 160 rows span multiple yeartxts but one campno + one compname; J.3's Ford 82 rows span nine model-makes but one campno + one compname. The unifying primitive is the campno, and burst metrics should center it.
+
+### M.4 Identity assertion at 380 drift groups — framing refinement
+
+`assert_eleven_tuple_identity_stable.sql` returns 380 total drift groups against the current corpus (74,107 rows):
+
+| field | groups | mapping to documented clusters |
+|---|---|---|
+| `mfr_comp_ptno` | 267 | J.5 Ford supersession + L.4's per-campno table (Mercedes 26V281000, Van Hool 26V191000, Ford 25V685000, Chrysler 26V189000, etc.) + structural growth across the 5/16 → 5/25 window |
+| `mfr_comp_desc` | 96 | Pierce ARROW XT 4×12×2 grid (Section K); no growth, class quiescent for 10 days |
+| `bgman` | 10 | H.3 Pacifica ×4 + I Nissan ×1 + H.4 Mack ×2 + new BMW K 1600 + Western Star |
+| `endman` | 7 | H.3 Western Star + I Nissan + L.4 BMW K 1600 + Mack |
+| natural-key core (compname, maketxt, modeltxt, yeartxt, rcl_cmpt_id, mfr_comp_name) | **0** | — |
+
+The 0 on the natural-key core is the structural invariant the 11-tuple was designed to preserve. 380 is **expected steady-state**, not failure: it reflects (a) accumulated structural multi-batch from supplier supersession (mostly `mfr_comp_ptno`), (b) Section K's Pierce population event still resident in bronze, and (c) the small real_drift cluster on batch-window fields documented across H/I/L.
+
+**Framing refinement (applied 2026-05-25)**: the assert script's *"TOTAL = 0 means the 11-tuple identity is stable across runs"* line is overly binary. The true invariant is **natural-key core stability** (the 6 core fields = 0); secondary descriptors (`mfr_comp_ptno`, `mfr_comp_desc`, `bgman`, `endman`) are expected to accumulate drift and are decomposed by `decompose_eleven_tuple_drift.sql` into structural-multi-batch (silver-correct) and real_drift (silver-fragmenting) classes. Script header updated to reflect this; logic unchanged.
+
+**Empirical decomposition (`decompose_eleven_tuple_drift.sql`, 2026-05-25)**:
+
+| field | structural_multi_batch | real_drift | total |
+|---|---|---|---|
+| `mfr_comp_ptno` | 267 | 0 | 267 |
+| `mfr_comp_desc` | 0 | 96 | 96 |
+| `bgman` | 0 | 10 | 10 |
+| `endman` | 0 | 7 | 7 |
+| natural-key core | 0 | 0 | 0 |
+| **TOTAL** | **267** | **113** | **380** |
+
+The 113 real_drift breaks down as 96 `mfr_comp_desc` (Pierce ARROW XT 4×12×2 grid from Section K — the field-population class) + 17 batch-window real_drift across `bgman`+`endman` (H.3 / I / H.4 / L plus the BMW K 1600 cluster surfaced below). The 267 structural is entirely `mfr_comp_ptno` supplier-supersession multi-batch — silver-correct under both v1 `md5(11-tuple)` and v1.5 `md5(6-tuple)` per ADR 0033.
+
+**Novel cluster surfaced 2026-05-25** — `26V214000` (BMW K 1600 B/GT/GTL motorcycles, `POWER TRAIN:MANUAL TRANSMISSION:SEALS/GASKETS`, Reverse Gear Control Unit ptno `8524078`) is contributing to **both** `endman` (3 cases — K 1600 B/GT/GTL each with endman populated → NULL) and `bgman` (1 case — K 1600 B with bgman populated → NULL) real_drift. Section L.4 explicitly flagged 26V214000's structural `mfr_comp_ptno` involvement (4 groups) as "worth monitoring," but the simultaneous H1-class NULL-regression in batch-window fields wasn't yet documented. Same multi-class-on-one-recall shape Section L.4 noted for 26V189000 Pacifica (structural ptno + real_drift bgman). One recall, three independent drift facets.
+
+**ADR 0031 silver-fragmentation rate**: 113 real_drift / 74,107 bronze rows = 0.15%. Materially above ADR 0031:84's `>0.01% per month` trigger threshold, but **entirely attributable to two well-documented editorial events**: Section K Pierce population (96, ≈85% of real_drift) and the cumulative batch-window cluster from Sections H/I/L plus today's 26V214000 BMW K 1600 (17, ≈15%). K remains the single largest source of fragmentation in the corpus by ~6×. ADR 0033's v1.5 6-tuple architecture eliminates ~99% of this — 113 → 1 (the AC DELCO normalization case that fragments at all grains).
+
+### M.5 Inner-hash sensitivity refinement — necessary but not sufficient
+
+`spot_check_extraction_runs.sql` Section 3 reports day-over-day `response_inner_content_sha256` transitions. Migration 0011's commentary and the script's prior header both characterized inner_hash as *"the authoritative 'did the data change?' oracle"*. The 5/11 → 5/25 daily run sequence empirically refines this claim.
+
+Every day in 5/11 → 5/25 shows `inner_transition = CHANGED`. This includes:
+- Days with substantial loads (5/12, 5/15, 5/16, 5/19, 5/20, 5/21, 5/25)
+- **Days with zero loads (5/17, 5/18)**
+
+The 5/17 and 5/18 zero-load days are existence proofs that inner-TSV bytes can differ across daily archives without representing any real data change. **Empirical investigation 2026-05-25 (`scripts/nhtsa/tsv_analysis/diff_inner_tsv.py`) identifies the actual mechanism**: NHTSA reassigns RECORD_ID values across every daily archive build, even for unchanged recall content. Section C documented this at the cell level (RECORD_ID is a per-build sequence number); the diff tooling confirms it at byte-and-set-level scale.
+
+**Empirical evidence** — running the diff in raw-bytes mode against the 2026-05-16 → 2026-05-17 → 2026-05-18 archives (each ~240,381 lines, all three days having identical bronze content_hash dedup outcomes):
+
+| pair | raw-bytes verdict | lines differing | lines identical |
+|---|---|---|---|
+| 5/16 ↔ 5/17 | `REAL_CHANGE` | 240,371 (99.996%) | 10 |
+| 5/17 ↔ 5/18 | `REAL_CHANGE` | 240,379 (99.999%) | 2 |
+
+Same-slot RECORD_ID examples illustrating the artifact:
+
+```
+5/16 row 81715: 81715  10V080000  GEM         eL          2009  PARKING BRAKE  ...
+5/17 row 81715: 81715  10V484000  CARRIAGE    CARRI-LITE  2004  EQUIPMENT      ...
+5/18 row 81715: 81715  10V456000  DOUBLE TREE ELITE       2003  EQUIPMENT      ...
+```
+
+Same RECORD_ID slot (`81715`), three different recalls. The byte-level diff classifies every such line as a "real change" because field 0 is part of the byte signature.
+
+**Stripped-column diff confirms the mechanism unambiguously** — running the script with default `--strip-record-id` (drops column 0 before diffing):
+
+| pair | verdict | sorted-SHA A | sorted-SHA B | lines only in A | lines only in B |
+|---|---|---|---|---|---|
+| 5/16 ↔ 5/17 | `REORDER` | `4821a45b615dddbe…` | `4821a45b615dddbe…` (match) | 0 | 0 |
+| 5/17 ↔ 5/18 | `REORDER` | `4821a45b615dddbe…` | `4821a45b615dddbe…` (match) | 0 | 0 |
+
+The sorted-SHA-256 is **identical** across all three days. After stripping RECORD_ID, the multisets of lines are byte-equal across 5/16, 5/17, and 5/18 — only the physical row order shuffled. Zero whitespace artifacts, zero column-padding artifacts, zero real content changes. Pure RECORD_ID reassignment plus physical row reordering, both of which bronze content_hash dedup correctly canonicalizes via the 11-tuple identity and `hash_exclude_fields={source_recall_id}`.
+
+**ADR 0030's design choice empirically vindicated**: bronze's `hash_exclude_fields={source_recall_id}` instruction means the 11-tuple + content_hash dedup canonicalizes the row content without RECORD_ID. Every "different" byte-level line maps to the same logical 11-tuple identity in bronze, which is why `records_inserted = 0` on these days. The architecture handles per-build sequence-number reassignment correctly; the script's previous "necessary but not sufficient" framing of `inner_hash` was the right call.
+
+**Correct framing:**
+- `inner_hash` matches prior → **sufficient** evidence of no change (TSV bytes are byte-equal; nothing changed)
+- `inner_hash` differs from prior → **necessary but not sufficient** evidence of change (bytes differ, but could be reorder / whitespace / padding OR real data change)
+- Bronze content_hash dedup (`records_inserted > 0`) is the **only authoritative oracle** for real change
+
+Script header (`scripts/sql/nhtsa/_pipeline/spot_check_extraction_runs.sql`) and Migration 0011 commentary refined 2026-05-25 to reflect this. Section J's wrapper-hash narrative is unaffected — wrapper hash was always known to be daily-noisy; this refinement only constrains the claim about inner hash.
+
+**Open follow-up closed 2026-05-25**: mechanism identified empirically as RECORD_ID column-0 reassignment (see "Empirical evidence" subsection above). Bronze content_hash dedup correctly absorbs the artifact via `hash_exclude_fields={source_recall_id}` (ADR 0030). For future flat-file sources, the design intent crystallizes as: if the source emits a per-build sequence column, capture the inner-content sha for forensic continuity but treat it as a *necessary-not-sufficient* change oracle, and use a stripped-column SHA (or the bronze content_hash count) as the authoritative one.
+
+### M.6 Phase 6 / ADR 0033 implication
+
+The findings in this section reinforce the v1.5 SCD-2 design decision in ADR 0033 without requiring extension:
+
+- **rcdate-mutable (M.2)** — slots into "value edit on attribute field" → Type-1 latest-wins under v1.5. No taxonomy change.
+- **Oxford-comma class (M.3)** — empirical evidence the per-field whitespace-normalization deliverable in `feature/recall-event-history` is mission-critical, not nice-to-have. Without it, the 5/21 wave alone produces 160 silver-level `field_edited` events on a single conceptual edit. With it, those collapse to a single canonical-text-comparison no-op.
+- **Identity drift at 380 (M.4)** — affirms ADR 0033's premise that the 11-tuple's secondary descriptors (`mfr_comp_ptno`, `mfr_comp_desc`, `bgman`, `endman`) are mutable in practice and should not be in the silver anchor key. The 6-tuple anchor proposed in ADR 0033:47–86 maps to the natural-key core fields that show 0 drift across the full corpus.
+- **Inner-hash refinement (M.5)** — independent of ADR 0033, but reinforces the architectural choice to make bronze content_hash dedup the canonical change oracle rather than relying on upstream hashes.
+
+No ADR 0033 amendment warranted. Future Phase 6c `feature/recall-event-history` work should include the M.2/M.3 patterns as test fixtures (a synthetic rcdate-shift archive and a synthetic Oxford-comma archive) to validate the Type-1/Type-2 mechanism handles them as designed.
 
 ---
 

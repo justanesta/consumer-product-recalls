@@ -41,8 +41,9 @@
 \echo
 
 -- 1. Change-signal verdict (the headline query).
---    For every successful run, compare ETag and body hash against the prior
---    successful run. SUSPECT verdicts mean the ETag is misleading.
+--    For every successful run, compare ETag and body hash against the most-
+--    recent prior 200 (NOT the immediately prior row). SUSPECT verdicts mean
+--    the ETag is misleading.
 --
 --    304 handling: a 304 Not Modified response has no body — the server is
 --    *itself* asserting "nothing changed." We trust that assertion and label
@@ -52,26 +53,56 @@
 --    against the prior 200's real body hash and surface as a phantom
 --    false-304 (observed 2026-05-10 on usda_establishments — see Finding A
 --    addendum in documentation/usda/establishment_api_observations.md).
+--
+--    Lateral self-join for prev_etag / prev_body (refactored 2026-05-25,
+--    third revision): the original implementation used lag(1) which dead-
+--    ends at 304 rows (post-fix: prev_body = NULL; pre-fix: sha256("")). A
+--    second revision (Option B, 2026-05-25) added a "prev_status_code = 304
+--    AND ETag stable" suppression branch to handle the phantom case, but
+--    couldn't recover the false-200 detection on 200-after-304 transitions
+--    where ETag advanced (e.g., 2026-05-11 usda_establishments: ETag drifted
+--    1778270406 → 1778499930 across a 304 with body unchanged — true false-
+--    200 hidden by the lag's NULL prev_body). This revision replaces the
+--    lag() with a LATERAL subquery that fetches the most recent prior 200's
+--    ETag and body, skipping any intervening 304s. The 200-after-304-ETag-
+--    stable branch (Option B) becomes redundant under this logic — the
+--    "consistent: nothing changed" branch handles it correctly when both
+--    ETag and body match the prior 200, and false-200 detection works
+--    correctly when ETag drifted across the 304.
+--
+--    False-304 detection across a 304 is still structurally outside this
+--    script's window (no body to compare on the 304 itself). That's the job
+--    of the audit-run mechanism (change_type='etag_audit' +
+--    scripts/sql/_pipeline/etag_audit_check.sql).
 with transitions as (
     select
-        started_at,
-        response_status_code,
-        response_etag,
-        response_body_sha256,
-        records_inserted,
-        records_extracted,
-        lag(response_etag)        over w as prev_etag,
-        lag(response_body_sha256) over w as prev_body
-    from extraction_runs
-    where source = :'src' and status = 'success'
-    window w as (order by started_at)
+        e.started_at,
+        e.response_status_code,
+        e.response_etag,
+        e.response_body_sha256,
+        e.records_inserted,
+        e.records_extracted,
+        prior_200.response_etag        as prev_etag,
+        prior_200.response_body_sha256 as prev_body
+    from extraction_runs e
+    left join lateral (
+        select p.response_etag, p.response_body_sha256
+        from extraction_runs p
+        where p.source                = e.source
+          and p.status                = 'success'
+          and p.response_status_code  = 200
+          and p.started_at            < e.started_at
+        order by p.started_at desc
+        limit 1
+    ) prior_200 on true
+    where e.source = :'src' and e.status = 'success'
 )
 select
     started_at,
     response_status_code                          as status,
     case
         when prev_etag is null
-            then '(first run — no prior to compare)'
+            then '(first run — no prior 200 to compare)'
         when response_status_code = 304
             then 'consistent: nothing changed (304 Not Modified)'
         when response_body_sha256 =  prev_body
@@ -162,14 +193,23 @@ order by 1 desc;
 --                             bronze hash dedup absorbs it
 with transitions as (
     select
-        response_status_code,
-        response_etag,
-        response_body_sha256,
-        lag(response_etag)        over w as prev_etag,
-        lag(response_body_sha256) over w as prev_body
-    from extraction_runs
-    where source = :'src' and status = 'success'
-    window w as (order by started_at)
+        e.response_status_code,
+        e.response_etag,
+        e.response_body_sha256,
+        prior_200.response_etag        as prev_etag,
+        prior_200.response_body_sha256 as prev_body
+    from extraction_runs e
+    left join lateral (
+        select p.response_etag, p.response_body_sha256
+        from extraction_runs p
+        where p.source                = e.source
+          and p.status                = 'success'
+          and p.response_status_code  = 200
+          and p.started_at            < e.started_at
+        order by p.started_at desc
+        limit 1
+    ) prior_200 on true
+    where e.source = :'src' and e.status = 'success'
 ),
 verdicts as (
     select

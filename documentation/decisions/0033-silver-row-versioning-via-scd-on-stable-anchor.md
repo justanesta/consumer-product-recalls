@@ -123,6 +123,21 @@ from {{ ref('stg_nhtsa_recalls_current') }}
 
 dbt's snapshot mechanism is SCD Type 2: each invocation appends new versions when `check_cols` change, retains historical versions with `dbt_valid_from`/`dbt_valid_to` columns, and exposes a deterministic stable surrogate (`dbt_scd_id`).
 
+### Real_drift taxonomy and reconciliation rules
+
+Across Sections H/I/K/M of `documentation/nhtsa/incremental_delta_findings.md`, four distinct classes of real_drift have been empirically observed. The taxonomy was informally documented per-section as each class first surfaced; this subsection consolidates them as the canonical reference. Each class maps cleanly to the SCD mechanism above and produces a distinct `recall_event_history` event type for downstream consumers (per ADR 0022).
+
+| Class | Empirical exemplar(s) | Reconciliation rule | `recall_event_history` event_type | SCD treatment |
+|---|---|---|---|---|
+| **Population** | Section K — Pierce ARROW XT 26V217000 `mfr_comp_desc` `'' → 'Software'` (96 rows in one editorial event) | Populated value supersedes empty; merge on the 6-tuple anchor | `field_filled` | Type 1 — current row holds the populated value; Type 2 history retains the empty pre-amendment version |
+| **Depopulation** | Section H.4 — Mack 26V261000 `bgman`/`endman` populated → NULL (asymmetric per-yeartxt). Section I — Nissan CUBE 26V230000 (same shape) | Both retained for audit (Type 2 history); latest is canonical (Type 1 current) | `field_cleared` | Type 1 — current row holds NULL; Type 2 history preserves the prior populated value |
+| **Value edit (batch-window or metadata)** | Section H.3 — Western Star 47X 26V079000 `endman` `2026-02-03 → 2026-04-10`; Chrysler Pacifica 26V189000 `bgman` `2022-05-10 → 2022-05-17`. Section M.2 — Ford 25V315000 `rcdate` backdating (5 days), Winnebago 24V733000 (8 days), Ford 25V343000 (21 days); Tesla 26V283000 `mfgcampno` `SB-26-00-016 → SB-26-00-001` | Latest wins. For batch-window fields specifically, a future extension could accumulate into a `production_window` range rather than overwriting — out of scope for v1.5 | `field_edited` | Type 1 — current row holds latest value; Type 2 history captures the transition with `dbt_valid_from`/`dbt_valid_to` |
+| **Normalization** | Cross-corpus AC DELCO → ACDELCO `maketxt` event (2026-05-08, via `scripts/nhtsa/tsv_analysis/cross_corpus_stability.py`); TSV-substrate only, not yet observed in bronze | Fuzzy-match required because the anchor field itself changes — silver fragments at all candidate grains including the 6-tuple. Phase 6b RapidFuzz reconciliation handles the cross-source variant; the analogous NHTSA-internal mechanism would need a mapping layer. v1: manual review. ML-assisted later. | `field_normalized` | Cannot use Type 1 on the anchor field; requires explicit cross-row identity reconciliation **outside** the SCD mechanism |
+
+**Why this matters for v1.5 architecture:** the first three classes (Population, Depopulation, Value edit) are **handled transparently by the Type 1 + Type 2 mechanism above** — the snapshot collapses pre- and post-amendment versions into one canonical current row plus a Type 2 history entry. The fourth class (Normalization on a 6-tuple anchor field) is the **only known class that v1.5 does NOT solve** and remains a Phase 6b deliverable. This is the precise scope boundary this ADR commits to: the "~99% of observed fragmentation" addressed claim (per the "Empirical evidence" section below) refers to the first three classes; the remaining ~1% is the Normalization class needing fuzzy reconciliation.
+
+**Forward integration with Phase 6c `recall_event_history`:** when Phase 6c implements the event-grain history model, the `event_type` enum should include the four values in this table. The model's source data should be the dbt snapshot table (Layer 2 deliverable per `project_scope/silver_v15_migration_plan.md`), which exposes pre/post values per attribute change as Type 2 versions. Phase 6c's classifier then maps each version transition to its `event_type` per this table's "Reconciliation rule" column. This is open question #3 in the migration plan ("`recall_event_history` integration mode") — answering "snapshot directly" cleanly slots into this taxonomy without rework.
+
 ### Silver consumer surfaces
 
 After Layer 3 migration:

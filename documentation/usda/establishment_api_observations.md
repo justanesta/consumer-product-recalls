@@ -113,6 +113,44 @@ Not yet automated on a schedule — initial cadence will be operator-triggered. 
 
 **First audit verdict (2026-05-10): `CONSISTENT — body unchanged since baseline`.** Audit at 2026-05-10 16:05:52 forced a 200 against the same ETag (`"1778270406"`) the server had returned on the 2026-05-09 17:47 baseline run; body sha matched byte-for-byte. The intervening 2026-05-10 13:19 routine 304 is therefore directly validated as honest — `intervening_304s = 1`, no false-304 evidence. Bronze dedup absorbed the audit body cleanly (`records_extracted = 7956, records_inserted = 0`, duration 2.59s — consistent with a full ~810 KB body download and zero writes). One measured data point converting Finding P / Finding A's inferential green-light into a directly observed verification; the recall side was audited the same day as a smoke test (no intervening 304s yet, so structurally `no false-304 evidence`). Ongoing audits will accumulate.
 
+### Finding A addendum (2026-05-25) — viability-script residual surface eliminated
+
+The 2026-05-10 fixes (extractor writes `NULL` on 304s; `etag_viability.sql` trusts a current-row 304 categorically) resolved the production-side phantom but left one residual surface untouched: the pre-fix 2026-05-10 13:19:14 routine 304 row still held `sha256("")` in `response_body_sha256` — that one row was never backfilled — and the viability script only handled "current row is a 304," not its symmetric "prior row was a 304." Every subsequent run of `etag_viability.sql -v src=usda_establishments` therefore mis-flagged the 2026-05-10 16:05 audit 200 as `SUSPECT false-304` and flipped the summary recommendation back to `DO NOT ENABLE` — despite ETag/body health being demonstrably stable. Surfaced 2026-05-25 while triaging the 2026-05-20 / -21 / -25 daily-run counts.
+
+**Verification (`scripts/sql/_pipeline/verify_etag_viability_phantom.sql`, 2026-05-25):** confirmed the smoking gun is still load-bearing — the 2026-05-10 13:19 304's `response_body_sha256` still equals `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` (= `sha256("")`), and the 2026-05-10 16:05 audit 200's body byte-equals the 2026-05-09 17:47 baseline (`26513e4e8a4f47a79d0f3c461c862a6fc534404a4300ac4e5611d020974ee875`). The body-equivalence query returned MATCH for both rows. Phantom hypothesis empirically confirmed.
+
+**Fix (`scripts/sql/_pipeline/etag_viability.sql`, 2026-05-25):** added a `when prev_status_code = 304 and response_etag = prev_etag then 'consistent: nothing changed (200 after 304, ETag stable)'` branch to the verdict CASE in both query 1 (per-row verdict) and query 5 (summary verdict), with `lag(response_status_code) over w as prev_status_code` added to both CTEs. Ordered after the current-row-is-304 branch and before the body-comparison branches, so the more direct signal wins before falling through to a body-vs-sentinel comparison.
+
+**Why this is safe — Option B does not weaken false-304 detection.** The viability script's `lag()` window is structurally blind to body changes across a 304: the prior row has no real body to compare against (post-fix `NULL`, pre-fix `sha256("")`), so the body-vs-body comparison was always meaningless in that arrangement. Real false-304 detection lives in the audit-run mechanism (`change_type='etag_audit'` runs + `scripts/sql/_pipeline/etag_audit_check.sql`), which forces a 200 by suppressing `If-None-Match` and compares the fresh body against the most recent prior 200 baseline. Option B fixes labeling for an arrangement the viability script could never analyze; it does not change detection capability anywhere it had detection capability.
+
+**Post-fix summary stats:**
+
+| metric | pre-fix | post-fix |
+|---|---|---|
+| `total_transitions` | 19 | 19 |
+| `consistent_unchanged` | 9 | **10** (the recovered audit verdict) |
+| `consistent_changed` | 3 | 3 |
+| `false_200_count` | 6 | 6 |
+| `false_304_count` | **1 (phantom)** | **0** |
+| recommendation | `DO NOT ENABLE` | **`SAFE TO ENABLE — false-200 only (over-fetch sometimes; bronze absorbs)`** |
+
+The recommendation now matches Finding P (recall side); the two endpoints share the same Akamai/Drupal stack and the same ETag generation behavior, so the same verdict is the expected outcome.
+
+**Latent precision gap — RESOLVED 2026-05-25.** The lag-based prev-body lookup dead-ended at any 304 row (post-fix: prev_body = NULL → no CASE branch matches → verdict NULL). Several rows that were conceptually false-200s (ETag drifted, body unchanged) or `consistent_changed` (real upstream change) couldn't be classified because the comparison baseline was a 304 with no body to compare.
+
+Resolved by replacing `lag(response_body_sha256)` and `lag(response_etag)` with a `LEFT JOIN LATERAL` that fetches the most-recent prior 200's body and etag, skipping any intervening 304s. Applied to both query 1 (per-row verdict) and query 5 (summary verdict) in `scripts/sql/_pipeline/etag_viability.sql`. The Option B "prev_status_code = 304 AND ETag stable" suppression branch (added earlier the same day) became redundant under the new logic and was removed — the standard "consistent: nothing changed" branch correctly catches the case when both ETag and body match the prior 200.
+
+Empirical confirmation across both USDA endpoints (2026-05-25):
+
+| source | `total_transitions` | `consistent_unchanged` | `consistent_changed` | `false_200_count` | `false_304_count` | recommendation |
+|---|---|---|---|---|---|---|
+| `usda` (recall, before) | 21 | 5 | 5 | 11 | 0 | `SAFE TO ENABLE — false-200 only` |
+| `usda` (recall, after) | **23** | 5 | **6** (+1) | **12** (+1) | 0 | unchanged |
+| `usda_establishments` (before) | 19 | 9 | 3 | 6 | 0 | `SAFE TO ENABLE — false-200 only` (post-phantom fix) |
+| `usda_establishments` (after) | **23** | **10** (+1) | **4** (+1) | **9** (+3) | 0 | unchanged |
+
+Establishment side surfaced 4 previously-hidden verdicts (vs. the recall side's 2): three `false_200` cases (5/11 13:06, 5/12 12:05, 5/17 21:26 — all ETag drifted while body identical across a 304) and one `consistent_changed` (5/19 19:21 — the 44-record rebaseline residual wave the old lag couldn't see through the 5/18 304). Directional `SAFE TO ENABLE` recommendation unchanged on both endpoints.
+
 ---
 
 ## Dataset Cardinality

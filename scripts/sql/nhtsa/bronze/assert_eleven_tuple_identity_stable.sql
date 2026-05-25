@@ -61,9 +61,19 @@
 
 \echo
 \echo '=== Q1: per-field cross-run drift-group counts ==='
-\echo 'Headline assertion: TOTAL = 0 means the 11-tuple identity is stable across runs.'
-\echo 'Each group counted here spans ≥2 distinct raw_landing_paths and disagrees'
-\echo 'on the named field — i.e., a candidate identity edit by NHTSA over time.'
+\echo 'Structural invariant: drift_group_count = 0 on the NATURAL-KEY CORE'
+\echo '  (compname, maketxt, modeltxt, yeartxt, rcl_cmpt_id, mfr_comp_name).'
+\echo 'Non-zero on the secondary descriptors (mfr_comp_ptno, mfr_comp_desc,'
+\echo 'bgman, endman) is EXPECTED in steady-state — accumulated structural'
+\echo 'multi-batch (supplier supersession) + the field-population / boundary-edit'
+\echo 'real_drift classes documented in incremental_delta_findings.md Sections'
+\echo 'H/I/K/L/M. Decompose with `decompose_eleven_tuple_drift.sql` to split'
+\echo 'structural_multi_batch (silver-correct) from real_drift (silver-fragmenting).'
+\echo
+\echo 'TOTAL aggregates both classes across all 10 non-campno fields; treat the'
+\echo 'natural-key-core rows as the strict invariant and the secondary-descriptor'
+\echo 'rows as a watch list rather than an alarm. (See M.4, 2026-05-25, for the'
+\echo 'framing-refinement context.)'
 
 with per_field as (
     select 'maketxt' as drifting_field, count(*) as drift_group_count

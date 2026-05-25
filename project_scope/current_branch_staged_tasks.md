@@ -145,7 +145,7 @@ Recommendation
   branch's PR description? If yes, inline. If no, separate branch.
 
   
-
+# Section: NHTSA phase 6 reconciliation
   
   I would like to think through ADR  0031 more in light of the: "v1-accepted fragmentation from ADR 0031:83-86 — but ADR 0031:110 estimated "~150 fragmented NHTSA
   recall_product rows per year." Today added 96 in a single editorial event from one campaign. The estimate is materially
@@ -276,3 +276,34 @@ Look into these work steps:
   │ Next-week daily       │ New branch off main after this week's merge —     │ Consistent with your weekly-findings    │
   │ findings              │ e.g., docs/findings-2025-05-w4                    │ cadence pattern                         │
   └───────────────────────┴───────────────────────────────────────────────────┴─────────────────────────────────────────┘
+
+# Section: 2026-05-25 daily run tasks
+Recommended execution order
+  1. recent_runs.sql → grab the four run_ids and confirm the headline counts
+  2. response_capture_check.sql → ensure forensic columns populated (so the next step has data)
+  3. etag_audit_check.sql → resolves three of the four mysteries in one shot
+  4. nhtsa/_pipeline/spot_check_extraction_runs.sql → confirms inner-content transitions on both NHTSA dates
+  5. nhtsa/bronze/explore_incremental_delta.sql -v run_id=<2026-05-20 run> then <2026-05-21 run>
+  6. nhtsa/bronze/assert_eleven_tuple_identity_stable.sql → then branch only if it flags
+  7. (optional) watermark_health.sql + quarantine_check.sql as belt-and-suspenders
+
+Do I need to do any follow-ups for this? 
+
+Section 3 — the surprising part: every day from 5/11 onward shows inner_transition = CHANGED. That's expected on days that
+  loaded non-zero rows (5/16, 5/19, 5/20, 5/21, 5/25). But it's also true on 5/17 and 5/18, both of which loaded zero. The
+  5/10 intra-day pair (13:20 and 17:51) correctly shows unchanged for both wrapper and inner — same-day re-fetch caught the
+  no-republish state. Across days, though, inner_hash transitions even when bronze finds no row-level deltas.
+
+  The script's header comment says "If inner_hash transitions, content actually changed that day." That assumption is now
+  empirically falsified. The 5/17 and 5/18 rows are existence proofs that inner-TSV bytes can differ across days without
+  representing real data change — likely row reordering or whitespace churn in NHTSA's daily flat-file generation, neither of
+   which moves the bronze content_hash needle.
+
+  Correct refinement: response_inner_content_sha256 is sufficient evidence of "no change" (if inner hash matches prior,
+  nothing changed), but not sufficient evidence of "change" (inner hash CHANGED can mean reorder/whitespace OR real change).
+  Bronze content_hash dedup remains the only authoritative oracle. This is worth a new finding in
+  documentation/nhtsa/incremental_delta_findings.md — refines/qualifies the original Migration 0011 assumption.
+
+  I'd file that refinement as part of the Section M/N writeups (it's pattern-discovery from this same triage window), not as
+  a separate immediate task. Flagging it now so we don't lose track. Also worth a follow-up TODO bullet — investigate WHY the
+   inner hashes differ on no-change days (row order vs. whitespace vs. column padding) — but that's a separate thread.
