@@ -1,142 +1,242 @@
--- Phase 5c — empirically test whether the 9-tuple is stable across runs,
--- as a candidate for the NHTSA silver canonical-entity key.
+-- Phase 5c — assert that the 9-tuple identity is stable *across runs* in
+-- NHTSA bronze, as a candidate for a future silver canonical-entity key.
 --
--- Context: ADR 0030 fixed the bronze 11-tuple identity for row-grain
--- dedup. `assert_eleven_tuple_identity_stable.sql` showed the 11-tuple
--- has a small but non-zero cross-run drift hazard, concentrated in
--- `endman`/`bgman` (1 case in 2 runs as of 2026-05-08 — see
--- `documentation/nhtsa/incremental_delta_findings.md` Section G).
+-- Status: EXPLORATORY / hypothesis check. Production silver currently uses
+-- md5(11-tuple) per `dbt/models/silver/recall_product.sql:99-108`, NOT
+-- md5(9-tuple). This assertion answers: "if we MIGRATED silver to the
+-- 9-tuple per ADR 0031 Section G's 'silver implication' exploration,
+-- would cross-run fragmentation be zero or near-zero?" See
+-- `decompose_nine_tuple_drift.sql` for the structural-vs-real-drift
+-- decomposition view; this assertion is the smoke test (real_drift only).
 --
--- Hypothesis: dropping `endman` and `bgman` from the identity yields a
--- 9-tuple that IS stable across runs:
+-- The 9-tuple:
 --   (campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
 --    mfr_comp_ptno, mfr_comp_desc, mfr_comp_name)
+-- i.e., the 11-tuple with `endman` and `bgman` (batch-window fields)
+-- collapsed out. Per ADR 0030/0031, those would migrate to a child
+-- `recall_component_batch` table or be rolled up Type-1 in silver.
 --
--- If true: the 9-tuple becomes the silver `source_recall_id` (as a
--- deterministic hash) per the layered design discussed in Section G's
--- "Silver implication" — bronze keeps 11-tuple row grain (audit-quality,
--- preserves within-run multi-batch rows), silver derives a stable
--- surrogate from the 9-tuple, and `endman`/`bgman` either get
--- normalized into a child `recall_component_batch` table or rolled up
--- (latest-wins Type 1 SCD).
+-- Mechanism (refactored 2026-05-13): per-path-value-set divergence check.
+-- For each rotated identity field, compute the set of distinct values the
+-- field takes *within each raw_landing_path* (string-aggregated, sorted,
+-- NULL-coalesced), then group by the other 8 9-tuple fields and flag
+-- groups where the per-path value sets are NOT all identical. Mirrors
+-- the refactor applied to the dbt test
+-- `dbt/tests/source_assumptions/assert_nhtsa_eleven_tuple_identity_stable.sql`
+-- on 2026-05-12 (104 → 9), and decomposed in
+-- `decompose_eleven_tuple_drift.sql` / `decompose_nine_tuple_drift.sql`.
 --
--- If false: the 9-tuple isn't stable either, and silver needs a
--- richer mechanism (a mapping table with manual / fuzzy reconciliation,
--- or further demotion of fields from the identity).
+-- What this suppresses: structural multi-batch (silver-correct false
+-- positive). One physical recall component legitimately reporting
+-- multiple values for a field (e.g., LEAF battery chemistry variants
+-- `295B0 5SA1C` + `295B0 5SF0A`, both real, both in every archive). Every
+-- path's value set is the same canonical string; the group is not flagged.
+-- The prior strict-boolean filter mistook these for drift; this filter
+-- does not.
 --
--- Strategy: same shape as `assert_eleven_tuple_identity_stable.sql`
--- but checks 8 non-campno fields instead of 10. For each field X in
--- the 9-tuple, GROUP BY (campno + the other 7 9-tuple fields) and
--- HAVING that group has >1 distinct value of X AND comes from >1
--- distinct `raw_landing_path` (cross-run filter — see Section G).
+-- What this still catches: real 9-tuple drift — NHTSA editing one of the
+-- 8 non-campno 9-tuple fields for an existing recall between archive
+-- generations. The canonical example is the `'AC DELCO'` → `'ACDELCO'`
+-- maketxt normalization (campno 22E002000, observed 2026-05-08 by
+-- `scripts/nhtsa/tsv_analysis/cross_corpus_stability.py`). Any such
+-- drift fragments silver if/when silver migrates to md5(9-tuple).
 --
--- Note: this script does NOT include endman/bgman in the GROUP BY.
--- That's the whole point — at the 9-tuple grain, within-run multi-
--- batch rows (e.g., the Heil garbage truck case from Section G with
--- two endman values for the same part) collapse into one group, and
--- those endman/bgman values are summed/aggregated away. We're asking
--- whether the parent 9-tuple identity itself is stable, independent
--- of batch-level fields.
+-- Pre-refactor reference (for comparison): the older strict-boolean
+-- filter (now removed) reported `TOTAL = 97` as of 2026-05-13, all in
+-- `mfr_comp_ptno`. Post-refactor reports `TOTAL = 0` — all 97 were
+-- structural multi-batch (verified via `decompose_nine_tuple_drift.sql`
+-- 2026-05-13).
 --
--- Expected outcome if hypothesis holds: TOTAL = 0. Any non-zero result
--- is a 9-tuple drift event — which would invalidate the proposed
--- silver surrogate-key design and warrant a richer reconciliation path.
+-- Divergence from the 11-tuple dbt test (which uses the same mechanism
+-- at a different grain): the dbt test groups by all 10 non-campno
+-- 11-tuple fields including `endman` + `bgman`. This script drops both
+-- — that's the whole point of the 9-tuple hypothesis. So at the 9-tuple
+-- grain, within-run multi-batch rows (e.g., the Heil garbage truck case
+-- from Section G with two endman values for the same part) collapse
+-- into one group, and the endman/bgman drift that fragments md5(11-tuple)
+-- silver simply doesn't appear here.
+--
+-- Expected outcome if hypothesis holds: TOTAL = 0. Any non-zero result is
+-- a 9-tuple drift event — would invalidate the proposed silver surrogate-
+-- key migration and warrant a richer reconciliation path (mapping table,
+-- fuzzy match, further demotion of fields).
+--
+-- Wire-up plans:
+--   * Near-term: run manually alongside the 11-tuple dbt test as a
+--     monthly snapshot to track whether the 9-tuple stays clean.
+--   * If the 9-tuple stays clean over multiple corpora and ADR 0031's
+--     v1 fragmentation rate exceeds its threshold, promote this to a
+--     dbt test `assert_nhtsa_nine_tuple_identity_stable.sql` and migrate
+--     silver to md5(9-tuple) + `recall_component_batch` child table.
 
 \set ON_ERROR_STOP on
 \pset null '<NULL>'
 
 \echo
-\echo '=== Q1: per-field cross-run drift-group counts (9-tuple grain) ==='
+\echo '=== Q1: per-field cross-run real_drift counts (9-tuple grain, per-path-value-set) ==='
 \echo 'Headline assertion: TOTAL = 0 means the 9-tuple identity is stable across runs.'
-\echo 'If TOTAL = 0, the 9-tuple is a viable basis for silver canonical-entity surrogate.'
+\echo 'Refactored 2026-05-13: per-path-value-set check. Pre-refactor (strict boolean'
+\echo 'filter) reported TOTAL = 97 — all structural multi-batch, all silver-correct.'
 
 with per_field as (
     select 'maketxt' as drifting_field, count(*) as drift_group_count
     from (
         select 1
-        from nhtsa_recalls_bronze
+        from (
+            select campno, modeltxt, yeartxt, compname, rcl_cmpt_id,
+                   mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+                   raw_landing_path,
+                   string_agg(distinct coalesce(maketxt::text, '<NULL>'),
+                              ', ' order by coalesce(maketxt::text, '<NULL>')) as path_value_set
+            from nhtsa_recalls_bronze
+            group by campno, modeltxt, yeartxt, compname, rcl_cmpt_id,
+                     mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+                     raw_landing_path
+        ) per_path
         group by campno, modeltxt, yeartxt, compname, rcl_cmpt_id,
                  mfr_comp_ptno, mfr_comp_desc, mfr_comp_name
-        having (count(distinct maketxt) > 1
-                or (count(*) > count(maketxt) and count(maketxt) > 0))
-           and count(distinct raw_landing_path) > 1
+        having count(distinct raw_landing_path) > 1
+           and count(distinct path_value_set) > 1
     ) g
     union all
     select 'modeltxt', count(*)
     from (
         select 1
-        from nhtsa_recalls_bronze
+        from (
+            select campno, maketxt, yeartxt, compname, rcl_cmpt_id,
+                   mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+                   raw_landing_path,
+                   string_agg(distinct coalesce(modeltxt::text, '<NULL>'),
+                              ', ' order by coalesce(modeltxt::text, '<NULL>')) as path_value_set
+            from nhtsa_recalls_bronze
+            group by campno, maketxt, yeartxt, compname, rcl_cmpt_id,
+                     mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+                     raw_landing_path
+        ) per_path
         group by campno, maketxt, yeartxt, compname, rcl_cmpt_id,
                  mfr_comp_ptno, mfr_comp_desc, mfr_comp_name
-        having (count(distinct modeltxt) > 1
-                or (count(*) > count(modeltxt) and count(modeltxt) > 0))
-           and count(distinct raw_landing_path) > 1
+        having count(distinct raw_landing_path) > 1
+           and count(distinct path_value_set) > 1
     ) g
     union all
     select 'yeartxt', count(*)
     from (
         select 1
-        from nhtsa_recalls_bronze
+        from (
+            select campno, maketxt, modeltxt, compname, rcl_cmpt_id,
+                   mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+                   raw_landing_path,
+                   string_agg(distinct coalesce(yeartxt::text, '<NULL>'),
+                              ', ' order by coalesce(yeartxt::text, '<NULL>')) as path_value_set
+            from nhtsa_recalls_bronze
+            group by campno, maketxt, modeltxt, compname, rcl_cmpt_id,
+                     mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+                     raw_landing_path
+        ) per_path
         group by campno, maketxt, modeltxt, compname, rcl_cmpt_id,
                  mfr_comp_ptno, mfr_comp_desc, mfr_comp_name
-        having (count(distinct yeartxt) > 1
-                or (count(*) > count(yeartxt) and count(yeartxt) > 0))
-           and count(distinct raw_landing_path) > 1
+        having count(distinct raw_landing_path) > 1
+           and count(distinct path_value_set) > 1
     ) g
     union all
     select 'compname', count(*)
     from (
         select 1
-        from nhtsa_recalls_bronze
+        from (
+            select campno, maketxt, modeltxt, yeartxt, rcl_cmpt_id,
+                   mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+                   raw_landing_path,
+                   string_agg(distinct coalesce(compname::text, '<NULL>'),
+                              ', ' order by coalesce(compname::text, '<NULL>')) as path_value_set
+            from nhtsa_recalls_bronze
+            group by campno, maketxt, modeltxt, yeartxt, rcl_cmpt_id,
+                     mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+                     raw_landing_path
+        ) per_path
         group by campno, maketxt, modeltxt, yeartxt, rcl_cmpt_id,
                  mfr_comp_ptno, mfr_comp_desc, mfr_comp_name
-        having (count(distinct compname) > 1
-                or (count(*) > count(compname) and count(compname) > 0))
-           and count(distinct raw_landing_path) > 1
+        having count(distinct raw_landing_path) > 1
+           and count(distinct path_value_set) > 1
     ) g
     union all
     select 'rcl_cmpt_id', count(*)
     from (
         select 1
-        from nhtsa_recalls_bronze
+        from (
+            select campno, maketxt, modeltxt, yeartxt, compname,
+                   mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+                   raw_landing_path,
+                   string_agg(distinct coalesce(rcl_cmpt_id::text, '<NULL>'),
+                              ', ' order by coalesce(rcl_cmpt_id::text, '<NULL>')) as path_value_set
+            from nhtsa_recalls_bronze
+            group by campno, maketxt, modeltxt, yeartxt, compname,
+                     mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+                     raw_landing_path
+        ) per_path
         group by campno, maketxt, modeltxt, yeartxt, compname,
                  mfr_comp_ptno, mfr_comp_desc, mfr_comp_name
-        having (count(distinct rcl_cmpt_id) > 1
-                or (count(*) > count(rcl_cmpt_id) and count(rcl_cmpt_id) > 0))
-           and count(distinct raw_landing_path) > 1
+        having count(distinct raw_landing_path) > 1
+           and count(distinct path_value_set) > 1
     ) g
     union all
     select 'mfr_comp_ptno', count(*)
     from (
         select 1
-        from nhtsa_recalls_bronze
+        from (
+            select campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+                   mfr_comp_desc, mfr_comp_name,
+                   raw_landing_path,
+                   string_agg(distinct coalesce(mfr_comp_ptno::text, '<NULL>'),
+                              ', ' order by coalesce(mfr_comp_ptno::text, '<NULL>')) as path_value_set
+            from nhtsa_recalls_bronze
+            group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+                     mfr_comp_desc, mfr_comp_name,
+                     raw_landing_path
+        ) per_path
         group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
                  mfr_comp_desc, mfr_comp_name
-        having (count(distinct mfr_comp_ptno) > 1
-                or (count(*) > count(mfr_comp_ptno) and count(mfr_comp_ptno) > 0))
-           and count(distinct raw_landing_path) > 1
+        having count(distinct raw_landing_path) > 1
+           and count(distinct path_value_set) > 1
     ) g
     union all
     select 'mfr_comp_desc', count(*)
     from (
         select 1
-        from nhtsa_recalls_bronze
+        from (
+            select campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+                   mfr_comp_ptno, mfr_comp_name,
+                   raw_landing_path,
+                   string_agg(distinct coalesce(mfr_comp_desc::text, '<NULL>'),
+                              ', ' order by coalesce(mfr_comp_desc::text, '<NULL>')) as path_value_set
+            from nhtsa_recalls_bronze
+            group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+                     mfr_comp_ptno, mfr_comp_name,
+                     raw_landing_path
+        ) per_path
         group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
                  mfr_comp_ptno, mfr_comp_name
-        having (count(distinct mfr_comp_desc) > 1
-                or (count(*) > count(mfr_comp_desc) and count(mfr_comp_desc) > 0))
-           and count(distinct raw_landing_path) > 1
+        having count(distinct raw_landing_path) > 1
+           and count(distinct path_value_set) > 1
     ) g
     union all
     select 'mfr_comp_name', count(*)
     from (
         select 1
-        from nhtsa_recalls_bronze
+        from (
+            select campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+                   mfr_comp_ptno, mfr_comp_desc,
+                   raw_landing_path,
+                   string_agg(distinct coalesce(mfr_comp_name::text, '<NULL>'),
+                              ', ' order by coalesce(mfr_comp_name::text, '<NULL>')) as path_value_set
+            from nhtsa_recalls_bronze
+            group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+                     mfr_comp_ptno, mfr_comp_desc,
+                     raw_landing_path
+        ) per_path
         group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
                  mfr_comp_ptno, mfr_comp_desc
-        having (count(distinct mfr_comp_name) > 1
-                or (count(*) > count(mfr_comp_name) and count(mfr_comp_name) > 0))
-           and count(distinct raw_landing_path) > 1
+        having count(distinct raw_landing_path) > 1
+           and count(distinct path_value_set) > 1
     ) g
 ),
 labeled as (
@@ -151,128 +251,200 @@ from labeled
 order by sort_section, drift_group_count desc, drifting_field;
 
 \echo
-\echo '=== Q2: sample 9-tuple cross-run drift groups per field (up to 5 per field) ==='
-\echo 'For each field with non-zero drift, shows the shared 8 fields, the distinct'
-\echo 'values observed for the drifting field, and how many runs contributed rows.'
-\echo 'Eyeball any non-zero result — these would invalidate the 9-tuple as a stable'
-\echo 'silver surrogate-key basis.'
+\echo '=== Q2: sample real_drift groups per field (up to 5 per field) ==='
+\echo 'For each field with non-zero drift, shows the shared 8 fields plus the per-path'
+\echo 'value sets that diverged. observed_value_sets joins distinct per-path sets with " || "'
+\echo '— e.g. "A || A, B" means one path reported {A} and another reported {A, B}.'
+\echo 'Empty section = no real_drift for that field (the common, expected case).'
 
 \echo
-\echo '--- maketxt drift samples ---'
-select campno, modeltxt, yeartxt, compname, rcl_cmpt_id, mfr_comp_ptno,
-       mfr_comp_desc, mfr_comp_name,
-       string_agg(distinct case when maketxt is null then '<NULL>' else maketxt end, ' | ') as distinct_maketxt,
-       count(distinct raw_landing_path) as n_landing_paths,
-       count(*) as n_rows
-from nhtsa_recalls_bronze
+\echo '--- maketxt real_drift samples ---'
+with per_path as (
+    select campno, modeltxt, yeartxt, compname, rcl_cmpt_id,
+           mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+           raw_landing_path,
+           string_agg(distinct coalesce(maketxt::text, '<NULL>'), ', ' order by coalesce(maketxt::text, '<NULL>')) as path_value_set
+    from nhtsa_recalls_bronze
+    group by campno, modeltxt, yeartxt, compname, rcl_cmpt_id,
+             mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+             raw_landing_path
+)
+select campno, modeltxt, yeartxt, compname, rcl_cmpt_id,
+       mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+       count(distinct raw_landing_path) as n_paths,
+       count(distinct path_value_set) as n_distinct_path_sets,
+       string_agg(distinct path_value_set, ' || ' order by path_value_set) as observed_value_sets
+from per_path
 group by campno, modeltxt, yeartxt, compname, rcl_cmpt_id,
          mfr_comp_ptno, mfr_comp_desc, mfr_comp_name
-having (count(distinct maketxt) > 1
-        or (count(*) > count(maketxt) and count(maketxt) > 0))
-   and count(distinct raw_landing_path) > 1
+having count(distinct raw_landing_path) > 1
+   and count(distinct path_value_set) > 1
 limit 5;
 
 \echo
-\echo '--- modeltxt drift samples ---'
-select campno, maketxt, yeartxt, compname, rcl_cmpt_id, mfr_comp_ptno,
-       mfr_comp_desc, mfr_comp_name,
-       string_agg(distinct case when modeltxt is null then '<NULL>' else modeltxt end, ' | ') as distinct_modeltxt,
-       count(distinct raw_landing_path) as n_landing_paths,
-       count(*) as n_rows
-from nhtsa_recalls_bronze
+\echo '--- modeltxt real_drift samples ---'
+with per_path as (
+    select campno, maketxt, yeartxt, compname, rcl_cmpt_id,
+           mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+           raw_landing_path,
+           string_agg(distinct coalesce(modeltxt::text, '<NULL>'), ', ' order by coalesce(modeltxt::text, '<NULL>')) as path_value_set
+    from nhtsa_recalls_bronze
+    group by campno, maketxt, yeartxt, compname, rcl_cmpt_id,
+             mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+             raw_landing_path
+)
+select campno, maketxt, yeartxt, compname, rcl_cmpt_id,
+       mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+       count(distinct raw_landing_path) as n_paths,
+       count(distinct path_value_set) as n_distinct_path_sets,
+       string_agg(distinct path_value_set, ' || ' order by path_value_set) as observed_value_sets
+from per_path
 group by campno, maketxt, yeartxt, compname, rcl_cmpt_id,
          mfr_comp_ptno, mfr_comp_desc, mfr_comp_name
-having (count(distinct modeltxt) > 1
-        or (count(*) > count(modeltxt) and count(modeltxt) > 0))
-   and count(distinct raw_landing_path) > 1
+having count(distinct raw_landing_path) > 1
+   and count(distinct path_value_set) > 1
 limit 5;
 
 \echo
-\echo '--- yeartxt drift samples ---'
-select campno, maketxt, modeltxt, compname, rcl_cmpt_id, mfr_comp_ptno,
-       mfr_comp_desc, mfr_comp_name,
-       string_agg(distinct case when yeartxt is null then '<NULL>' else yeartxt end, ' | ') as distinct_yeartxt,
-       count(distinct raw_landing_path) as n_landing_paths,
-       count(*) as n_rows
-from nhtsa_recalls_bronze
+\echo '--- yeartxt real_drift samples ---'
+with per_path as (
+    select campno, maketxt, modeltxt, compname, rcl_cmpt_id,
+           mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+           raw_landing_path,
+           string_agg(distinct coalesce(yeartxt::text, '<NULL>'), ', ' order by coalesce(yeartxt::text, '<NULL>')) as path_value_set
+    from nhtsa_recalls_bronze
+    group by campno, maketxt, modeltxt, compname, rcl_cmpt_id,
+             mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+             raw_landing_path
+)
+select campno, maketxt, modeltxt, compname, rcl_cmpt_id,
+       mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+       count(distinct raw_landing_path) as n_paths,
+       count(distinct path_value_set) as n_distinct_path_sets,
+       string_agg(distinct path_value_set, ' || ' order by path_value_set) as observed_value_sets
+from per_path
 group by campno, maketxt, modeltxt, compname, rcl_cmpt_id,
          mfr_comp_ptno, mfr_comp_desc, mfr_comp_name
-having (count(distinct yeartxt) > 1
-        or (count(*) > count(yeartxt) and count(yeartxt) > 0))
-   and count(distinct raw_landing_path) > 1
+having count(distinct raw_landing_path) > 1
+   and count(distinct path_value_set) > 1
 limit 5;
 
 \echo
-\echo '--- compname drift samples ---'
-select campno, maketxt, modeltxt, yeartxt, rcl_cmpt_id, mfr_comp_ptno,
-       mfr_comp_desc, mfr_comp_name,
-       string_agg(distinct case when compname is null then '<NULL>' else compname end, ' | ') as distinct_compname,
-       count(distinct raw_landing_path) as n_landing_paths,
-       count(*) as n_rows
-from nhtsa_recalls_bronze
+\echo '--- compname real_drift samples ---'
+with per_path as (
+    select campno, maketxt, modeltxt, yeartxt, rcl_cmpt_id,
+           mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+           raw_landing_path,
+           string_agg(distinct coalesce(compname::text, '<NULL>'), ', ' order by coalesce(compname::text, '<NULL>')) as path_value_set
+    from nhtsa_recalls_bronze
+    group by campno, maketxt, modeltxt, yeartxt, rcl_cmpt_id,
+             mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+             raw_landing_path
+)
+select campno, maketxt, modeltxt, yeartxt, rcl_cmpt_id,
+       mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+       count(distinct raw_landing_path) as n_paths,
+       count(distinct path_value_set) as n_distinct_path_sets,
+       string_agg(distinct path_value_set, ' || ' order by path_value_set) as observed_value_sets
+from per_path
 group by campno, maketxt, modeltxt, yeartxt, rcl_cmpt_id,
          mfr_comp_ptno, mfr_comp_desc, mfr_comp_name
-having (count(distinct compname) > 1
-        or (count(*) > count(compname) and count(compname) > 0))
-   and count(distinct raw_landing_path) > 1
+having count(distinct raw_landing_path) > 1
+   and count(distinct path_value_set) > 1
 limit 5;
 
 \echo
-\echo '--- rcl_cmpt_id drift samples ---'
-select campno, maketxt, modeltxt, yeartxt, compname, mfr_comp_ptno,
-       mfr_comp_desc, mfr_comp_name,
-       string_agg(distinct case when rcl_cmpt_id is null then '<NULL>' else rcl_cmpt_id end, ' | ') as distinct_rcl_cmpt_id,
-       count(distinct raw_landing_path) as n_landing_paths,
-       count(*) as n_rows
-from nhtsa_recalls_bronze
+\echo '--- rcl_cmpt_id real_drift samples ---'
+with per_path as (
+    select campno, maketxt, modeltxt, yeartxt, compname,
+           mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+           raw_landing_path,
+           string_agg(distinct coalesce(rcl_cmpt_id::text, '<NULL>'), ', ' order by coalesce(rcl_cmpt_id::text, '<NULL>')) as path_value_set
+    from nhtsa_recalls_bronze
+    group by campno, maketxt, modeltxt, yeartxt, compname,
+             mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+             raw_landing_path
+)
+select campno, maketxt, modeltxt, yeartxt, compname,
+       mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
+       count(distinct raw_landing_path) as n_paths,
+       count(distinct path_value_set) as n_distinct_path_sets,
+       string_agg(distinct path_value_set, ' || ' order by path_value_set) as observed_value_sets
+from per_path
 group by campno, maketxt, modeltxt, yeartxt, compname,
          mfr_comp_ptno, mfr_comp_desc, mfr_comp_name
-having (count(distinct rcl_cmpt_id) > 1
-        or (count(*) > count(rcl_cmpt_id) and count(rcl_cmpt_id) > 0))
-   and count(distinct raw_landing_path) > 1
+having count(distinct raw_landing_path) > 1
+   and count(distinct path_value_set) > 1
 limit 5;
 
 \echo
-\echo '--- mfr_comp_ptno drift samples ---'
+\echo '--- mfr_comp_ptno real_drift samples ---'
+with per_path as (
+    select campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+           mfr_comp_desc, mfr_comp_name,
+           raw_landing_path,
+           string_agg(distinct coalesce(mfr_comp_ptno::text, '<NULL>'), ', ' order by coalesce(mfr_comp_ptno::text, '<NULL>')) as path_value_set
+    from nhtsa_recalls_bronze
+    group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+             mfr_comp_desc, mfr_comp_name,
+             raw_landing_path
+)
 select campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
        mfr_comp_desc, mfr_comp_name,
-       string_agg(distinct case when mfr_comp_ptno is null then '<NULL>' else mfr_comp_ptno end, ' | ') as distinct_mfr_comp_ptno,
-       count(distinct raw_landing_path) as n_landing_paths,
-       count(*) as n_rows
-from nhtsa_recalls_bronze
+       count(distinct raw_landing_path) as n_paths,
+       count(distinct path_value_set) as n_distinct_path_sets,
+       string_agg(distinct path_value_set, ' || ' order by path_value_set) as observed_value_sets
+from per_path
 group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
          mfr_comp_desc, mfr_comp_name
-having (count(distinct mfr_comp_ptno) > 1
-        or (count(*) > count(mfr_comp_ptno) and count(mfr_comp_ptno) > 0))
-   and count(distinct raw_landing_path) > 1
+having count(distinct raw_landing_path) > 1
+   and count(distinct path_value_set) > 1
 limit 5;
 
 \echo
-\echo '--- mfr_comp_desc drift samples ---'
-select campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id, mfr_comp_ptno,
-       mfr_comp_name,
-       string_agg(distinct case when mfr_comp_desc is null then '<NULL>' else mfr_comp_desc end, ' | ') as distinct_mfr_comp_desc,
-       count(distinct raw_landing_path) as n_landing_paths,
-       count(*) as n_rows
-from nhtsa_recalls_bronze
+\echo '--- mfr_comp_desc real_drift samples ---'
+with per_path as (
+    select campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+           mfr_comp_ptno, mfr_comp_name,
+           raw_landing_path,
+           string_agg(distinct coalesce(mfr_comp_desc::text, '<NULL>'), ', ' order by coalesce(mfr_comp_desc::text, '<NULL>')) as path_value_set
+    from nhtsa_recalls_bronze
+    group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+             mfr_comp_ptno, mfr_comp_name,
+             raw_landing_path
+)
+select campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+       mfr_comp_ptno, mfr_comp_name,
+       count(distinct raw_landing_path) as n_paths,
+       count(distinct path_value_set) as n_distinct_path_sets,
+       string_agg(distinct path_value_set, ' || ' order by path_value_set) as observed_value_sets
+from per_path
 group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
          mfr_comp_ptno, mfr_comp_name
-having (count(distinct mfr_comp_desc) > 1
-        or (count(*) > count(mfr_comp_desc) and count(mfr_comp_desc) > 0))
-   and count(distinct raw_landing_path) > 1
+having count(distinct raw_landing_path) > 1
+   and count(distinct path_value_set) > 1
 limit 5;
 
 \echo
-\echo '--- mfr_comp_name drift samples ---'
-select campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id, mfr_comp_ptno,
-       mfr_comp_desc,
-       string_agg(distinct case when mfr_comp_name is null then '<NULL>' else mfr_comp_name end, ' | ') as distinct_mfr_comp_name,
-       count(distinct raw_landing_path) as n_landing_paths,
-       count(*) as n_rows
-from nhtsa_recalls_bronze
+\echo '--- mfr_comp_name real_drift samples ---'
+with per_path as (
+    select campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+           mfr_comp_ptno, mfr_comp_desc,
+           raw_landing_path,
+           string_agg(distinct coalesce(mfr_comp_name::text, '<NULL>'), ', ' order by coalesce(mfr_comp_name::text, '<NULL>')) as path_value_set
+    from nhtsa_recalls_bronze
+    group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+             mfr_comp_ptno, mfr_comp_desc,
+             raw_landing_path
+)
+select campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
+       mfr_comp_ptno, mfr_comp_desc,
+       count(distinct raw_landing_path) as n_paths,
+       count(distinct path_value_set) as n_distinct_path_sets,
+       string_agg(distinct path_value_set, ' || ' order by path_value_set) as observed_value_sets
+from per_path
 group by campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id,
          mfr_comp_ptno, mfr_comp_desc
-having (count(distinct mfr_comp_name) > 1
-        or (count(*) > count(mfr_comp_name) and count(mfr_comp_name) > 0))
-   and count(distinct raw_landing_path) > 1
+having count(distinct raw_landing_path) > 1
+   and count(distinct path_value_set) > 1
 limit 5;

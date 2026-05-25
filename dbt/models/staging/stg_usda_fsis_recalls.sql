@@ -20,19 +20,28 @@
 -- Establishment Listing API returns plain text. Decoding on the recall side
 -- before the silver join lifts the per-distinct-name match rate from 82.85%
 -- to ~97%. Two replaces, no macro — minimal entity surface.
+--
+-- trim(source_recall_id) per Finding R in recall_api_observations.md: 5 of
+-- 1215 distinct source_recall_id values in bronze have leading or trailing
+-- whitespace (e.g., ` 021-2020 `, `007-2020-EXP `). Per ADR 0027, bronze
+-- preserves source-verbatim values; this staging layer normalizes the
+-- whitespace so downstream silver/gold and any future Phase 6 firm-resolution
+-- join uses clean keys. trim() applied in both the partition-by (so the
+-- latest-version window groups all snapshots of a recall under one key) and
+-- the select projection (so downstream consumers see the clean form).
 
 with ranked as (
     select
         *,
         row_number() over (
-            partition by source_recall_id, langcode
+            partition by trim(source_recall_id), langcode
             order by extraction_timestamp desc
         ) as rn
     from {{ source('usda', 'usda_fsis_recalls_bronze') }}
 )
 
 select
-    source_recall_id,
+    trim(source_recall_id)          as source_recall_id,
     title,
     recall_date::timestamptz        as announced_at,
     last_modified_date::timestamptz as published_at,

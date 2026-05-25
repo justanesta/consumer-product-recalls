@@ -87,6 +87,11 @@ models:
       - name: zip
         tests:
           - not_null
+      - name: status_regulated_est
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['', 'Inactive']
 
   - name: recall_event_firm
     description: Many-to-many between recall events and firms with role.

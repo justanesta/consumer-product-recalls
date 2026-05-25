@@ -1,19 +1,22 @@
 
-# Python ETL Pipeline
+# Python EtLT Medallion Pipeline
 
 ## Project Type
-Extract, Transform, Load (ETL) data pipeline for data integration, cleaning, and warehouse loading.
+EtLT (Extract, light-transform, Load, Transform) data pipeline for US federal consumer product recall data. Uses a four-layer medallion architecture: raw bytes land in Cloudflare R2 (landing), Pydantic-validated records are bulk-inserted into Postgres bronze tables (bronze), and dbt handles all real transformation through staging → silver → gold layers.
 
 ## Project-Specific Standards
 
 ### Framework & Structure
 - src/
-  - extractors/ (data source connectors)
-  - transformers/ (cleaning, enrichment logic)
-  - loaders/ (destination writers)
-  - pipeline.py (orchestration)
-- config/ (connection strings, pipeline configs as YAML/TOML)
-- Modular design: Each E/T/L step is independently testable
+  - extractors/ (5-step lifecycle: extract → land_raw → validate → check_invariants → load_bronze)
+  - landing/ (Cloudflare R2 client — writes raw bytes before any validation)
+  - bronze/ (BronzeLoader, content-hash dedup, quarantine routing, invariant checks, retry policies)
+  - schemas/ (Pydantic bronze contracts — storage-forced type coercion only, not business normalization)
+  - config/ (settings, source YAML loader, source registry, structured logging)
+  - cli/ (Typer CLI: `recalls extract`, `recalls deep-rescan`, `recalls version`)
+- dbt/ (staging/silver/gold transformation models)
+- config/sources/ (per-source YAML configs)
+- Modular design: Each pipeline step is independently testable
 
 ### Core Libraries
 - pandas or polars for data transformation
@@ -24,7 +27,7 @@ Extract, Transform, Load (ETL) data pipeline for data integration, cleaning, and
 
 ### Data Validation
 - Pydantic models for every data schema (input and output)
-- Validate at each stage: post-extract, post-transform, pre-load
+- Validate at each stage: post-extract (Pydantic, storage-forced coercion only), post-bronze (dbt tests), pre-gold
 - Log validation failures, don't silently skip bad records
 
 ### Error Handling
@@ -35,7 +38,7 @@ Extract, Transform, Load (ETL) data pipeline for data integration, cleaning, and
 
 ### Testing Strategy
 - pytest for all pipeline components
-- Unit tests: Individual extractors, transformers, loaders
+- Unit tests: Individual extractors, bronze loader, schema validation
 - Integration tests: Full pipeline with test database/fixtures
 - Mock external APIs in tests (use responses or httpx.mock)
 - Test edge cases: Empty data, malformed data, connection failures

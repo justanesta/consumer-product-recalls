@@ -651,6 +651,72 @@ are vendored in `data/user_agents.json` and refreshed weekly by the
 
 ---
 
+## Bronze Edit Patterns and Whitespace Observations
+
+### Finding Q — 1235-row routine wave on 2026-05-15 is 100% cosmetic on `company_media_contact`
+
+Observed empirically from the 2026-05-15 routine extraction (run_id `cc85b433-fc48-4388-9408-23acac5c1e41`, `change_type='routine'`).
+
+**Wave shape.** 1235 of 2004 bronze records re-versioned (62% of corpus). The wave was the first non-trivial USDA recalls insert since the 2026-05-02 wave (1881 rows). Investigation scripts:
+
+- `scripts/sql/usda_recalls/bronze/diagnose_wave_field_drivers.sql` — per-field diff count across all 1235 pairs
+- `scripts/sql/usda_recalls/bronze/classify_field_diffs_whitespace.sql` — for a specific field, classify each diff as whitespace-only vs real-content-change
+
+**Field-driver histogram (Q1 of diagnose_wave_field_drivers.sql):**
+
+| Field | n_diff | % of wave |
+|---|---|---|
+| `company_media_contact` | 1024 | 82.9% |
+| `summary` | 408 | 33.0% |
+| `en_press_release` | 121 | 9.8% |
+| `press_release` | 121 | 9.8% |
+
+Only 4 of ~29 bronze columns appeared in any diff. The wave is exceptionally narrow.
+
+**Per-pair distribution (Q2 of diagnose_wave_field_drivers.sql):**
+
+| Fields changed per pair | Pairs | % |
+|---|---|---|
+| 1 | 924 | 74.8% |
+| 2 | 190 | 15.4% |
+| 3 | 114 | 9.2% |
+| 4 | 7 | 0.6% |
+
+**Whitespace classification on `company_media_contact` (classify_field_diffs_whitespace.sql):**
+1024 / 1024 = **100% whitespace_only**. Zero real_content_change, zero null_transition. The classifier strips all whitespace characters (`regexp_replace(value, '\s', '', 'g')`) from both sides and tests equality; every single pair passes. Visual confirmation on `021-2020`: old had ~10 leading newlines and ~5 trailing; new has 1 leading and 1 trailing. Same actual content (Nyhus Communications / Marc Berger / `(402) 730-5666`).
+
+**Bilingual press-release atomicity (incidental observation):** `press_release` and `en_press_release` have **exactly equal** diff counts (121 each), and the 7 four-field outliers all change `{company_media_contact, en_press_release, press_release, summary}` as a unit — bilingual press-release pairs appear to update atomically when they update at all. Looser analog of the U2-style bilingual-atomic-update invariant on `last_modified_date`.
+
+**Decision (2026-05-15): do NOT hash-exclude `company_media_contact`.** Initial analysis suggested an ADR-0032-analog (parallel to USDA establishments' `latest_mpi_active_date` hash-exclude), but the field is a Phase 6 candidate for surfacing to silver/gold/API (frontend will display "media contact" on individual recall pages). Hash-excluding would prevent bronze from capturing real-but-isolated contact updates (e.g., a contact person change with no other recall edit) — and most USDA recalls are static/closed records that rarely have *any* other field change, so "eventually-consistent" capture via tandem edits is unlikely. The phantom-edit cost (~1024 bronze rows per wave + future phantom events in `recall_event_history`) is bounded and best handled in Phase 6's `recall_event_history` model via per-field whitespace-normalized comparison rather than at the bronze hash level.
+
+**Phase 6 implication.** `recall_event_history.sql` MUST apply per-field whitespace normalization (e.g., `regexp_replace(value, '\s+', ' ', 'g')` then `trim()`) before comparing values across snapshots, or the model will synthesize ~1024 phantom edit events per cosmetic wave. Documented as a deliverable constraint in `project_scope/implementation_plan.md` Phase 6 section.
+
+### Finding R — `source_recall_id` whitespace contamination (5 of 1215 distinct ids)
+
+Observed empirically from `scripts/sql/usda_recalls/bronze/probe_recall_id_storage.sql` on 2026-05-15.
+
+**5 distinct `source_recall_id` values in bronze have leading or trailing whitespace:**
+
+| Stored value | Length | trim() form |
+|---|---|---|
+| `[ 021-2020 ]` | 10 | `021-2020` |
+| `[ 034-2024]` | 9 | `034-2024` |
+| `[007-2020-EXP ]` | 13 | `007-2020-EXP` |
+| `[015-2020 ]` | 9 | `015-2020` |
+| `[020-2020 ]` | 9 | `020-2020` |
+
+Per `probe_recall_id_storage.sql` Q2: 5 distinct ids with whitespace (0.41% of 1215 distinct ids), 2 with leading, 4 with trailing — meaning at least 1 has both (021-2020).
+
+**Pipeline impact today.** Zero downstream contamination. Silver staging (`stg_usda_fsis_recalls.sql`) uses `row_number() ... where rn = 1` to select latest-per-(source_recall_id, langcode); FSIS consistently emits these 5 ids with whitespace, so the window function groups all snapshots correctly. No duplicate-key collisions in current state.
+
+**Latent risk.** If FSIS ever cleans up the whitespace upstream (publishes `021-2020` instead of ` 021-2020 `), the loader's identity computation would treat the cleaned form as a new identity, leaving the old whitespace-contaminated rows orphaned in bronze and silver staging's partition-by-source_recall_id would split the recall across two windowed groups.
+
+**Architectural fix per ADR 0027.** Bronze preserves source-verbatim values (no Pydantic `str_strip_whitespace`). Silver staging applies `trim(source_recall_id)` both in the SELECT projection and in the `partition by` clause, so silver is robust to upstream whitespace cleanup. Investigation scripts that query bronze apply defensive `trim()` in WHERE clauses (already done in `diagnose_payload_drift_for_recall.sql`).
+
+**Schema-side decision deferred.** Adding `str_strip_whitespace=True` to the Pydantic field would violate ADR 0027's bronze-verbatim principle. Re-open if Phase 6 firm-resolution surfaces a join-fidelity issue that the silver-side trim doesn't solve.
+
+---
+
 ## Open Items
 
 - [x] Document total cardinality and field nullability map (Findings B, C) — confirmed 2026-04-29

@@ -26,7 +26,7 @@
 \set ON_ERROR_STOP on
 \pset null '<NULL>'
 
-\set recall_id 'PHA-04092026-01'
+\set recall_id 'PHA-04302026-01'
 \set langcode 'English'
 
 \echo
@@ -41,7 +41,7 @@ select
     last_modified_date,
     content_hash
 from usda_fsis_recalls_bronze
-where source_recall_id = :'recall_id'
+where trim(source_recall_id) = :'recall_id'
   and langcode = :'langcode'
 order by extraction_timestamp;
 
@@ -62,7 +62,7 @@ select
         - 'raw_landing_path'
         as payload
 from usda_fsis_recalls_bronze b
-where source_recall_id = :'recall_id'
+where trim(source_recall_id) = :'recall_id'
   and langcode = :'langcode'
 order by extraction_timestamp;
 

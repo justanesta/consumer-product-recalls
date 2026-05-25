@@ -65,13 +65,20 @@ where source = 'nhtsa';
 \echo '================================================================'
 \echo '3. Day-over-day inner-content stability — closes Finding H Q1'
 \echo '   (cadence) over ~7 days of accumulated runs. The wrapper hash'
-\echo '   shifts daily even when content is unchanged (Finding J); the'
-\echo '   inner hash transitions track REAL upstream content updates.'
+\echo '   shifts daily even when content is unchanged (Finding J).'
 \echo
-\echo '   Read: each row = one run. If wrapper_hash changes but'
-\echo '   inner_hash matches the prior run, NHTSA re-zipped identical'
-\echo '   data (no real change). If inner_hash transitions, content'
-\echo '   actually changed that day.'
+\echo '   inner_hash interpretation (refined 2026-05-25, see Section M.5):'
+\echo '     inner_hash MATCHES prior  ->  SUFFICIENT evidence of no change'
+\echo '                                   (TSV bytes are byte-equal)'
+\echo '     inner_hash DIFFERS         ->  NECESSARY BUT NOT SUFFICIENT'
+\echo '                                   (could be real change OR row'
+\echo '                                    reorder / whitespace / column'
+\echo '                                    padding — observed on 5/17 and'
+\echo '                                    5/18 with loaded=0)'
+\echo
+\echo '   Authoritative change oracle: bronze content_hash dedup'
+\echo '   (records_inserted > 0). inner_hash is a faster sentinel for'
+\echo '   the no-change case but cannot stand alone for the change case.'
 \echo '================================================================'
 
 select

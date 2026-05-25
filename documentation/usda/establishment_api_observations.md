@@ -113,6 +113,44 @@ Not yet automated on a schedule — initial cadence will be operator-triggered. 
 
 **First audit verdict (2026-05-10): `CONSISTENT — body unchanged since baseline`.** Audit at 2026-05-10 16:05:52 forced a 200 against the same ETag (`"1778270406"`) the server had returned on the 2026-05-09 17:47 baseline run; body sha matched byte-for-byte. The intervening 2026-05-10 13:19 routine 304 is therefore directly validated as honest — `intervening_304s = 1`, no false-304 evidence. Bronze dedup absorbed the audit body cleanly (`records_extracted = 7956, records_inserted = 0`, duration 2.59s — consistent with a full ~810 KB body download and zero writes). One measured data point converting Finding P / Finding A's inferential green-light into a directly observed verification; the recall side was audited the same day as a smoke test (no intervening 304s yet, so structurally `no false-304 evidence`). Ongoing audits will accumulate.
 
+### Finding A addendum (2026-05-25) — viability-script residual surface eliminated
+
+The 2026-05-10 fixes (extractor writes `NULL` on 304s; `etag_viability.sql` trusts a current-row 304 categorically) resolved the production-side phantom but left one residual surface untouched: the pre-fix 2026-05-10 13:19:14 routine 304 row still held `sha256("")` in `response_body_sha256` — that one row was never backfilled — and the viability script only handled "current row is a 304," not its symmetric "prior row was a 304." Every subsequent run of `etag_viability.sql -v src=usda_establishments` therefore mis-flagged the 2026-05-10 16:05 audit 200 as `SUSPECT false-304` and flipped the summary recommendation back to `DO NOT ENABLE` — despite ETag/body health being demonstrably stable. Surfaced 2026-05-25 while triaging the 2026-05-20 / -21 / -25 daily-run counts.
+
+**Verification (`scripts/sql/_pipeline/verify_etag_viability_phantom.sql`, 2026-05-25):** confirmed the smoking gun is still load-bearing — the 2026-05-10 13:19 304's `response_body_sha256` still equals `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` (= `sha256("")`), and the 2026-05-10 16:05 audit 200's body byte-equals the 2026-05-09 17:47 baseline (`26513e4e8a4f47a79d0f3c461c862a6fc534404a4300ac4e5611d020974ee875`). The body-equivalence query returned MATCH for both rows. Phantom hypothesis empirically confirmed.
+
+**Fix (`scripts/sql/_pipeline/etag_viability.sql`, 2026-05-25):** added a `when prev_status_code = 304 and response_etag = prev_etag then 'consistent: nothing changed (200 after 304, ETag stable)'` branch to the verdict CASE in both query 1 (per-row verdict) and query 5 (summary verdict), with `lag(response_status_code) over w as prev_status_code` added to both CTEs. Ordered after the current-row-is-304 branch and before the body-comparison branches, so the more direct signal wins before falling through to a body-vs-sentinel comparison.
+
+**Why this is safe — Option B does not weaken false-304 detection.** The viability script's `lag()` window is structurally blind to body changes across a 304: the prior row has no real body to compare against (post-fix `NULL`, pre-fix `sha256("")`), so the body-vs-body comparison was always meaningless in that arrangement. Real false-304 detection lives in the audit-run mechanism (`change_type='etag_audit'` runs + `scripts/sql/_pipeline/etag_audit_check.sql`), which forces a 200 by suppressing `If-None-Match` and compares the fresh body against the most recent prior 200 baseline. Option B fixes labeling for an arrangement the viability script could never analyze; it does not change detection capability anywhere it had detection capability.
+
+**Post-fix summary stats:**
+
+| metric | pre-fix | post-fix |
+|---|---|---|
+| `total_transitions` | 19 | 19 |
+| `consistent_unchanged` | 9 | **10** (the recovered audit verdict) |
+| `consistent_changed` | 3 | 3 |
+| `false_200_count` | 6 | 6 |
+| `false_304_count` | **1 (phantom)** | **0** |
+| recommendation | `DO NOT ENABLE` | **`SAFE TO ENABLE — false-200 only (over-fetch sometimes; bronze absorbs)`** |
+
+The recommendation now matches Finding P (recall side); the two endpoints share the same Akamai/Drupal stack and the same ETag generation behavior, so the same verdict is the expected outcome.
+
+**Latent precision gap — RESOLVED 2026-05-25.** The lag-based prev-body lookup dead-ended at any 304 row (post-fix: prev_body = NULL → no CASE branch matches → verdict NULL). Several rows that were conceptually false-200s (ETag drifted, body unchanged) or `consistent_changed` (real upstream change) couldn't be classified because the comparison baseline was a 304 with no body to compare.
+
+Resolved by replacing `lag(response_body_sha256)` and `lag(response_etag)` with a `LEFT JOIN LATERAL` that fetches the most-recent prior 200's body and etag, skipping any intervening 304s. Applied to both query 1 (per-row verdict) and query 5 (summary verdict) in `scripts/sql/_pipeline/etag_viability.sql`. The Option B "prev_status_code = 304 AND ETag stable" suppression branch (added earlier the same day) became redundant under the new logic and was removed — the standard "consistent: nothing changed" branch correctly catches the case when both ETag and body match the prior 200.
+
+Empirical confirmation across both USDA endpoints (2026-05-25):
+
+| source | `total_transitions` | `consistent_unchanged` | `consistent_changed` | `false_200_count` | `false_304_count` | recommendation |
+|---|---|---|---|---|---|---|
+| `usda` (recall, before) | 21 | 5 | 5 | 11 | 0 | `SAFE TO ENABLE — false-200 only` |
+| `usda` (recall, after) | **23** | 5 | **6** (+1) | **12** (+1) | 0 | unchanged |
+| `usda_establishments` (before) | 19 | 9 | 3 | 6 | 0 | `SAFE TO ENABLE — false-200 only` (post-phantom fix) |
+| `usda_establishments` (after) | **23** | **10** (+1) | **4** (+1) | **9** (+3) | 0 | unchanged |
+
+Establishment side surfaced 4 previously-hidden verdicts (vs. the recall side's 2): three `false_200` cases (5/11 13:06, 5/12 12:05, 5/17 21:26 — all ETag drifted while body identical across a 304) and one `consistent_changed` (5/19 19:21 — the 44-record rebaseline residual wave the old lag couldn't see through the 5/18 304). Directional `SAFE TO ENABLE` recommendation unchanged on both endpoints.
+
 ---
 
 ## Dataset Cardinality
@@ -280,6 +318,39 @@ In effect: "When was this establishment last confirmed as active in the MPI dire
 - **Useful for the extractor:** for inactive establishments, this field tells you approximately when they
   stopped being active regulated establishments — useful context for recall enrichment (a 2023 recall
   against an establishment with `LatestMPIActiveDate="2023-08-21"` was likely active at time of recall).
+
+### Finding G addendum (2026-05-15) — `status_regulated_est` flips are publication-window-independent
+
+Observed empirically after the ADR 0032 hash-exclude rebaseline wave on 2026-05-15
+(`scripts/sql/usda_establishments/bronze/list_status_flips.sql`, run_id
+`3d01263e-25ef-4e9f-8cc8-1e35c263aad9`). The diagnostic surfaced 13 `status_regulated_est` flips
+between the prior bronze versions and today's run — all `'' → 'Inactive'`, none in the reverse
+direction, none with a third value (the two-value enum invariant holds).
+
+Two empirical findings:
+
+1. **`status_regulated_est` changes are not gated on the Mon/Tues `LatestMPIActiveDate` heartbeat.**
+   The most recent extraction prior to 2026-05-15 was 2026-05-13 21:41 UTC — there was no
+   Mon/Tues republish between those two runs (the next Mon/Tues window after 5/13 is
+   5/18–5/19), yet 13 establishments transitioned from active to Inactive. FSIS publishes
+   regulatory-status changes outside the LMAD weekly refresh cadence. This is a separate
+   publication channel from the one described in Finding G.
+
+2. **All 13 flipped establishments look like real FSIS-regulated entities going inactive.**
+   Recognizable examples: The Hillshire Brands Company (Pottsville PA, `V34526`), United States
+   Cold Storage (Laredo TX, `V17130`), Rudolph Foods (Henderson NC, `M21288` and `M21288A` —
+   multi-program plant closing as a unit). Geographic distribution spans 10 states/territories
+   with no concentration; the wave is consistent with normal industry churn (~5% annualized
+   closure rate). All establishments had been dormant in bronze for 9–13 days (last seen active
+   on 5/2 or 5/6) before flipping on 5/15.
+
+**Downstream implication:** silver `firm_establishment_attributes` is materialized as `table`
+and re-runs on every `dbt build`, so the 13 establishments will appear with their new
+`'Inactive'` status after the next transform with **no history preserved in silver**. The
+`accepted_values: ['', 'Inactive']` test added to `dbt/models/silver/_silver.yml`
+(2026-05-15) catches a future third-value surprise but does not address the as-of-date
+question. Cross-source dim SCD-2 strategy is the right home for that — tracked as a Phase 6
+deliverable in `project_scope/implementation_plan.md`.
 
 ---
 
