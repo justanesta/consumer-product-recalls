@@ -33,6 +33,7 @@ jobs:
       - name: Open PR if data/user_agents.json changed
         uses: peter-evans/create-pull-request@v8
         with:
+          token: ${{ secrets.PR_BOT_TOKEN }}
           commit-message: "chore(usda): refresh data/user_agents.json"
           title: "chore(usda): refresh data/user_agents.json"
           body: |
