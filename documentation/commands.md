@@ -72,7 +72,7 @@ uv run recalls re-ingest <source> \                       # R2 replay (Phase 6)
     --change-type=schema_rebaseline
 ```
 
-Sources: `cpsc`, `fda`, `usda`, `usda_establishments`, `nhtsa`. USCG indefinitely deferred.
+Sources: `cpsc`, `fda`, `usda`, `usda_establishments`, `nhtsa`, and `uscg`.
 
 Source-level configuration (URL, timeout, ETag enabled flag) is loaded from `config/sources/<source>.yaml` per [ADR 0012](decisions/0012-extractor-pattern-custom-abc-and-per-source-subclasses.md) — editing those files takes effect on the next invocation. See [`development.md` § Source configuration](development.md#source-configuration) for the full story.
 
@@ -314,6 +314,8 @@ recalls extract usda
 recalls extract usda_establishments
 # In development before paying for new Neon tier keep just a slice of NHTSA data
 recalls extract nhtsa --since=2023-12-01
+# USCG auto-short-circuits on page 0 if Records Found + page-0 IDs match prior run
+recalls extract uscg
 
 # 2. Pipeline-health snapshot
 psql -f scripts/sql/_pipeline/recent_runs.sql
