@@ -2,7 +2,7 @@
 
 - **Status:** Active 2026-05-25
 - **Scope:** Coordinates three concurrent workstreams off `main` — Phase 6 execution, NHTSA silver v1.5 migration, and weekly daily-findings branches
-- **Supersedes:** Branching guidance scattered across `project_scope/silver_v15_migration_plan.md` (lines 160–191), `~/.claude/plans/phase-6-execution-plan.md`, and prior weekly findings retros
+- **Supersedes:** Branching guidance scattered across `project_scope/silver_v15_migration_plan.md` (lines 160–191), `project_scope/phase-6-execution-plan.md`, and prior weekly findings retros
 - **Sunset condition:** Phase 6 complete + v1.5 migration landed (Layer 3 merged); update or delete this doc when both are true
 
 ## Workstreams in flight
@@ -10,8 +10,8 @@
 | Workstream | Plan doc | Branch name pattern |
 |---|---|---|
 | NHTSA silver v1.5 migration | `project_scope/silver_v15_migration_plan.md` | `feature/silver-v15-scd-prototype` (Layer 2), `feature/silver-v15-migration` (Layer 3) |
-| Phase 6 execution (6a foundation audit → 6b firm res → 6c history → 6d ops → 6e gold → 6f diagrams) | `~/.claude/plans/phase-6-execution-plan.md` | `feature/phase-6{a,b,c,d,e,f}-<topic>` — one branch per phase letter |
-| Daily findings + diagnostic scripts | (per-branch staged-tasks doc) | `docs/findings-YYYY-MM-Wn` — one branch per ISO week, short-lived |
+| Phase 6 execution (6a foundation audit → 6b firm res → 6c history → 6d ops → 6e gold → 6f diagrams) | `project_scope/phase-6-execution-plan.md` | `feature/phase-6{a,b,c,d,e,f}-<topic>` — one branch per phase letter |
+| Daily findings + diagnostic scripts | (per-branch staged-tasks doc) | `docs/findings-YYYY-Wn` — one branch per ISO week, short-lived |
 
 ## Dependency graph
 
@@ -52,7 +52,7 @@
                                  ▼
                             (Phase 6 complete)
 
-Throughout: docs/findings-YYYY-MM-Wn branches ship daily/weekly, low conflict
+Throughout: docs/findings-YYYY-Wn branches ship daily/weekly, low conflict
 risk because file scope is documentation/ and scripts/sql/ only.
 ```
 
@@ -62,7 +62,7 @@ risk because file scope is documentation/ and scripts/sql/ only.
 2. **After 6a merges: `feature/silver-v15-scd-prototype` and `feature/phase-6c-history-lifecycle` in parallel.** Both add new files (Layer 2: `recall_product_v15.sql`, `recall_product_history.sql`, snapshot; 6c: `recall_event_history.sql`, `recall_lifecycle.sql`). File scopes don't intersect at code level; coordinate at gate-evaluation time on whether 6c's history model consumes the v1.5 snapshot directly (per ADR 0033's "Real_drift taxonomy" subsection forward-integration note).
 3. **After both land: `feature/silver-v15-migration` (Layer 3) and `feature/phase-6b-firm-resolution` in parallel.** Layer 3 needs Phase 6c's `recall_event_history` design done (migration plan pre-condition #3). 6b also needs 6a's foundation. Neither blocks the other.
 4. **Then `feature/phase-6d` → `feature/phase-6e` → `feature/phase-6f`.** Per the execution plan's sequencing constraints (6f last because diagrams freeze schema).
-5. **Daily/weekly findings throughout.** `docs/findings-YYYY-MM-Wn` branches stay tiny (days, not weeks), open PR + merge same day or next.
+5. **Daily/weekly findings throughout.** `docs/findings-YYYY-Wn` branches stay tiny (days, not weeks), open PR + merge same day or next.
 
 ## Daily git workflow
 
@@ -157,7 +157,7 @@ If the rebase gets unexpectedly messy, fall back to cherry-pick: branch fresh of
 
 ## References
 
-- `~/.claude/plans/phase-6-execution-plan.md` — Phase 6 execution plan with internal sequencing constraints
+- `project_scope/phase-6-execution-plan.md` — Phase 6 execution plan with internal sequencing constraints
 - `project_scope/silver_v15_migration_plan.md` — v1.5 migration plan with Layer-by-Layer gates
 - `documentation/decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md` — architectural decision for v1.5 + Real_drift taxonomy (subsection added 2026-05-25)
 - `project_scope/implementation_plan.md` — master phase plan
