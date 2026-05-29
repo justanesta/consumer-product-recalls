@@ -64,12 +64,13 @@ risk because file scope is documentation/ and scripts/sql/ only.
 4. **Then `feature/phase-6d` → `feature/phase-6e` → `feature/phase-6f`.** Per the execution plan's sequencing constraints (6f last because diagrams freeze schema).
 5. **Daily/weekly findings throughout.** `docs/findings-YYYY-Wn` branches stay tiny (days, not weeks), open PR + merge same day or next.
 
-## Daily git workflow
+## Git workflow
 
-### Sync ritual — start of every work session
+### Sync ritual — after a PR and merge of a branch into `main`
 
 ```bash
-git fetch origin
+# Make sure you are on main after running gh pr merge <pr_num> --squash --delete-branch
+git pull # (or git pull origin main to be specific) 
 git checkout <current-branch>
 git rebase origin/main         # replays your commits on top of latest main
 # resolve any conflicts: edit, git add <file>, git rebase --continue
