@@ -1,309 +1,162 @@
-Operational recommendations (in priority order, mention-only per project conventions)
+# Staged tasks — `feature/phase-6a-foundation-audit`
 
-  1. Refactor the dbt assertion (dbt/tests/source_assumptions/assert_nhtsa_eleven_tuple_identity_stable.sql) to apply the
-  per-path-value-set filter by default. The script header explicitly foreshadows this at line 47-48. The warn count would
-  drop from 104 → 9 and become operationally readable. (Mid-effort, ADR-worthy refactor.)
-  2. Re-baseline ADR 0031:84's silver-fragmentation trigger on the cleaner real_drift number. Current rate is 9 out of
-  however many flagged 11-tuples exist across the full corpus — well under the >0.01% trigger almost certainly.
-  3. Probe the Mack NULL-regression cluster. A targeted query joining the 4 Mack rows back to their raw_landing_path archives
-   would confirm whether the NULLs are upstream (NHTSA emitted blank fields) or extractor (we parsed populated values as
-  NULL). One-off forensic, not a new committed script unless the result is non-trivial.
-  4. Update documentation/nhtsa/incremental_delta_findings.md Finding [whichever covers eleven-tuple drift] with the 95/9
-  split as the new calibration baseline.
+- **Branch:** `feature/phase-6a-foundation-audit`
+- **Status:** Paused 2026-05-28 — FDA Akamai per-IP cooldown in progress
+- **Phase:** 6a foundation audit (per `project_scope/phase-6-execution-plan.md`)
 
-  Wrap-up — the full investigation arc
+## Context: where we paused and why
 
-  You asked about 1 USDA load and 235 NHTSA loads. Across all 5 queries we now have:
+The FDA portion of the source-by-source field audit is **~95% complete**. We have:
 
-  Pathology: USDA PHA last_modified_date frozen on content edit
-  n: 3/3
-  Class: derived-flag toggles + NULL/"" serialization noise
-  Phase 6 implication: Use extraction_timestamp as edit signal — confirmed
-  ────────────────────────────────────────
-  Pathology: USDA bilingual EN/ES non-atomic
-  n: 105/789 (13.31%)
-  Class: EN amended retroactively, ES frozen at original publication
-  Phase 6 implication: Lifecycle keyed per (recall_id, langcode) — confirmed
-  ────────────────────────────────────────
-  Pathology: NHTSA 235 inserts today
-  n: 23 net_new + 212 amendments (122 MB, 31 KTM, 59 other)
-  Class: KTM lifecycle transition (interim→final remedy) is the highest-value signal
-  Phase 6 implication: recall_event_history should detect corrective_action prose transitions
-  ────────────────────────────────────────
-  Pathology: NHTSA source_recall_id renumbers on amendment
-  n: 212/212
-  Class: Hash-excluded per ADR 0030 — empirically validated
-  Phase 6 implication: 11-tuple is the stable identity
-  ────────────────────────────────────────
-  Pathology: NHTSA 11-tuple drift
-  n: 9/104 actionable
-  Class: mostly mfr_comp_ptno false positives (95); 5 date-revisions + 4 NULL-regressions
-  Phase 6 implication: Refactor assertion to drop the 95; investigate Mack NULL cluster
+- All three silver-only mismappings confirmed against the iRES API definitions PDF + a 447-record R2 corpus inspection. Empirical NULL rates, value distributions, and surprises (`HFP` center, `OCS` for cosmetics, `VOLUNTARYTYPETXT` dual-format) all documented in `documentation/fda/field_audit_2026_w22.md` §8.
+- The three-tier endpoint architecture (`POST /recalls/` + per-product GET + per-event GET) confirmed against `bruno/fda/` and now reflected in `documentation/audit/capture_expansion_backlog.md` § FDA.
 
+The remaining 5% — empirical populate-rate verification for the tier-2/tier-3 fields that would feed the (b) PR — is **blocked on FDA's Akamai bot-detection cooldown**. Our probes triggered per-IP scoring because (1) the first probe sent an invalid displaycolumns set (press release fields → STATUSCODE 406), and (2) every subsequent probe used a different displaycolumns shape, which looks like security-scanner behavior to Akamai. The IP is silent-blocked (HTTP 204 + `_abck=...~-1~...` invalid-session cookies). Cooldown is typically 24h+.
 
+## Tasks (in priority order)
 
-  You'll want to validate before the next dbt build:
-  - dbt parse to confirm the staging model still compiles after the trim() changes
-  - The dbt singular test at dbt/tests/source_assumptions/assert_usda_field_last_modified_date_advances_on_edit.sql will fire
-   on the 1235 silent edits with severity=warn — expected behavior, but worth knowing it'll be noisy until Phase 6 lands the
-  whitespace-normalization filter
+### Task 1 — Wait through Akamai's per-IP cooldown
 
-  1. Push feature/full-silver-gold to remote if it's not already
-  2. Open the PR to main with the title something like Phase 6 prep: findings, diagnostics, silver hygiene (bb4bc5e..245d073)
-  3. After merge: git checkout main && git pull && git branch -D feature/full-silver-gold && git push origin 
-  :feature/full-silver-gold
-  4. Then branch feature/uscg-bronze off main and start USCG work
-  5. Update ~/.claude/plans/phase-6-execution-plan.md if it has stale "4-source" references — that planning doc is now
-  slightly behind the new sequence
+**What:** Don't issue any more FDA bulk-POST probes from this IP until at least **2026-05-29 21:00 EDT** (24 hours after the last 204).
 
-  The "phase" lives in implementation_plan.md and ~/.claude/plans/phase-6-execution-plan.md as the planning artifact. The
-  code lands as a sequence of focused branches, each named for what it actually contains:
+**Why:** Continued probing while the IP's score is elevated extends the block (per Finding N, retries deepen the throttle). The probe script's `--clear-cookies` flag clears local Akamai cookies but doesn't reset the per-IP score on FDA's side — that only decays with time.
 
-  Likely branch: feature/uscg-bronze
-  Scope: The pre-Phase-6 work we just talked about
-  Rough order: 1
-  ────────────────────────────────────────
-  Likely branch: feature/scd-strategy-adr
-  Scope: File the SCD-2 ADR per today's Phase 6 deliverable; design-only, small
-  Rough order: 2
-  ────────────────────────────────────────
-  Likely branch: feature/silver-multi-source-staging
-  Scope: Extend existing CPSC/FDA staging+silver to UNION ALL USDA + NHTSA + USCG; update accepted_values test for 5-source
-  Rough order: 3
-  ────────────────────────────────────────
-  Likely branch: feature/recall-event-history
-  Scope: The ADR 0022 LAG()-based history model + the per-field whitespace-normalization we filed today
-  Rough order: 4
-  ────────────────────────────────────────
-  Likely branch: feature/recall-lifecycle
-  Scope: ADR 0026 silver-side: first_seen_at, last_seen_at, is_currently_active, etc. Bundles with extraction_run_identities
-    Alembic migration since they're the same ADR
-  Rough order: 5
-  ────────────────────────────────────────
-  Likely branch: feature/firm-resolution
-  Scope: FDA firmfeinum anchor + RapidFuzz cross-source matching
-  Rough order: 6
-  ────────────────────────────────────────
-  Likely branch: feature/gold-aggregates
-  Scope: Dashboards + denormalized search index
-  Rough order: 7
-  ────────────────────────────────────────
-  Likely branch: feature/silver-gold-erd
-  Scope: The column-level ERD documentation deliverable
-  Rough order: 8 (or interleaved)
+**How:** Nothing to do. Move to Task 2 / Task 5 in parallel.
 
-  Each is one PR. Each PR title matches the branch name. Each merge deletes the branch. git log reads as a sequence of Phase
-  6 deliverables, not as "phase 6 mega-merge".
+### Task 2 — Production-shape probe to verify the shape-variance hypothesis
 
-  Names follow the pattern feature/<what-it-builds> — describes the artifact (model, ADR, layer), not the project phase. Good
-   branch names answer "what's in this diff?" before you open it.
+**What:** After the cooldown, run **one** probe that mirrors `bruno/fda/incremental_extraction/post_recalls_eventlmd_range.yml` exactly — same 21-field displaycolumns, bounded `eventlmdfrom` + `eventlmdto`, `rows=50`, `sort=eventlmd desc`. No `codeinformation`, no firm-address fields, no open-ended filter.
 
-Recommendation
+**Why:** Confirms whether the 204s were caused by shape-variance (probing-like pattern) or by Akamai IP-class scoring. If the production-shape probe returns HTTP 200 + FDA STATUSCODE 400, shape-variance was the trigger and we can plan tier-1 probes more carefully. If it still 204s, the per-IP block hasn't decayed; extend the wait.
 
-  A short-lived docs/findings-<date> branch off main, opened and merged within the investigation cycle.
+**How:**
 
-  Branch name pattern: docs/findings-2026-05-15 (or weekly: docs/findings-2026-05-w20)
-  Lifetime: Hours to a day or two
-  What it contains: New diagnostic SQL scripts, findings doc updates, small ADR amendments, small invariant tests
-    (accepted_values), silver hygiene fixes (trim()) — i.e., today's exact diff
+```bash
+python scripts/fda/audit/probe_displaycolumns.py \
+    --columns "recalleventid,productid,producttypeshort,recallnum,phasetxt,centercd,centerclassificationtypetxt,firmlegalnam,firmfeinum,recallinitiationdt,centerclassificationdt,terminationdt,enforcementreportdt,determinationdt,initialfirmnotificationtxt,distributionareasummarytxt,voluntarytypetxt,productdescriptiontxt,productshortreasontxt,productdistributedquantity,eventlmd" \
+    --eventlmdfrom 04/20/2026 --eventlmdto 04/26/2026 \
+    --rows 50 --no-save --clear-cookies
+```
 
-  Today's branch effectively WAS this kind of branch, just mis-named as feature/full-silver-gold. Going forward, name them
-  docs/-prefixed so the scope is obvious.
+`--clear-cookies` purges the prior invalid Akamai session so we start fresh.
 
-  When an exception is warranted
+**Expected:** HTTP 200 + STATUSCODE 400 + ~150 records returned. Per-field summary printed.
 
-  Situation: Finding requires a schema migration, extractor change, or hash-exclude rule (today's ADR 0032 would qualify)
-  Branch instead: fix/<specific-thing> — e.g., fix/usda-establishment-hash-exclude-latest-mpi-active-date
-  ────────────────────────────────────────
-  Situation: Finding directly relates to source you're actively building (e.g., observing USCG bronze data while on
-    feature/uscg-bronze)
-  Branch instead: Inline on that branch — it's a within-scope discovery
-  ────────────────────────────────────────
-  Situation: Finding suggests a Phase 6 silver model design change
-  Branch instead: Inline on the relevant Phase 6 sub-branch when it exists; otherwise on docs/findings-<date> for now
+### Task 3 — Tier-1 probe (firm address + survivors + posted date)
 
-  Why not just put findings on feature/uscg-bronze (or whatever's active)?
+**What:** Only run if Task 2 succeeds. One probe with production-shape baseline plus the tier-1 additions.
 
-  Because findings about NHTSA or USDA aren't USCG-bronze work. Mixing them blurs the PR scope and makes the diff hard to
-  review. The docs/findings-<date> pattern keeps each PR a coherent unit.
+**Why:** Validates that the firm address fields actually populate in real responses before we commit to the bronze schema migration in the (b) PR.
 
-  Practical workflow
+**How:**
 
-  When a daily extract surfaces something interesting:
-  1. git checkout main && git pull
-  2. git checkout -b docs/findings-2026-05-22 (or whatever the date is)
-  3. Investigate, write scripts, update findings docs
-  4. Commit + push + PR + merge same/next day
-  5. git checkout feature/uscg-bronze && git rebase main to pick up the findings
-  
-  Findings branches stay tiny and ship fast; feature work branches stay focused and don't drift.
+```bash
+python scripts/fda/audit/probe_displaycolumns.py \
+    --columns "recalleventid,productid,producttypeshort,firmlegalnam,firmcitynam,firmstatecd,firmcountrynam,firmline1adr,firmline2adr,firmpostalcd,firmsurvivingnam,firmsurvivingfei,postedinternetdt,eventlmd" \
+    --eventlmdfrom 04/20/2026 --eventlmdto 04/26/2026 \
+    --rows 50
+```
 
-  When findings could merge into the current work branch instead
+**Expected:** HTTP 200 + per-field summary showing NULL rates for the address fields. If NULL rates exceed ~80%, downgrade those fields from MEDIUM to LOW in the backlog.
 
-  If you're 90% done with feature/uscg-bronze and a small finding comes up that touches USCG specifically, just commit it on
-  that branch — branch-switching ceremony isn't worth it. The rule of thumb: does the finding's diff make sense in the work 
-  branch's PR description? If yes, inline. If no, separate branch.
+### Task 4 — Tier-2 and tier-3 probe scripts (write, don't run yet)
 
-  
-# Section: NHTSA phase 6 reconciliation
-  
-  I would like to think through ADR  0031 more in light of the: "v1-accepted fragmentation from ADR 0031:83-86 — but ADR 0031:110 estimated "~150 fragmented NHTSA
-  recall_product rows per year." Today added 96 in a single editorial event from one campaign. The estimate is materially
-  stale." This consequence: "select count(*) from recall_product where recall_event_id = md5('NHTSA|26V217000') → inflated by 96" seems unideal,
-  especially if it continues to pop up. 
+**What:** Two new scripts that exercise the per-product and per-event GET endpoints:
 
-I also need more thinking, context, and information on this: "Does Phase 6 reconciliation need a population-event handler now? No code change. Worth recording the rule ("populated
-  value supersedes empty value when only difference is a population event") in the Phase 6 design intent — either as a note
-  in ADR 0031 or a new ADR 0033 for the real_drift taxonomy."
+- `scripts/fda/audit/probe_per_product_endpoints.py` — exercises `GET /search/codeinfo/{productid}` and `GET /recalls/product/{productid}` against a sample of `productid`s from the existing bronze
+- `scripts/fda/audit/probe_per_event_endpoints.py` — exercises `GET /search/pressreleaseurls/{eventid}` and `GET /recalls/event/{eventid}` against a sample of `recalleventid`s from existing bronze
 
-  4b. Phase 6 reconciliation rule scaffold (define now, implement later)
+**Why:** Lets us validate tier-2 and tier-3 populate rates without depending on Akamai approval of varying bulk-POST shapes. The lookup endpoints are per-id GETs, not pattern-matching POSTs — much less likely to trigger probing-detection.
 
-  Each class wants a different rule:
+**How:** Defer to USDA audit completion. We need the cross-source consolidation context before deciding the (b) PR's tier selection (B1/B2/B3), so building these probes now would be premature. Add as TODO note in `documentation/fda/field_audit_2026_w22.md` §8.
 
-  ┌─────────────────────────┬───────────────────────────────────────────────────────────┬───────────────────────────────┐
-  │          Class          │                    Reconciliation rule                    │  recall_event_history event   │
-  │                         │                                                           │             type              │
-  ├─────────────────────────┼───────────────────────────────────────────────────────────┼───────────────────────────────┤
-  │ Population              │ Populated supersedes empty; merge on (11-tuple − amended  │ field_filled                  │
-  │                         │ field)                                                    │                               │
-  ├─────────────────────────┼───────────────────────────────────────────────────────────┼───────────────────────────────┤
-  │ Depopulation            │ Both retained for audit; latest is canonical              │ field_cleared                 │
-  ├─────────────────────────┼───────────────────────────────────────────────────────────┼───────────────────────────────┤
-  │ Value edit              │ Latest wins, or accumulate into production_window range   │ field_edited                  │
-  │ (batch-window)          │                                                           │                               │
-  ├─────────────────────────┼───────────────────────────────────────────────────────────┼───────────────────────────────┤
-  │ Normalization           │ Fuzzy-match required; manual review v1, ML-assisted later │ field_normalized              │
-  └─────────────────────────┴───────────────────────────────────────────────────────────┴───────────────────────────────┘
+### Task 5 — Send the follow-up email to Kevin at FDA OII
 
-  It seems various 11-tuple key fields get updated at random cadences and depths in the NHTSA data. What are ways we can track updates and changes so that 1. We are always serving the most current information to users/consumers and 2. We are keeping a proper log/audit of changes in relevant fields. Does this relate to slowly changing dimenions (SCD). How is this issue presenting with the other sources and how are we handling it? Are there tools in dbt or something else that provide a more robust industry standard way of handling this phenomenon? 
+**What:** Reply to Kevin's 2026-04-30 email with a static IP + intended usage description. (Draft was composed in-conversation 2026-05-28 and removed from the repo after sending — the IP address it carried is sensitive; check your email outbox for the sent copy.)
 
-Look into these work steps:
-  - Per-day drift-spike dbt assertion (2d from earlier analysis) — would have caught this in real time; worth considering
-  when the dbt assertion suite gets revisited.
-  - Optional ADR 0033 for the real_drift taxonomy — not yet created. The taxonomy is now informally documented across
-  incremental_delta_findings.md Sections H/I/K and the ADR 0031 Re-baseline subsection. If you want a single canonical
-  ADR-weight document for it, that's a separate piece of work.
+**Why:** A whitelisted static IP would let us probe freely during audit work without tripping Akamai. Kevin offered this in his original reply; we just hadn't needed it before. Sending now gives FDA time to process before the next audit cycle.
 
+**How:** Open the draft, fill in your static IP, send via your normal email. Block out the response time (FDA's prior reply was ~2 days).
 
-  ┌─────────────────┬──────────────────────────────────────────────┬───────────────────────────┬────────────────────────┐
-  │      Layer      │               What you produce               │  What it commits you to   │     Reversibility      │
-  ├─────────────────┼──────────────────────────────────────────────┼───────────────────────────┼────────────────────────┤
-  │ 1 — SCD framing │ An ADR (0033) framing fragmentation as an    │ Nothing operationally.    │ Fully reversible —     │
-  │  documentation  │ SCD problem; documents the proposed v1.5     │ Just shared conceptual    │ it's just words        │
-  │                 │ architecture as design intent                │ ground.                   │                        │
-  ├─────────────────┼──────────────────────────────────────────────┼───────────────────────────┼────────────────────────┤
-  │                 │ nhtsa_recall_product_snapshot +              │ Maintaining the snapshot  │ Reversible — drop the  │
-  │ 2 — Parallel    │ silver/recall_product_v15 +                  │ table (small ongoing      │ parallel models, no    │
-  │ v1.5 prototype  │ silver/recall_product_history running        │ cost; backups, schema     │ consumer impact        │
-  │                 │ alongside existing v1 silver                 │ migration awareness)      │                        │
-  ├─────────────────┼──────────────────────────────────────────────┼───────────────────────────┼────────────────────────┤
-  │                 │                                              │ Real schema/key changes.  │ Hard to reverse — once │
-  │ 3 — Migration   │ Replace silver/recall_product with the v1.5  │ Downstream queries keyed  │  consumers re-key,     │
-  │                 │ mechanism; update consumers                  │ on old md5(11-tuple)      │ going back means       │
-  │                 │                                              │ break.                    │ re-keying again        │
-  └─────────────────┴──────────────────────────────────────────────┴───────────────────────────┴────────────────────────┘
+### Task 5b — Process Kevin's reply when it arrives
 
+**What:** Branch the downstream tasks based on which of three plausible responses we get.
 
-  Trade-offs and risks
+**Why:** The reply materially changes which downstream probes are feasible, what shape the (b) PR can take, and whether the per-source-probe methodology needs adjustment for USDA / future sources.
 
-  ┌────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────┐
-  │                            Pro                             │                           Con                           │
-  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
-  │ Eliminates Pierce-class fragmentation (96 rows saved per   │ AC DELCO-class normalization still fragments at 6-tuple │
-  │ such event)                                                │  grain — not drift-immune, just much less drift-prone   │
-  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
-  │ Cleaner consumer-facing semantics (1 row per logical       │ Migration cost — silver model rewrite, downstream       │
-  │ product)                                                   │ queries that reference current md5(11-tuple) keys break │
-  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
-  │ Aligns with industry-standard SCD pattern                  │ Stateful dbt snapshots add operational complexity       │
-  │                                                            │ (don't delete the snapshot table casually)              │
-  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
-  │                                                            │ Pre-2008 records have NULL rcl_cmpt_id — need defensive │
-  │ Full history preserved (Type 2 in snapshot table)          │  collapse to 5-tuple for those (one ADR-level edge      │
-  │                                                            │ case)                                                   │
-  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
-  │ Phase 6 reconciliation rules become simpler (most classes  │ Initial dbt snapshot run on existing bronze creates one │
-  │ degenerate to "latest wins"; only AC DELCO-class needs     │  history version per existing 11-tuple — needs careful  │
-  │ fuzzy match)                                               │ initialization                                          │
-  ├────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
-  │ dbt snapshot is a well-trodden path (good docs, active     │ Snapshot tables grow over time — retention policy       │
-  │ maintenance)                                               │ needed                                                  │
-  └────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────┘
+**How:** Three decision branches —
 
-  ┌─────────────────────────────────────┬──────────────────────────────┬─────────────────────────────────────────────────┐
-  │             Drift class             │   Under v1 (md5(11-tuple))   │      Under v1.5 (md5(6-tuple) + snapshot)       │
-  ├─────────────────────────────────────┼──────────────────────────────┼─────────────────────────────────────────────────┤
-  │ Population (empty → value)          │ 96 fragmented rows; Phase 6  │ Snapshot transitions empty→value; no            │
-  │                                     │ must reconcile               │ fragmentation; reconciliation = none needed     │
-  ├─────────────────────────────────────┼──────────────────────────────┼─────────────────────────────────────────────────┤
-  │ Depopulation (value → empty)        │ Fragments at 11-tuple; Phase │ Snapshot transitions value→empty; latest wins   │
-  │                                     │  6 reconciles                │ automatically                                   │
-  ├─────────────────────────────────────┼──────────────────────────────┼─────────────────────────────────────────────────┤
-  │ Value edit (A → B) on attribute     │ Fragments at 11-tuple        │ Snapshot transitions A→B; latest wins           │
-  │ field                               │                              │                                                 │
-  ├─────────────────────────────────────┼──────────────────────────────┼─────────────────────────────────────────────────┤
-  │ Normalization (AC DELCO → ACDELCO)  │ Fragments at every grain     │ Still fragments at 6-tuple; this is the only    │
-  │ on 6-tuple anchor field             │                              │ class needing fuzzy reconciliation              │
-  └─────────────────────────────────────┴──────────────────────────────┴─────────────────────────────────────────────────┘
+- **Branch A — Static IP whitelisted.** Resume probing freely. Run the production-shape probe (Task 2), then directly proceed to **writing tier-2 + tier-3 probe scripts now (originally Task 4)** rather than deferring to post-USDA. With whitelist in hand, the engineering tax of per-product / per-event GETs is just a request-volume question, not an Akamai-scoring question. Also note the whitelist in `documentation/fda/api_observations.md` so future-us doesn't re-probe blindly. The (b) PR can plausibly ship as B3 (all three tiers).
+- **Branch B — Pacing/usage guidance only (no whitelist).** Update `scripts/fda/audit/probe_displaycolumns.py` and any future per-source probe scripts to honor whatever pacing/throttling pattern Kevin recommends (e.g., max N req/min, mandatory delay between varied shapes, etc.). Capture in `documentation/fda/api_observations.md` as a Finding N supplement. The (b) PR likely ships as B1 or B2 depending on how forgiving the pacing guidance is.
+- **Branch C — Declined or no reply by 2026-06-11.** Treat as confirmation that the audit-pattern probing isn't an FDA-supported path. Move tier-2/3 probe execution to CI (one-off GitHub Actions workflow that runs probes from a datacenter IP). The (b) PR ships as B1 only (bulk-POST tier 1 fields), and tier-2/3 enrichment is deferred to a Phase 7 lookup-endpoint workstream when production runtime is on GitHub Actions anyway.
 
+Document whichever branch we end up in by appending a "**Resolution**" subsection to `documentation/fda/api_observations.md` Finding N supplement (per Task 7) — with the specific guidance Kevin provided and the chosen branch.
 
-  ┌───────────────────────┬───────────────────────────────────────────────────┬─────────────────────────────────────────┐
-  │         Work          │                      Branch                       │                Rationale                │
-  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
-  │ Today's findings docs │                                                   │                                         │
-  │  (Section K, ADR 0031 │ docs/findings-2025-05-w3 ← current                │ Already there; matches the branch theme │
-  │  updates, Section I   │                                                   │                                         │
-  │ update)               │                                                   │                                         │
-  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
-  │                       │                                                   │ Pure documentation; same conceptual     │
-  │ Layer 1 — ADR 0033 +  │ docs/findings-2025-05-w3 ← same branch            │ theme ("documenting what we learned     │
-  │ plan doc              │                                                   │ from Pierce"); ships with the findings  │
-  │                       │                                                   │ work in one merge                       │
-  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
-  │                       │                                                   │ Actual code changes (new snapshot + 2-3 │
-  │ Layer 2 — v1.5 dbt    │ New branch off main after end-of-week merge —     │  new models); needs its own             │
-  │ prototype             │ e.g., feature/silver-v15-scd-prototype            │ review/merge cycle; isolated from       │
-  │                       │                                                   │ unrelated work                          │
-  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
-  │                       │ Future branch (deferred); e.g.,                   │ Real schema/key changes affecting       │
-  │ Layer 3 — migration   │ feature/silver-v15-migration off whatever the     │ downstream consumers; deserves its own  │
-  │                       │ latest silver state is at trigger time            │ ADR (0034) and review                   │
-  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
-  │                       │ Independent branch off main — e.g.,               │ Different source, no overlap with the   │
-  │ USCG work             │ feature/uscg-bronze                               │ v1.5 prototype scope; can run fully in  │
-  │                       │                                                   │ parallel                                │
-  ├───────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────┤
-  │ Next-week daily       │ New branch off main after this week's merge —     │ Consistent with your weekly-findings    │
-  │ findings              │ e.g., docs/findings-2025-05-w4                    │ cadence pattern                         │
-  └───────────────────────┴───────────────────────────────────────────────────┴─────────────────────────────────────────┘
+### Task 6 — Pivot to USDA source audit
 
-# Section: 2026-05-25 daily run tasks
-Recommended execution order
-  1. recent_runs.sql → grab the four run_ids and confirm the headline counts
-  2. response_capture_check.sql → ensure forensic columns populated (so the next step has data)
-  3. etag_audit_check.sql → resolves three of the four mysteries in one shot
-  4. nhtsa/_pipeline/spot_check_extraction_runs.sql → confirms inner-content transitions on both NHTSA dates
-  5. nhtsa/bronze/explore_incremental_delta.sql -v run_id=<2026-05-20 run> then <2026-05-21 run>
-  6. nhtsa/bronze/assert_eleven_tuple_identity_stable.sql → then branch only if it flags
-  7. (optional) watermark_health.sql + quarantine_check.sql as belt-and-suspenders
+**What:** Begin USDA recalls + USDA establishments audit per `documentation/audit/methodology.md`. The deliverable plan flagged the firm-table relationship as a structural question (USDA's separate establishment API vs CPSC/FDA/NHTSA having firm inline with recalls) — that's the highest-value audit topic remaining.
 
-Do I need to do any follow-ups for this? 
+**Why:** Two reasons to pivot now rather than wait on FDA: (1) USDA audit work proceeds independently of any FDA blocker, (2) the cross-source consolidation that resolves the (b) PR's B1/B2/B3 architecture decision needs all five sources audited anyway.
 
-Section 3 — the surprising part: every day from 5/11 onward shows inner_transition = CHANGED. That's expected on days that
-  loaded non-zero rows (5/16, 5/19, 5/20, 5/21, 5/25). But it's also true on 5/17 and 5/18, both of which loaded zero. The
-  5/10 intra-day pair (13:20 and 17:51) correctly shows unchanged for both wrapper and inner — same-day re-fetch caught the
-  no-republish state. Across days, though, inner_hash transitions even when bronze finds no row-level deltas.
+**How:**
 
-  The script's header comment says "If inner_hash transitions, content actually changed that day." That assumption is now
-  empirically falsified. The 5/17 and 5/18 rows are existence proofs that inner-TSV bytes can differ across days without
-  representing real data change — likely row reordering or whitespace churn in NHTSA's daily flat-file generation, neither of
-   which moves the bronze content_hash needle.
+1. Create the USDA audit doc: `documentation/usda/field_audit_2026_w22.md` (or `w23` if it slips). Use the FDA audit doc as the template.
+2. Read the USDA API definitions PDFs at `documentation/usda/usda_fsis_recall_api_documentation.pdf` and `documentation/usda/usda_fsis_establishment_listing_api_data_documentation.pdf`.
+3. Read the USDA bronze schemas (`src/schemas/usda.py`, `src/schemas/usda_establishment.py`) and staging models.
+4. Build per-source inspect/probe scripts under `scripts/usda_recalls/audit/` and `scripts/usda_establishments/audit/`. Mirror the FDA pattern from `scripts/fda/audit/` (DEFAULT_CACHE_DIR pattern, three source modes, `--clear-cookies` if USDA also fronts Akamai per Finding O).
+5. Validate against R2-landed payloads with `inspect_landed_payloads.py` analog.
+6. Document findings against the firm-table-relationship question in particular: how does the USDA establishment API map to silver `firm` entries, and is the current `establishment_name` join (per `dbt/models/silver/firm.sql:75-86`) the right approach?
 
-  Correct refinement: response_inner_content_sha256 is sufficient evidence of "no change" (if inner hash matches prior,
-  nothing changed), but not sufficient evidence of "change" (inner hash CHANGED can mean reorder/whitespace OR real change).
-  Bronze content_hash dedup remains the only authoritative oracle. This is worth a new finding in
-  documentation/nhtsa/incremental_delta_findings.md — refines/qualifies the original Migration 0011 assumption.
+### Task 6b — Update audit methodology with the Akamai playbook
 
-  I'd file that refinement as part of the Section M/N writeups (it's pattern-discovery from this same triage window), not as
-  a separate immediate task. Flagging it now so we don't lose track. Also worth a follow-up TODO bullet — investigate WHY the
-   inner hashes differ on no-change days (row order vs. whitespace vs. column padding) — but that's a separate thread.
+**What:** Append a "Probing Akamai-fronted APIs" section to `documentation/audit/methodology.md` capturing the learnings from this FDA cycle that generalize to USDA (also Akamai-fronted per `documentation/usda/recall_api_observations.md` Finding O) and possibly NHTSA / USCG when those audits happen.
+
+**Why:** Without this, each per-source audit will re-discover the same Akamai-shaped problems. Codifying the playbook avoids reburning days on it.
+
+**How:** Add a section to `methodology.md` covering:
+
+- **Always start probing from the source's Bruno-tested request shape.** If the source has `bruno/<source>/` files exercising the API, the request shape there is empirically known to work. Vary from it cautiously — one parameter at a time, with at least 5+ minute gaps if exploring multiple shapes.
+- **Don't request fields outside the source's "stable bulk" displaycolumns/equivalent set.** For FDA, that meant `codeinformation` lives on a separate per-product endpoint; mixing it into bulk POST got us STATUSCODE 406 and tripped Akamai's per-IP scoring. Other sources likely have analogous tier-2/3 fields.
+- **Recognize the `_abck=...~-1~...` cookie signal.** If a response sets an `_abck` cookie with all `-1` values across validation slots, we're in Akamai's flagged-session state. Stop probing until cooldown — continued requests deepen the block.
+- **Recognize `AkamaiGHost` + `x-reference-error: <id>` in response headers.** That's Akamai's documented "blocked request" reference. Capture the ID for any future outreach.
+- **Cooldown is time-based, not request-based.** ≥24 hours from the last block is a safe wait. Cookies (`--clear-cookies` in our probe scripts) don't reset the per-IP score.
+- **Static IP whitelist is the supported escape valve.** FDA OII offered this on 04/30; USDA may have an analogous program. Worth pursuing per source.
+
+### Task 7 — Update `documentation/fda/api_observations.md` Finding N supplement
+
+**What:** Append a new section to Finding N (or new Finding) documenting the 2026-05-28 observations.
+
+**Why:** Future-us / future-Claude will hit similar issues and waste time rediscovering. The Bruno file's "codeinformation is per-product, not bulk" insight + the Akamai 204-silent-block + cookie `~-1~` signal pattern all deserve preservation.
+
+**How:** Append to `documentation/fda/api_observations.md` after Finding O. Title: "**N supplement — 2026-05-28 probe-validation observations.**" Contents:
+
+- 204 silent-block is a distinct Akamai failure mode from Finding N's documented 302→HTML→404 path; both signal bot-detection but at different severity tiers
+- `_abck` cookie's trailing `~-1~-1~-1~-1~-1` indicates an unsolved Akamai sensor challenge
+- Per-IP scoring is triggered by *shape-variance*, not just request rate; an invalid request producing STATUSCODE 406 (FDA API rejection) elevates the score noticeably
+- `bruno/fda/incremental_extraction/post_recalls_eventlmd_range.yml` line 161-162 establishes the architectural rule: `codeinformation` is fetched per-product, never in bulk POST
+- Mitigation tiers (in order): (a) probe with stable bulk-POST shapes, (b) use lookup endpoints for tier-2/3 fields, (c) get static IP whitelisted by FDA OII
+
+### Task 8 — Cross-source consolidation + the (a) silver-remap PR
+
+**What:** Once all five sources (CPSC, FDA, USDA recalls, USDA establishments, NHTSA, USCG) have per-source `field_audit_<period>.md` docs, build `documentation/audit/cross_source_consolidation.md` and use it to drive the (a) silver-remap PR.
+
+**Why:** The (a) PR is the user-visible payoff of Phase 6a — it fixes the silver field mismappings without requiring extraction changes. It needs cross-source alignment (e.g., does `recall_event.description` stay named that, or rename to `recall_event.recall_reason`?) which only the consolidation step can answer.
+
+**How:**
+
+1. Create `documentation/audit/cross_source_consolidation.md` with one section per semantic concept (product description, recall reason / hazard narrative, distribution area, classification / severity, lifecycle dates, firm address, etc.). For each concept, populate a row per source showing the contributing field name, its current silver mapping, and the proposed silver column.
+2. Decide column renames (e.g., `description` → `recall_reason`) based on what the data actually represents across the union of sources.
+3. Build the (a) PR on a new branch off main: `feature/silver-field-remap` per the convention in `documentation/audit/capture_expansion_backlog.md`. Edits limited to `dbt/models/silver/*.sql` (and possibly `dbt/models/staging/*.sql`). No bronze schema migration, no extractor change.
+4. `dbt build` to verify silver populates correctly with the new mappings.
+5. PR review against the per-source audit docs' Decisions-locked sections — every change in (a) PR should trace to a decision in some source's audit.
+
+This task closes Phase 6a. The (b) PR (capture expansion) is a separate workstream, possibly on a different branch, and likely follows after Phase 6b (firm resolution) per `project_scope/phase-6-execution-plan.md`.
+
+## Cross-references
+
+- `documentation/audit/methodology.md` — methodology for source audits
+- `documentation/audit/capture_expansion_backlog.md` § FDA — three-tier architecture, B1/B2/B3 decision pending consolidation
+- `documentation/fda/field_audit_2026_w22.md` — FDA audit findings + §8 R2 validation status
+- `documentation/fda/api_observations.md` Finding N — original 2026-04-28 anti-abuse documentation
+- `project_scope/phase-6-execution-plan.md` — Phase 6a foundation audit deliverables
+- `prompts/phase_6_deliverable_plan.md` — Phase 6 add-on workstreams (field-association audit is #2)
