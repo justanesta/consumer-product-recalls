@@ -1,20 +1,25 @@
 """
-Shared helpers for FDA field audit scripts (Phase 6a foundation audit).
+Shared helpers for USDA FSIS Establishment Listing field audit scripts
+(Phase 6a foundation audit).
+
+Mirrors ``scripts/usda_recalls/audit/_lib.py`` and ``scripts/fda/audit/_lib.py``
+in shape — per-source ``_lib.py`` per project convention; cross-source refactor
+is deferred until 3+ sources need a shared lib.
 
 Two responsibilities:
 
-1. Per-field statistics over a list of dict-shaped records — the FDA bulk POST
-   RESULT[] payload shape (which is also what gets landed to R2 verbatim). Both
-   ``inspect_landed_payloads.py`` and ``probe_displaycolumns.py`` consume this
-   for identical-shape output regardless of where the records came from.
+1. Per-field statistics over a list of dict-shaped records — USDA's
+   Establishment Listing API returns a flat JSON array of records (no
+   envelope). Each record has snake_case keys (no ``field_`` prefix —
+   different from the recall API).
 
-2. R2 download + local cache resolution under ``data/exploratory/fda/``
-   (gitignored). Mirrors ``scripts/nhtsa/tsv_analysis/inspect_archive_row.py``'s
-   ``_resolve_cached`` pattern — strip ``.gz`` from R2 basename, write
-   decompressed bytes on cache miss, return ``Path`` to the cached file.
+2. R2 download + local cache resolution under
+   ``data/exploratory/usda_establishments/`` (gitignored). Mirrors
+   ``scripts/nhtsa/tsv_analysis/inspect_archive_row.py``'s ``_resolve_cached``
+   pattern.
 
 Sibling scripts add this directory to ``sys.path`` so they can ``import _lib``
-when invoked directly. See module docstrings in each script.
+when invoked directly.
 """
 
 from __future__ import annotations
@@ -25,26 +30,36 @@ from pathlib import Path
 from typing import Any
 
 # Repo-root anchored cache. parents[3] is:
-#   scripts/fda/audit/_lib.py
-#   parents[0] = scripts/fda/audit/
-#   parents[1] = scripts/fda/
+#   scripts/usda_establishments/audit/_lib.py
+#   parents[0] = scripts/usda_establishments/audit/
+#   parents[1] = scripts/usda_establishments/
 #   parents[2] = scripts/
 #   parents[3] = <repo root>
-DEFAULT_CACHE_DIR: Path = Path(__file__).resolve().parents[3] / "data" / "exploratory" / "fda"
+DEFAULT_CACHE_DIR: Path = (
+    Path(__file__).resolve().parents[3] / "data" / "exploratory" / "usda_establishments"
+)
 
 
 # ----- Field summary -----
 
 
 def _is_null(v: Any) -> bool:
-    """Treat None, FDA's '' sentinel (Finding J), and empty list ``[]`` as null.
+    """Treat None, '' (per Finding C), the JSON boolean ``False`` sentinel
+    (per Finding C in establishment_api_observations.md), and the empty list
+    ``[]`` as null.
 
-    Empty-list handling is preemptive: FDA currently has no list-typed fields
-    via the bulk POST shape we use, but a future tier-2 enrichment column or
-    a press-release array could land as a list, and the consistent cross-source
-    null-handling makes summary outputs comparable.
+    The establishment API uses JSON ``false`` (not ``null``, not ``""``) as a
+    missing sentinel on ``geolocation`` and ``county`` — about ~1.5% of records.
+    Bronze stores those as the string ``"false"`` per ADR 0027; the raw R2
+    payload still carries the literal JSON boolean ``False``. Both forms are
+    treated as null here so NULL-rate distributions reflect the source's actual
+    missingness rather than a literal-bool surprise in the distribution table.
+
+    Empty list ``[]`` is treated as null for ``dbas`` (~50%+ of records have
+    no DBAs) and similar JSON-array fields where ``[]`` is the source's
+    "no value" representation, not an explicit "empty collection" semantic.
     """
-    if v is None or v == "":
+    if v is None or v == "" or v is False:
         return True
     return isinstance(v, list) and len(v) == 0
 
@@ -57,17 +72,17 @@ def _truncate_repr(v: Any, max_len: int) -> str:
 def summarize_field(values: list[Any], field_name: str, sample_size: int = 3) -> dict[str, Any]:
     """Compute per-field statistics across a list of values (one per record).
 
-    Returns a dict with:
-      - n_records, null_count, null_pct, distinct (all fields)
-      - min_length, max_length (string fields only)
-      - distribution: list of (value, count) tuples (low-cardinality, <= 20 distinct)
-      - samples: list of N non-null values (high-cardinality)
-      - element_distribution, total_elements, distinct_elements (list-typed fields only)
+    Handles list-typed fields (e.g., ``activities``, ``dbas``) specially:
+    distinct counting hashes lists as tuples, and a per-element ``Counter`` is
+    computed so the operator can see what individual values appear inside the
+    list field across the corpus (e.g., 'Meat Processing' as an element of
+    ``activities`` lists).
     """
     n = len(values)
     nulls = sum(1 for v in values if _is_null(v))
     non_null = [v for v in values if not _is_null(v)]
 
+    # Detect list-typed field: any non-null value is a list.
     is_list_field = any(isinstance(v, list) for v in non_null)
 
     summary: dict[str, Any] = {
@@ -78,12 +93,14 @@ def summarize_field(values: list[Any], field_name: str, sample_size: int = 3) ->
     }
 
     if is_list_field:
+        # Hash list values as tuples so distinct counting works on whole-list values.
         tupled: list[Any] = [tuple(v) if isinstance(v, list) else v for v in non_null]
         hashable_tupled = [v for v in tupled if isinstance(v, str | int | float | bool | tuple)]
         distinct = len(set(hashable_tupled))
         summary["distinct"] = distinct
 
         if 0 < distinct <= 20 and hashable_tupled:
+            # Convert tuples back to lists for readable display.
             summary["distribution"] = [
                 (list(v) if isinstance(v, tuple) else v, count)
                 for v, count in Counter(hashable_tupled).most_common()
@@ -93,12 +110,14 @@ def summarize_field(values: list[Any], field_name: str, sample_size: int = 3) ->
                 list(v) if isinstance(v, tuple) else v for v in tupled[:sample_size]
             ]
 
+        # Per-element cardinality: flatten every list and count individual elements.
         all_elements = [elem for v in non_null if isinstance(v, list) for elem in v]
         if all_elements:
             summary["total_elements"] = len(all_elements)
             summary["distinct_elements"] = len(set(all_elements))
             summary["element_distribution"] = Counter(all_elements).most_common(20)
     else:
+        # Scalar field path.
         hashable_non_null = [v for v in non_null if isinstance(v, str | int | float | bool)]
         distinct = len(set(hashable_non_null)) if hashable_non_null else 0
         summary["distinct"] = distinct
@@ -143,11 +162,7 @@ def format_summary(summary: dict[str, Any]) -> str:
 
 
 def summarize_records(records: list[dict[str, Any]], fields: list[str] | None = None) -> str:
-    """Build a per-field summary block across a list of records.
-
-    If ``fields`` is None, the union of all keys observed across records is
-    used (sorted alphabetically). Pass ``fields`` to restrict to specific columns.
-    """
+    """Build a per-field summary block across a list of records."""
     if not records:
         return "No records to summarize."
 
@@ -178,10 +193,7 @@ def _fetch_from_r2(key: str) -> bytes:
 def resolve_cached_payload(raw_landing_path: str, cache_dir: Path | None = None) -> Path:
     """Return the local cache path for an R2 key; fetch from R2 on cache miss.
 
-    The cached file name is the R2 basename with the ``.gz`` suffix stripped
-    (``R2LandingClient.get_raw`` decompresses the outer gzip before returning,
-    so the cached bytes are the raw payload — e.g., decompressed JSON for FDA).
-
+    The cached file name is the R2 basename with the ``.gz`` suffix stripped.
     Cache hit/miss messages go to stderr so analysis output on stdout is clean.
     """
     if cache_dir is None:

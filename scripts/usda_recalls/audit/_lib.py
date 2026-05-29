@@ -1,20 +1,25 @@
 """
-Shared helpers for FDA field audit scripts (Phase 6a foundation audit).
+Shared helpers for USDA recall field audit scripts (Phase 6a foundation audit).
+
+Mirrors ``scripts/fda/audit/_lib.py`` in shape — the summarize helpers are
+source-agnostic so we duplicate them rather than cross-import (per
+``feedback_audit_all_precedent_files_before_drafting``: per-source ``_lib.py``
+is the project convention; cross-source refactor is deferred until 3+ sources
+need a shared lib).
 
 Two responsibilities:
 
-1. Per-field statistics over a list of dict-shaped records — the FDA bulk POST
-   RESULT[] payload shape (which is also what gets landed to R2 verbatim). Both
-   ``inspect_landed_payloads.py`` and ``probe_displaycolumns.py`` consume this
-   for identical-shape output regardless of where the records came from.
+1. Per-field statistics over a list of dict-shaped records — USDA's recall API
+   returns a flat JSON array of records (no envelope, unlike FDA's bulk POST
+   RESULT[] wrapper). The shape that lands in R2 is exactly that flat array.
 
-2. R2 download + local cache resolution under ``data/exploratory/fda/``
+2. R2 download + local cache resolution under ``data/exploratory/usda_recalls/``
    (gitignored). Mirrors ``scripts/nhtsa/tsv_analysis/inspect_archive_row.py``'s
    ``_resolve_cached`` pattern — strip ``.gz`` from R2 basename, write
    decompressed bytes on cache miss, return ``Path`` to the cached file.
 
 Sibling scripts add this directory to ``sys.path`` so they can ``import _lib``
-when invoked directly. See module docstrings in each script.
+when invoked directly.
 """
 
 from __future__ import annotations
@@ -25,24 +30,29 @@ from pathlib import Path
 from typing import Any
 
 # Repo-root anchored cache. parents[3] is:
-#   scripts/fda/audit/_lib.py
-#   parents[0] = scripts/fda/audit/
-#   parents[1] = scripts/fda/
+#   scripts/usda_recalls/audit/_lib.py
+#   parents[0] = scripts/usda_recalls/audit/
+#   parents[1] = scripts/usda_recalls/
 #   parents[2] = scripts/
 #   parents[3] = <repo root>
-DEFAULT_CACHE_DIR: Path = Path(__file__).resolve().parents[3] / "data" / "exploratory" / "fda"
+DEFAULT_CACHE_DIR: Path = (
+    Path(__file__).resolve().parents[3] / "data" / "exploratory" / "usda_recalls"
+)
 
 
 # ----- Field summary -----
 
 
 def _is_null(v: Any) -> bool:
-    """Treat None, FDA's '' sentinel (Finding J), and empty list ``[]`` as null.
+    """Treat None, USDA's '' sentinel (Finding C), and empty list ``[]`` as null.
 
-    Empty-list handling is preemptive: FDA currently has no list-typed fields
-    via the bulk POST shape we use, but a future tier-2 enrichment column or
-    a press-release array could land as a list, and the consistent cross-source
-    null-handling makes summary outputs comparable.
+    Note: USDA's recall API also returns boolean ``False`` strings ("False") for
+    some optional booleans (Finding L). Those count as non-null here because
+    "False" is a real value — not a missing sentinel — for booleans.
+
+    Empty-list handling is preemptive: USDA's recall API currently has no
+    list-typed fields, but a future schema addition could land one, and the
+    consistent cross-source null-handling makes summary outputs comparable.
     """
     if v is None or v == "":
         return True
@@ -180,7 +190,7 @@ def resolve_cached_payload(raw_landing_path: str, cache_dir: Path | None = None)
 
     The cached file name is the R2 basename with the ``.gz`` suffix stripped
     (``R2LandingClient.get_raw`` decompresses the outer gzip before returning,
-    so the cached bytes are the raw payload — e.g., decompressed JSON for FDA).
+    so the cached bytes are the raw payload — decompressed JSON for USDA).
 
     Cache hit/miss messages go to stderr so analysis output on stdout is clean.
     """

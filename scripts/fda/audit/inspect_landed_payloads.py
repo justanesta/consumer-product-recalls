@@ -63,6 +63,10 @@ def _resolve_via_extraction_runs(dates: list[_date]) -> list[str]:
 
     settings = Settings()  # type: ignore[call-arg]
     engine = sa.create_engine(settings.neon_database_url.get_secret_value())
+    # `raw_landing_path <> ''` filter: some runs land with extracted=0 and an
+    # empty-string raw_landing_path (rather than NULL). Path("").name is ""
+    # which would make resolve_cached_payload return the cache directory itself,
+    # crashing the subsequent read_bytes() call. Exclude at the source.
     query = sa.text(
         """
         select started_at, raw_landing_path, records_extracted, records_inserted
@@ -70,6 +74,7 @@ def _resolve_via_extraction_runs(dates: list[_date]) -> list[str]:
         where source = 'fda'
           and started_at::date in :dates
           and raw_landing_path is not null
+          and raw_landing_path <> ''
         order by started_at
         """
     ).bindparams(sa.bindparam("dates", expanding=True))

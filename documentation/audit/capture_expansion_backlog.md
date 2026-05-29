@@ -78,13 +78,29 @@ Defer the choice to cross-source consolidation. CPSC's per-recall detail-page en
 
 (To populate when CPSC audit runs.)
 
-## USDA recalls
+## USDA recalls + USDA establishments
 
-(To populate when USDA recalls audit runs.)
+Driver: `documentation/usda/field_audit_2026_w22.md` §8 + §9. Architecture context: USDA's pattern is bulk-fetch-only (no per-record-enrichment endpoints) and both APIs return everything they offer on every fetch.
 
-## USDA establishments
+### Zero capture-expansion adds for either source
 
-(To populate when USDA establishments audit runs.)
+**Both APIs are fully captured at bronze.** The audit (2026-05-28, validated against 6072 English recall records + 7970 establishment records) confirmed no documented field is missing from `src/schemas/usda.py` or `src/schemas/usda_establishment.py`. All work for USDA happens in:
+
+- **(a) silver-remap PR**: Bug 1 fix (`recall_product.type ← processing`) + 11 lifts from JSONB to first-class columns (see `documentation/usda/field_audit_2026_w22.md` §4 + §7)
+- **Silver derive logic**: `recall_event.risk_level` derived from `recall_classification` via CASE WHEN (1:1 correlation per R2 validation)
+- **Silver element-level filter**: `firm_establishment_attributes.dbas` strips 'N/A' and 'None' placeholder element values
+
+### Items deferred to Phase 6/7 (not (b) PR scope)
+
+| Item | Reason for deferral |
+|---|---|
+| `field_product_items` structured parsing | Phase 6/7 enrichment workstream — extract embedded UPCs, lot codes, FSIS establishment numbers, dates from free text. Out of foundation-audit scope |
+| `field_company_media_contact` structured parsing | Multi-line text with embedded name/phone/email. Same Phase 6/7 enrichment slot |
+| `dbas` array-shape vs flattened-text resolution for cross-source firm dim | Decide at cross-source consolidation when CPSC's per-array firm structure is in scope |
+
+### Skipped (not eligible)
+
+- `field_press_release` and `field_en_press_release` — 99.9%/100% empty per R2 validation. Kept in bronze for shape parity, no silver lift |
 
 ## NHTSA
 
