@@ -5,7 +5,7 @@
 Phase 6 of `project_scope/implementation_plan.md` (lines 631–656) was originally scoped as "unified data model across all five sources" with deliverables spanning firm resolution, history modeling, gold materialization, operational tooling, and ERDs. Since it was scoped:
 
 1. **Several Phase 6 items already shipped** as Phase 5 prerequisites — FDA firm role reconciliation (2026-05-09), ADR 0012 source-config loader Wave 2 (2026-05-10), USDA ETag enablement (2026-05-09), silver models for 4 sources (Phases 5a–5c).
-2. **USCG is indefinitely deferred** (2026-05-09 website outage; memory note); Phase 6 is now a 4-source effort, not 5.
+2. **USCG website reactivated 2026-05-29** (per user — site was down 2026-05-09 to ~late May; extractors, validators, schemas, cassettes are all integrated and the 2026-05-17 Phase 5d historical seed captured the full 1,763-record corpus). Phase 6 is back to a 5-source effort.
 3. **Three new questions have surfaced** (`prompts/phase_6_deliverable_plan.md`) that the user wants to address before building on top of silver:
    - Is the firm model (`firm` / `firm_establishment_attributes` / `recall_event_firm`) the most logical representation, especially for USDA's split-API integration?
    - Are silver field mappings correct? The FDA `description` column is mapped to `distribution_area_summary_txt` (geographic distribution) instead of `product_description_txt` — a confirmed error. Other sources likely have similar problems.
@@ -23,7 +23,7 @@ The user's three streams are not a bolt-on — they reshape Phase 6 into a **fou
 | FDA firm role reconciliation | ✓ Done | `silver_design_notes.md:62` (2026-05-09) |
 | ADR 0012 source-config loader | ✓ Done | Wave 2 shipped 2026-05-10 (`dfca522`) |
 | USDA ETag enablement | ✓ Done | `etag_viability.sql` per `b3ac952` |
-| USCG silver model (5th source) | ✗ Cut | USCG indefinitely deferred per memory |
+| USCG silver model (5th source) | ✓ Done | Phase 5d Steps 4-6 shipped 2026-05-17 (commit `7e9edbe`) — bronze + staging + silver branches in `recall_event.sql`/`recall_product.sql`/`firm.sql`/`recall_event_firm.sql` + cassettes + short-circuit per Finding J |
 
 ### Phase 6a — Foundation Audit (user Streams 1 + 2, merged)
 
@@ -35,11 +35,12 @@ The user's three streams are not a bolt-on — they reshape Phase 6 into a **fou
 - `documentation/usda/recalls_field_mapping.md`
 - `documentation/usda/establishments_field_mapping.md`
 - `documentation/nhtsa/field_mapping.md`
-- `documentation/silver_design_notes.md` — corrected and expanded to cover all 4 sources (currently only CPSC/FDA per `silver_design_notes.md:6–8`).
+- `documentation/uscg/field_mapping.md` *(added 2026-05-29 after USCG reactivation)*
+- `documentation/silver_design_notes.md` — corrected and expanded to cover all 5 sources (currently only CPSC/FDA per `silver_design_notes.md:6–8`).
 - SQL changes to `dbt/models/staging/*.sql` and `dbt/models/silver/*.sql` implementing audit fixes (fix-immediately policy per user decision).
 - New ADR if firm model needs structural change (TBD based on findings).
 
-**Per-source audit method** (apply to CPSC, FDA, USDA recalls, USDA establishments, NHTSA):
+**Per-source audit method** (apply to CPSC, FDA, USDA recalls, USDA establishments, NHTSA, USCG):
 
 1. **API dictionary read** — open the source's authoritative reference and produce a definitive field list with semantics:
    - CPSC: `documentation/cpsc/cpsc_recalls_retrieval_web_services_programmers_guide_v1_4.pdf` (pages 2–3)
@@ -47,17 +48,18 @@ The user's three streams are not a bolt-on — they reshape Phase 6 into a **fou
    - USDA recalls: `documentation/usda/usda_fsis_recall_api_documentation.pdf`
    - USDA establishments: `documentation/usda/usda_fsis_establishment_listing_api_data_documentation.pdf`
    - NHTSA: `documentation/nhtsa/RCL.txt` (canonical field reference)
+   - USCG: `documentation/uscg/scraping_observations.md` (Findings A-S; no published spec — reverse-engineered) + `documentation/uscg/USCG-2013-0133-0005_attachment_1.pdf` (HIN/MIC regulatory background) + `documentation/uscg/NRBSS-Exposure-Survey-Final-Report-20201130-v3.0.pdf` (boat-type verbal taxonomy reference)
 2. **Raw R2 sample retrieval** — pull 3–5 raw payloads from R2 for each source:
    - Query `<source>_bronze` for representative rows (recent, varied), collect `raw_landing_path`.
    - Use `src/landing/r2.py:R2LandingClient.get_raw(key)` pattern (see `scripts/promote_error_to_cassette.py:1–22, 67–68` for the working access pattern) to retrieve and decompress.
    - User runs these queries; this plan documents the SQL and Python commands. (Per memory: user runs all code execution themselves.)
 3. **Bronze schema cross-check** — read Pydantic schema and confirm every API field is captured (or document why omitted):
-   - `src/schemas/cpsc.py`, `src/schemas/fda.py`, `src/schemas/usda.py`, `src/schemas/usda_establishment.py`, `src/schemas/nhtsa.py`
+   - `src/schemas/cpsc.py`, `src/schemas/fda.py`, `src/schemas/usda.py`, `src/schemas/usda_establishment.py`, `src/schemas/nhtsa.py`, `src/schemas/uscg.py`
 4. **Staging projection check** — for each staging model, confirm bronze→staging coverage is complete, and that empty-string-to-null normalization (ADR 0027) is applied to every nullable text field:
-   - `dbt/models/staging/stg_cpsc_recalls.sql`, `stg_fda_recalls.sql`, `stg_usda_fsis_recalls.sql`, `stg_usda_fsis_establishments.sql`, `stg_nhtsa_recalls.sql`
-5. **Silver semantic check** — for each silver column, verify the staging field chosen is the **best semantic fit** for that silver column. This is the audit's core analytical work. Known issue to triage: FDA `recall_event.description` ← `distribution_area_summary_txt` (geographic distribution) should be `product_description_txt`. Look for analogous semantic mismatches in CPSC/USDA/NHTSA. Look for staging fields that should be promoted to silver but aren't (e.g., FDA `product_description_txt` is in staging but never used).
-6. **Firm-specific deep dive** (Stream 1, executed within the FDA + USDA + CPSC + NHTSA audits):
-   - Each source contributes firm data differently — JSONB arrays (CPSC), scalar with FEI (FDA), free-text with separate establishment-listing API join (USDA), scalar manufacturer (NHTSA). Verify each path in `dbt/models/silver/firm.sql`, `firm_establishment_attributes.sql`, `recall_event_firm.sql` is semantically clean.
+   - `dbt/models/staging/stg_cpsc_recalls.sql`, `stg_fda_recalls.sql`, `stg_usda_fsis_recalls.sql`, `stg_usda_fsis_establishments.sql`, `stg_nhtsa_recalls.sql`, `stg_uscg_recalls.sql`
+5. **Silver semantic check** — for each silver column, verify the staging field chosen is the **best semantic fit** for that silver column. This is the audit's core analytical work. Known issue to triage: FDA `recall_event.description` ← `distribution_area_summary_txt` (geographic distribution) should be `product_description_txt`. Look for analogous semantic mismatches in CPSC/USDA/NHTSA/USCG. Look for staging fields that should be promoted to silver but aren't (e.g., FDA `product_description_txt` is in staging but never used).
+6. **Firm-specific deep dive** (Stream 1, executed within the FDA + USDA + CPSC + NHTSA + USCG audits):
+   - Each source contributes firm data differently — JSONB arrays (CPSC), scalar with FEI (FDA), free-text with separate establishment-listing API join (USDA), scalar manufacturer with no structured ID (NHTSA), scalar manufacturer with MIC structured ID (USCG — 93.2% populated per Finding S). Verify each path in `dbt/models/silver/firm.sql`, `firm_establishment_attributes.sql`, `recall_event_firm.sql` is semantically clean.
    - USDA specifically: assess whether the LEFT JOIN in `firm.sql:70–81` against `stg_usda_fsis_establishments` (HTML-entity decode, 99.27% match rate per `establishment_join_coverage.md:196`) is the right place for the join, or whether it belongs in bronze/staging. Investigate the 4 multi-establishment edge cases (`establishment_join_coverage.md:218–224`).
    - Cross-source firm modeling question: should `firm.sql`'s normalized-name key remain primary, or should `firm_fei_num` (FDA) and `establishment_number` (USDA) anchor a separate `firm_identifier` table? Evaluate against ADR 0002's RapidFuzz roadmap.
 7. **Per-finding decision** — for each issue surfaced, classify and act:
@@ -82,7 +84,7 @@ The user's three streams are not a bolt-on — they reshape Phase 6 into a **fou
   - ETag tuning, per-environment YAML overlays (Phase 7).
   - Periodic re-seeding (one-shot now; recurring = Phase 7).
   - USDA — already returns the full ~2,000-record corpus on every fetch; no backfill needed.
-  - USCG — indefinitely deferred.
+  - USCG — already at full corpus. The Phase 5d 2026-05-17 historical seed captured the full 1,763-record corpus per Finding J's "Records Found: 01763" — no further backfill needed. Daily incremental + Finding J short-circuit per `_should_short_circuit` handles ongoing freshness.
 
 **Sources + treatment:**
 
@@ -309,15 +311,15 @@ Re-checked against `implementation_plan.md:649–654`, all four still apply but 
 ## Critical Files
 
 **To audit (6a):**
-- API dictionaries: `documentation/{cpsc,fda,usda,nhtsa}/*.pdf` + `documentation/nhtsa/RCL.txt`
-- Bronze schemas: `src/schemas/{cpsc,fda,usda,usda_establishment,nhtsa}.py`
+- API dictionaries: `documentation/{cpsc,fda,usda,nhtsa}/*.pdf` + `documentation/nhtsa/RCL.txt` + `documentation/uscg/{scraping_observations.md,USCG-2013-0133-0005_attachment_1.pdf,NRBSS-Exposure-Survey-Final-Report-20201130-v3.0.pdf}`
+- Bronze schemas: `src/schemas/{cpsc,fda,usda,usda_establishment,nhtsa,uscg}.py`
 - Staging: `dbt/models/staging/stg_*.sql`
 - Silver: `dbt/models/silver/{recall_event,recall_product,firm,firm_establishment_attributes,recall_event_firm}.sql`
 - R2 access: `src/landing/r2.py` (existing `R2LandingClient.get_raw()` pattern)
 
 **To write/update (6a):**
-- `documentation/{cpsc,fda,usda,nhtsa}/field_mapping.md` (new, per source)
-- `documentation/silver_design_notes.md` (correct + expand to 4 sources)
+- `documentation/{cpsc,fda,usda,nhtsa,uscg}/field_mapping.md` (new, per source)
+- `documentation/silver_design_notes.md` (correct + expand to 5 sources)
 - Staging/silver SQL changes per audit findings
 
 **To touch later (6b–6f):**
@@ -353,7 +355,6 @@ Re-checked against `implementation_plan.md:649–654`, all four still apply but 
 
 - TODO.md item 12: Blog post on string quoting/escaping (independent, not Phase 6).
 - TODO.md item 33: 2–3 day local run-through before historical seeding (Phase 7 prerequisite).
-- USCG (`Phase 5d`): indefinitely deferred per memory; reframe Phase 6 deliverable list as 4-source.
 - ADR 0029 v2 observability triggers: still v1 stance; revisit per ADR 0029 upgrade triggers.
 
 ## Notes on Implementation Plan Updates
@@ -361,5 +362,5 @@ Re-checked against `implementation_plan.md:649–654`, all four still apply but 
 Once this plan is approved, `project_scope/implementation_plan.md` Phase 6 section (lines 631–656) should be rewritten to reflect:
 1. The 6a foundation audit (currently missing).
 2. The completed items moved out of Phase 6 scope.
-3. USCG removed from scope language.
-4. Phase ordering within 6 (6a → 6b/6c/6d → 6e → 6f).
+3. USCG reactivation (2026-05-29) — back in 5-source scope.
+4. Phase ordering within 6 (6a → 6a.5 → 6b/6c/6d → 6e → 6f).
