@@ -98,12 +98,22 @@ order by product_count;
 
 \echo ''
 \echo '=== Q9: HazardType population check ==='
--- Validates the finding that HazardType is always an empty string despite
+-- Validates the finding that hazard_type is always an empty string despite
 -- hazards arrays being non-empty. Used to assess silver filter viability.
+--
+-- 2026-05-29 key-casing fix: this query previously used PascalCase
+-- (`hazards->0->>'HazardType'`) which silently returned NULL for every row
+-- because bronze JSONB stores **snake_case** keys (`hazard_type`), not the
+-- PascalCase keys the API returns. See `documentation/cpsc/field_audit_2026_w22.md`
+-- §5 "Bronze JSONB key casing" gotcha for the full explanation. The
+-- previously-broken query happened to align with Finding G's "always empty"
+-- conclusion, so the bug was silent. After this fix, the result will reflect
+-- the actual hazard_type population rate in bronze (still ~100% empty per
+-- audit Q4 in inspect_array_field_population.sql, but now correctly verified).
 select
   count(*) as total_recalls,
   sum(case when hazards != '[]'::jsonb then 1 else 0 end) as recalls_with_hazards,
-  sum(case when hazards != '[]'::jsonb and (hazards->0->>'HazardType') != '' then 1 else 0 end) as recalls_with_hazard_type
+  sum(case when hazards != '[]'::jsonb and (hazards->0->>'hazard_type') != '' then 1 else 0 end) as recalls_with_hazard_type
 from cpsc_recalls_bronze;
 
 \echo ''
