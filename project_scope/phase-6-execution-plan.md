@@ -71,11 +71,16 @@ The user's three streams are not a bolt-on — they reshape Phase 6 into a **fou
 
 ### Phase 6b — Firm Entity Resolution
 
-Pending Phase 6 items, executed **after 6a settles the firm model**:
+Pending Phase 6 items, executed **after 6a settles the firm model**.
+
+**Broader framing (2026-05-29):** Phase 6b is the **pre-silver text-processing stage** for everything firm-adjacent. RapidFuzz fuzzy matching is the headline algorithm, but the stage also bundles regex-based name cleaning (CPSC suffix stripping), DBA extraction (CPSC + USDA), text-embedded identifier extraction (USDA `field_product_items` establishment numbers), and other "prepare the name before anchoring" preprocessing. Per user 2026-05-29: "the name cleaning [is] bundled in the rapidfuzz stage 6b with FDA firms and other information that needs to be extracted/manipulated with rapidfuzz before settling in silver."
+
+Pending items:
 
 - Add `rapidfuzz` to `pyproject.toml` (per ADR 0002, `implementation_plan.md:599`).
 - Implement cross-source firm matching with FDA `firm_fei_num` as anchor (per ADR 0002).
 - Resolve AC DELCO / ACDELCO drift class (currently produces 2 rows per `firm.sql:21–22`).
+- **CPSC firm-name normalization** — strip "of <location>" + "dba <name>" suffixes from Manufacturers/Importers/Distributors before fuzzy matching; extract DBAs as alternate-name candidates. See `documentation/cpsc/field_audit_2026_w22.md` §3 Bug 2 + §6 Option B (2026-05-29 audit). Detail in subsection below.
 - **USDA recall-to-establishment disambiguation** — expanded scope per Phase 6a audit findings. See `documentation/usda/field_audit_2026_w22.md` §6 + §9 (2026-05-28 R2 validation). Detail in subsection below.
 - dbt tests for cross-source firm rollups (Honda, Tyson, etc.) per Phase 6 quality gate.
 
@@ -144,6 +149,38 @@ The `mixed` bucket dominates by record count — most disambiguation work happen
 **Phase 6/7 dependency for Signal 1.** Text-embedded establishment number extraction from `field_product_items` is part of the Phase 6/7 structured-parse enrichment workstream (per `documentation/usda/field_audit_2026_w22.md` §7 decision #4). For Phase 6b it can be partially mocked with a regex like `r'establishment number ([MPIGV]-?\d+[A-Z]?(?:\s*\+\s*[MPIGV]-?\d+[A-Z]?)*)'` and refined as the structured-parse work matures. Phase 6b ships with whatever extraction quality is available; the `match_confidence` column lets us track improvement over time.
 
 **Future-source generalization.** This pattern (per-recall disambiguation when name matching fans out) likely applies to NHTSA and possibly CPSC. NHTSA's `mfgname` doesn't have a structured-ID counterpart at all (no FEI analog), so the name-fan-out problem there is *worse*. NHTSA disambiguation by `maketxt` (vehicle make) + `yeartxt` is an analogous Phase 6b workstream — keep the signal-hierarchy + match_confidence pattern source-agnostic so it generalizes.
+
+#### CPSC firm-name normalization (Phase 6a audit follow-on)
+
+**Problem statement.** CPSC encodes firms in four parallel arrays (Manufacturers, Importers, Distributors, plus Retailers which is being lifted out of the firm dim under §6 Option B of the CPSC audit). Per `documentation/cpsc/field_audit_2026_w22.md` §3 Bug 2:
+
+- The remaining three firm-role arrays carry deterministic suffix patterns that fragment the same firm into multiple rows in the current `firm.sql` `upper(trim())` keying:
+  - **Geography appended** — `"ZOLIQUEX, of China"`, `"Apex Gaming PCs Inc., of Houston, Texas"`, `"Aria Child Inc. of Dedham, Mass."`
+  - **DBA parentheticals** — `"Cheyouhang Technology Shenzhen Co., Ltd., dba ZOLIQUEX, of China"`, `"Jiangxi Runfuyuan Biotechnology Co., Ltd dba Agiiman, of China"`
+- `CompanyID` is empirically `""` across all 4 firm-role arrays in the cassette (§3 Bug 3). CPSC contributes **no structured identifier** to cross-source firm rollup — name is the only join lever.
+
+**Why this is preprocessing, not fuzzy matching.** A purely fuzzy step (`rapidfuzz.fuzz.ratio("ZOLIQUEX" , "ZOLIQUEX, of China")` ≈ 60%) would either fail to collapse these (high threshold) or over-merge unrelated firms (low threshold). The fix is deterministic: strip the suffix patterns *before* the keying / fuzzy step. The suffix forms are bounded — "of <location>", "dba <name>", trailing entity tokens — and capture the dominant fragmentation modes the audit surfaced.
+
+**Approach: regex strip + DBA extract as the pre-silver normalization stage.**
+
+1. **Strip patterns** (applied in order on `Manufacturers/Importers/Distributors` `.Name` before normalize):
+   - `r',?\s*of\s+[^,]+\.?$'` — trailing geographic clause (`, of China`, ` of Dedham, Mass.`)
+   - `r',?\s*(?:dba|doing business as)\s+([^,]+?)(?:,\s*of\s+[^,]+)?$'` — DBA + optional trailing geography. Both forms observed in the R2 corpus 2026-05-29 (abbreviated `"dba"` and full-form `"doing business as"`, e.g. `"Shenzhen Maikeer Industrial Co., Ltd., doing business as MalkerDirect, of China"`). Capture group 1 = the DBA candidate.
+   - Final pass: `r'\s*,\s*$'` to clean trailing comma after stripping
+2. **DBA preservation.** Extracted DBA candidates feed `firm.alternate_names` (JSONB array, new column) so the surface-form variants are preserved for FastAPI search and for the RapidFuzz match-explanation surface ("matched as DBA of <legal name>").
+3. **Then RapidFuzz.** After stripping, the cleaned names enter the standard cross-source fuzzy-matching step alongside FDA `firm_legal_nam` and USDA `establishment_name`. A `match_confidence` column (parallel to USDA's §6 design) records the path: `'cpsc_suffix_strip_exact'`, `'cpsc_dba_extract_exact'`, `'rapidfuzz_high'`, `'rapidfuzz_low_ambiguous_null'`, etc.
+
+**Implementation approach.**
+
+1. New normalization helpers — `src/silver/firm_normalization.py` (or a dbt macro `{{ cpsc_clean_firm_name(col) }}` for SQL-side execution). Unit tests against the §3 Bug 2 cassette examples.
+2. CPSC staging adds two columns per firm-role array element: `normalized_name` (post-strip) and `extracted_dba` (nullable). The existing `firm.sql` CPSC branches consume `normalized_name`; `firm_event_firm.firm_id` keys on it.
+3. `firm.alternate_names` JSONB column populated from extracted DBAs across sources (CPSC `extracted_dba`, USDA `dbas` array).
+4. dbt test: assert no firm row in `firm.normalized_name` ends with `, of <X>` or contains ` dba ` — fails loudly if the strip regex doesn't keep up with new patterns.
+5. Operational query: surface the count of firm rows that strip changed (`raw_name != normalized_name`) as a per-extraction quality KPI; investigate if the count drops sharply (regex over-broad) or climbs sharply (new pattern variant emerging).
+
+**Cross-reference to USDA disambiguation.** Both workstreams share the `match_confidence` column on `recall_event_firm` — CPSC's confidence values describe the *normalization path* that produced the firm match; USDA's describe the *disambiguation signal* that resolved a name fan-out. Same column, complementary semantics. The pre-silver normalization step (CPSC suffix strip, USDA DBA-aware matching, FDA name normalization) is the shared substrate; per-source signal extraction sits on top of it.
+
+**Future-source generalization.** NHTSA's `mfgname` (also no structured-ID counterpart per ADR 0031's AC DELCO / ACDELCO drift class) likely has analogous suffix patterns — vehicle-industry mfgname strings sometimes include parent-company suffixes, regional divisions, or model-year qualifiers. Reuse the strip-then-RapidFuzz pattern; add NHTSA-specific regex variants as a Phase 6b sub-task.
 
 ### Phase 6c — History + Lifecycle
 
