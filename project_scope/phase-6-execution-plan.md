@@ -92,14 +92,14 @@ The user's three streams are not a bolt-on — they reshape Phase 6 into a **fou
 |---|---|---|---|---|
 | **CPSC** | `recalls deep-rescan cpsc --lookback-days 7700 --change-type=historical_seed` | Fresh API extraction (no auth, no Akamai) | ~30 MB | Low |
 | **NHTSA** | `recalls deep-rescan nhtsa --change-type=historical_seed` | Fresh re-download of both PRE_2010 + POST_2010 archives via `NhtsaDeepRescanLoader` (`src/extractors/nhtsa.py:565`). Config's `historical_seed_urls` already lists PRE_2010 (`config/sources/nhtsa.yaml:16`); no code change needed. | ~400-450 MB | Low operationally; dominant on storage |
-| **FDA** | `recalls deep-rescan fda --change-type=historical_seed` w/ multi-year window covering everything iRES offers (per user 2026-05-29: "Pull in everything") | Fresh API extraction | ~500 MB - 1 GB (sized after FDA depth probe) | Medium (Akamai) |
+| **FDA** | `recalls deep-rescan fda --change-type=historical_seed` w/ multi-year window covering everything iRES offers (per user 2026-05-29: "Pull in everything") | Fresh API extraction | ~1.5-3 GB (revised up from ~500 MB - 1 GB after the 2026-05-29 capture-expansion probe — `codeinformation` max length empirically 205,424 chars/record; even a few % of records near that ceiling drives the historical seed materially larger than the original estimate. Tighten after FDA depth probe.) | Medium (Akamai) |
 
 **Pre-flight (one-time, completes before any seed runs):**
 
 1. **FDA depth probe** — Bruno request or one-shot API call to find oldest available `eventlmd`. Determines the FDA deep-rescan date window. Per user direction, the target is "everything iRES will give us" — no artificial cap.
 2. **R2 inventory check** — `aws s3 ls` against the NHTSA + CPSC + FDA R2 prefixes to size existing payloads. Confirms what's already there. NHTSA POST_2010 confirmed present from prior daily incremental runs; PRE_2010 + CPSC/FDA depth TBD.
 3. **Storage estimate finalized** — tighten the per-source estimates above with the depth probe + R2 inventory data.
-4. **Neon tier upgrade** — pick a tier with 6 months of growth headroom past the combined ~1-1.5 GB estimate. Single upgrade event, not per-source. User-executed.
+4. **Neon tier upgrade** — pick a tier with 6 months of growth headroom past the combined ~2-3.5 GB estimate (CPSC ~30 MB + NHTSA ~400-450 MB + FDA ~1.5-3 GB; FDA estimate revised up per 2026-05-29 capture-expansion probe — see FDA row above). Single upgrade event, not per-source. User-executed.
 5. **Akamai readiness for FDA** — `data/user_agents.json` rotation current; plan to run the FDA seed off-peak hours.
 6. **NHTSA bronze assertion handling — reactive (no pre-flight action)** — per user 2026-05-29. The existing `dbt/tests/source_assumptions/assert_nhtsa_eleven_tuple_identity_stable.sql` is `severity=warn` (cannot block dbt build) and runs at dbt-test time, not bronze-insert time. POST_2010 re-download produces identical content (content-hash dedup → no new bronze rows → no new assertion signal); PRE_2010 brings brand-new campnos with no group overlap. Reactive plan: run the seed, then run dbt, then inspect warn-count delta. Investigate any new drift groups — likely real signal worth folding into the audit, not noise.
 

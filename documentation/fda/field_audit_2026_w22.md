@@ -204,12 +204,47 @@ Re-categorized backlog reflects this in `documentation/audit/capture_expansion_b
 
 ## 7. Capture-expansion items deferred to backlog
 
-Logged in `documentation/audit/capture_expansion_backlog.md` § FDA. Summary by priority:
+Logged in `documentation/audit/capture_expansion_backlog.md` § FDA. Original priority groupings + empirical verdicts from the 2026-05-29 probe sweep:
 
-- **HIGH** — `codeinformation`, `pressreleaseurl`, `pressreleaseissuedt`
-- **MEDIUM** — `firmcitynam`, `firmstateprvncnam`, `firmcountrynam`, `firmline1adr`, `firmline2adr`, `firmpostalcd`, `firmsurvivingnam`, `firmsurvivingfei`, `pressreleasetype`, `productdescriptionshort`
-- **LOW** — `recallreasonshort`, `distributionpatternshort`, `postedinternetdt`, `createdt`
-- **SKIP** — `fieldname` / `newvalue` / `oldvalue` (different endpoint), the various `*indicator` fields (UI metadata, not content), `*short` variants where deriving in silver is sufficient (TBD), `productlmd` (not available via bulk POST per Finding K0)
+### 7a. Bulk POST capture-expandable (ship in the (b) PR)
+
+Confirmed in the 33-column bulk POST datagroup per `iRES_enforcement_reports_api_usage_documentation.pdf` page 7 and empirically validated via `scripts/fda/audit/probe_displaycolumns.py` against a 100-record window starting `eventlmdfrom=05/01/2026`.
+
+| Field | Population rate (probe window) | Empirical notes | Verdict |
+|---|---|---|---|
+| `codeinformation` | not yet measured at corpus scale | Max length **205,424 chars** in a single record. Page-size penalty 5000 → 2500 (already accepted per §6 decision 5). Phase 6a.5 sizing impact noted in plan. | **SHIP** |
+| `firmcitynam` | 100% | 39 distinct in 100 records. | **SHIP** |
+| `firmcountrynam` | 100% | 3 distinct (United States 97, Netherlands 2, Switzerland 1). Required to discriminate non-US firms (state fields are NULL for them). | **SHIP** |
+| `firmline1adr` | 100% | 42 distinct, 10-30 chars. | **SHIP** |
+| `firmline2adr` | 0% (in this window) | All 100 NULL. Documented nullable per `api_observations.md:348`. Ship for schema future-proofing — zero storage cost on NULL. | **SHIP** |
+| `firmpostalcd` | 97% | Mixed 5-digit ZIP and ZIP+4 (max 10 chars). The 3 NULL rows are the 3 international firms. | **SHIP** |
+| `firmstatecd` | 97% | **Newly surfaced** — was not previously known to exist. 2-letter state code, 19 distinct. Co-varies perfectly with `firmstateprvncnam` (same NULLs, same per-state counts). | **SHIP** |
+| `firmstateprvncnam` | 97% | Full state name, 19 distinct. Pairs with `firmstatecd`. | **SHIP** (both — denormalized lookup) |
+| `firmsurvivingnam` | 15% | 3 distinct in 100 records (e.g. "ZimVie US Corp LLC" 13 rows). Populates iff firm renamed after recall. Critical for firm-dim continuity in Phase 6b. | **SHIP** |
+| `firmsurvivingfei` | 15% | Paired with `firmsurvivingnam` — same row-level NULL alignment. | **SHIP** |
+| `postedinternetdt` | 84% | `MM/DD/YYYY`, distinct from `eventlmd` (sample: posted `05/07/2025`, lmd `05/28/2026`). Definitions PDF: may be blank for recalls prior to 2022-10-25; the 16% NULL in this 2026 window is unexpectedly high — corpus rate likely lower than the PDF implies. | **SHIP** |
+
+### 7b. Lookup-endpoint only — defer to enrichment pass
+
+Each requested column returned **STATUSCODE 406** on bulk POST (or is documented as lookup-only per `api_observations.md` Finding K0). Capture would require a per-event or per-product GET pass after the bulk POST, same architectural pattern as the K0.1 `PRODUCTLMD` deferral.
+
+| Field | Bulk POST status | Lookup endpoint | Notes |
+|---|---|---|---|
+| `pressreleaseurl` | 406 (per probe 2026-05-29) | `GET /search/pressreleaseurls/?eventid={id}` | Returns `RESULT.COLUMNS = [RECALLEVENTID, PRESSRELEASETYPE, PRESSRELEASEISSUEDT, PRESSRELEASEURL]`. Bruno collection at `bruno/fda/lookup/get_press_release_urls.yml`. |
+| `pressreleaseissuedt` | 406 (same probe) | Same endpoint | — |
+| `pressreleasetype` | 406 (same probe) | Same endpoint | Values per Definitions PDF: "State, Firm, or FDA". |
+| `productdescriptionshort` | Not in 33-column list | `GET /recalls/event/{eventid}` or `/recalls/product/{productid}` | Truncated UI variant of `productdescriptiontxt`. May be derivable in silver via `LEFT(productdescriptiontxt, N)` — defer the "derive vs fetch" decision until the cross-source `product_name` strategy is set. |
+| `recallreasonshort` | Not in 33-column list | Same lookup endpoints | Truncated UI variant of `productshortreasontxt`. Same derive-vs-fetch decision as above. |
+| `distributionpatternshort` | Not in 33-column list | Same lookup endpoints | Truncated variant of `distributionareasummarytxt`. |
+| `codeinfoshort` | Not in 33-column list | Same lookup endpoints | Truncated variant of `codeinformation`. |
+| `createdt` | Not in 33-column list | Lookup endpoints | Definitions PDF: "Date that recall was first posted." Likely distinct from `postedinternetdt` but unclear; lookup-endpoint probe would clarify. |
+
+### 7c. Permanently skipped
+
+- `fieldname` / `newvalue` / `oldvalue` — history-endpoint columns; the history endpoints are empirically empty per Finding L.
+- `*indicator` fields (`productdescriptionindicator`, `recallreasonindicator`, `codeinfoindicator`, `distributionpatternindicator`) — UI metadata, not content. Per Definitions PDF: "Indicator associated with [the field] that identifies when the truncated version is displayed on the search results and event/product details pop-up screen and where an option to expand to view the full text is given (i.e., 'more...')."
+- `productlmd` — empirically null on every probed surface per Finding K0.1.
+- `rid` — per-page positional index (sample: 1, 34, 3 across distinct rows), not record-stable. Capturing would force a `content_hash` churn on every refetch.
 
 ## 8. R2 validation status
 
@@ -267,8 +302,8 @@ Cassette inspection (`tests/fixtures/cassettes/fda/test_happy_path_single_page.y
 
 ### Still to do
 
-- [ ] Probe HIGH-priority (b) candidates: `scripts/fda/audit/probe_displaycolumns.py --columns productid,recalleventid,firmlegalnam,codeinformation,pressreleaseurl,pressreleaseissuedt --eventlmdfrom 04/01/2026` — verify they populate
-- [ ] Probe MEDIUM-priority (b) candidates: firm address fields, surviving firm name/FEI, productdescriptionshort
+- [x] Probe HIGH-priority (b) candidates — completed 2026-05-29. `codeinformation` validated (max 205,424 chars). `pressreleaseurl` + `pressreleaseissuedt` returned STATUSCODE 406 (bulk POST datagroup excludes them); lookup-endpoint verdict per §7b. Discovery of Finding K0.2 (sort-in-displaycolumns rule) closed the H1 impersonation-paradox misdiagnosis (see api_observations.md Finding K0.2 for the controlled-test trace).
+- [x] Probe MEDIUM-priority (b) candidates — completed 2026-05-29. All firm-address fields validated in a single 14-column sweep. Surfaced `firmstatecd` as a previously-unknown 2-letter state code paired with `firmstateprvncnam`. See §7a table for per-field empirical verdicts.
 - [x] `OCS` resolved — Office of the Chief Scientist; cosmetics + color-additive regulation
 - [ ] Decide `VOLUNTARYTYPETXT` normalization shape (string canonicalization vs boolean) — deferred to cross-source consolidation
 

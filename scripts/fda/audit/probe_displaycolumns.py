@@ -1,8 +1,7 @@
-"""Probe FDA's bulk POST endpoint with arbitrary displaycolumns.
+"""Probe FDA's bulk POST /recalls/ endpoint with arbitrary displaycolumns.
 
-For the (b) capture-expansion side of the audit: verify proposed-add fields
-(e.g., ``codeinformation``, ``pressreleaseurl``, ``productdescriptionshort``)
-actually populate in real FDA responses before committing to a schema migration.
+For the capture-expansion side of the audit: verify proposed-add fields
+populate in real FDA responses before committing to a schema migration.
 
 Does NOT land to R2, does NOT load to bronze, does NOT update the watermark.
 Pure exploratory tool. By default the response is saved to
@@ -11,41 +10,44 @@ just wants different aggregation doesn't burn another API call.
 
 Auth via FDA_AUTHORIZATION_USER + FDA_AUTHORIZATION_KEY from Settings.
 
-**Anti-bot-detection stack (2026-05-28).** Production's ``src/extractors/fda.py``
-runs from GitHub Actions IP space at ~1 request/day and stays under Akamai Bot
-Manager's threshold with a simple httpx + UA-override stack. Running probes from
-a residential ISP IP trips Akamai's bot-fingerprinting at much lower request
-rates (well under Finding N's 33 req/min) because the python-httpx TLS
-fingerprint, sparse headers, and lack of cookie persistence across invocations
-all read as "automated client." This script therefore uses ``curl_cffi`` to
-impersonate a real Chrome TLS handshake + HTTP/2 settings + header order, plus
-a disk-backed cookie jar at ``data/exploratory/fda/akamai_cookies.json`` so
-Akamai's ``_abck`` / ``bm_sz`` session cookies persist across probe invocations
-(the persistence makes us look like a returning browser rather than a forgetful
-client). This addresses three of four bot signals; the residual is IP-class
-scoring of residential vs datacenter, which Python can't fix.
+## HTTP stack
 
-Usage:
+Mirrors production's ``src/extractors/fda.py``: httpx + Mozilla UA + auth
+headers only — no TLS impersonation, no Origin/Referer, no cookie persistence.
+The production stack is what FDA's Akamai edge expects and runs cleanly from
+both GitHub Actions and residential ISP IPs.
 
-    # Verify high-priority capture-expansion candidates
-    python scripts/fda/audit/probe_displaycolumns.py \\
-        --columns "productid,recalleventid,firmlegalnam,codeinformation" \\
-        --eventlmdfrom 04/01/2026
+## Validation rules at the FDA edge
 
-    # Wider date range, larger sample
-    python scripts/fda/audit/probe_displaycolumns.py \\
-        --columns "productid,recalleventid,firmcitynam,firmstatecd" \\
-        --eventlmdfrom 04/01/2026 --eventlmdto 04/30/2026 \\
-        --rows 1000 --print-samples 5
+Two distinct rules to be aware of when designing probes:
 
-    # Throwaway probe — do not save the response
-    python scripts/fda/audit/probe_displaycolumns.py \\
-        --columns "codeinformation" --eventlmdfrom 05/01/2026 --no-save
+  • **Finding O — sort field must be in displaycolumns.** A POST whose ``sort``
+    column is absent from ``displaycolumns`` returns HTTP 204 No Content (Akamai
+    silent block at the edge, never reaches the FDA app for a STATUSCODE 406).
+    This probe enforces the rule at argument-parse time via ``--sort``
+    pre-flight to avoid burning probe budget on malformed payloads.
 
-    # Force-clear the persisted Akamai cookies (e.g., session has gone stale
-    # and Akamai is silent-204'ing every request)
-    python scripts/fda/audit/probe_displaycolumns.py \\
-        --columns "productid" --eventlmdfrom 05/20/2026 --clear-cookies
+  • **Finding K0 — only 33 columns are valid for the bulk POST datagroup.**
+    Per ``iRES_enforcement_reports_api_usage_documentation.pdf`` page 7. Fields
+    outside the list (``productlmd``, ``pressreleaseurl``, all ``*short`` and
+    ``*indicator`` variants, ``createdt``) return STATUSCODE 406 — those are
+    lookup-endpoint columns only. See ``documentation/fda/api_observations.md``
+    Finding K0 / K0.1 for the cost-benefit framing on lookup-endpoint
+    enrichment.
+
+## Usage
+
+```
+# Verify a capture-expansion candidate from the bulk POST datagroup
+python scripts/fda/audit/probe_displaycolumns.py \\
+    --columns "productid,recalleventid,firmlegalnam,codeinformation,eventlmd" \\
+    --eventlmdfrom 05/01/2026 --rows 100 --print-samples 2
+
+# Throwaway probe — do not save the response
+python scripts/fda/audit/probe_displaycolumns.py \\
+    --columns "productid,recalleventid,firmcitynam,eventlmd" \\
+    --eventlmdfrom 05/01/2026 --no-save
+```
 """
 
 from __future__ import annotations
@@ -58,7 +60,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from curl_cffi import requests as cffi_requests
+import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -70,18 +72,11 @@ from src.config.settings import Settings  # noqa: E402
 _FDA_BASE_URL = "https://www.accessdata.fda.gov/rest/iresapi"
 _RECALLS_ENDPOINT = "/recalls/"
 
-# curl_cffi impersonation target — sends a Chrome-class TLS ClientHello (JA3/JA4),
-# HTTP/2 SETTINGS frames, browser-typical header set, and consistent header order.
-# Akamai Bot Manager fingerprints all three of those. We pick a recent Chrome
-# version supported by curl_cffi (chrome131 is broadly available in current
-# releases; bump as curl_cffi adds newer impersonation profiles).
-_IMPERSONATE = "chrome131"
-
-# Akamai bot-manager session cookies persist across probe invocations so we look
-# like a returning browser rather than a forgetful client. Gitignored — under
-# data/exploratory/ per .gitignore:64. Treat as sensitive (contains an
-# Akamai session token).
-_COOKIE_JAR_PATH = DEFAULT_CACHE_DIR / "akamai_cookies.json"
+# Exact UA value from src/extractors/fda.py:136 — FDA's own iRES API Python
+# sample code uses this string. Sending the default `python-httpx/X.Y.Z` value
+# is suspected to trigger FDA's anti-abuse throttle on the very first request
+# per Finding N in api_observations.md.
+_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 _DEFAULT_PROBE_DIR = DEFAULT_CACHE_DIR / "probes"
 
@@ -91,50 +86,12 @@ def _save_response(records: list[dict[str, Any]], probe_dir: Path, columns: str)
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     path = probe_dir / f"probe_{ts}.json"
     path.write_text(
-        json.dumps({"columns": columns, "fetched_at": ts, "records": records}, indent=2)
+        json.dumps(
+            {"columns": columns, "fetched_at": ts, "records": records},
+            indent=2,
+        )
     )
     return path
-
-
-def _load_cookies() -> list[dict[str, str]]:
-    """Load persisted Akamai cookies from disk; tolerate corruption / absence."""
-    if not _COOKIE_JAR_PATH.exists():
-        return []
-    try:
-        data = json.loads(_COOKIE_JAR_PATH.read_text())
-        if isinstance(data, list):
-            return [c for c in data if isinstance(c, dict) and "name" in c and "value" in c]
-        return []
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def _save_cookies(session: cffi_requests.Session) -> int:
-    """Persist Akamai-domain cookies from ``session`` to disk. Returns count saved."""
-    cookies_to_save: list[dict[str, str]] = []
-    try:
-        for cookie in session.cookies.jar:
-            domain = cookie.domain or ""
-            if "fda.gov" not in domain:
-                continue
-            cookies_to_save.append(
-                {
-                    "name": cookie.name,
-                    "value": cookie.value or "",
-                    "domain": domain,
-                    "path": cookie.path or "/",
-                }
-            )
-    except Exception as exc:  # noqa: BLE001 — best-effort persistence
-        print(f"# Warning: could not enumerate session cookies: {exc}", file=sys.stderr)
-        return 0
-    try:
-        _COOKIE_JAR_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _COOKIE_JAR_PATH.write_text(json.dumps(cookies_to_save, indent=2))
-    except OSError as exc:
-        print(f"# Warning: failed to persist Akamai cookies: {exc}", file=sys.stderr)
-        return 0
-    return len(cookies_to_save)
 
 
 def main() -> int:
@@ -168,6 +125,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--sort",
+        default="eventlmd",
+        help=(
+            "Sort column (default: eventlmd). Per Finding O the sort column "
+            "MUST appear in --columns or FDA returns HTTP 204 No Content."
+        ),
+    )
+    parser.add_argument(
         "--print-samples",
         type=int,
         default=3,
@@ -184,16 +149,22 @@ def main() -> int:
         action="store_true",
         help="Throwaway probe — do not write the response to disk.",
     )
-    parser.add_argument(
-        "--clear-cookies",
-        action="store_true",
-        help=(
-            "Delete the persisted Akamai cookie jar before this probe runs. "
-            "Use when the prior session has been silent-blocked and you want a "
-            "fresh handshake with a clean cookie state."
-        ),
-    )
     args = parser.parse_args()
+
+    # Finding O pre-flight: sort column must be in displaycolumns or FDA
+    # returns HTTP 204. Catch the misconfiguration at parse time so probe
+    # budget is not burned on a malformed payload.
+    requested_columns = [c.strip() for c in args.columns.split(",") if c.strip()]
+    if args.sort not in requested_columns:
+        print(
+            f"ERROR: --sort '{args.sort}' is not in --columns. "
+            "Per Finding O the sort column MUST appear in displaycolumns or "
+            "FDA's edge returns HTTP 204 No Content (Akamai silent block). "
+            f"Add '{args.sort}' to --columns, or change --sort to a column you "
+            "already requested.",
+            file=sys.stderr,
+        )
+        return 2
 
     settings = Settings()  # type: ignore[call-arg]
     if settings.fda_authorization_user is None or settings.fda_authorization_key is None:
@@ -202,10 +173,6 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-
-    if args.clear_cookies and _COOKIE_JAR_PATH.exists():
-        _COOKIE_JAR_PATH.unlink()
-        print(f"# Cleared {_COOKIE_JAR_PATH}", file=sys.stderr)
 
     filters = [f"{{'eventlmdfrom':'{args.eventlmdfrom}'}}"]
     if args.eventlmdto:
@@ -217,83 +184,52 @@ def main() -> int:
         "filter": filter_str,
         "start": 1,
         "rows": args.rows,
-        "sort": "eventlmd",
+        "sort": args.sort,
         "sortorder": "desc",
     }
     url = f"{_FDA_BASE_URL}{_RECALLS_ENDPOINT}?signature={int(time.time())}"
 
     print(f"# Probe: columns={args.columns}", file=sys.stderr)
-    print(f"# Probe: filter={filter_str}, rows={args.rows}", file=sys.stderr)
-    print(f"# Probe: impersonating {_IMPERSONATE}", file=sys.stderr)
+    print(f"# Probe: filter={filter_str}, rows={args.rows}, sort={args.sort}", file=sys.stderr)
 
-    session = cffi_requests.Session()
-
-    # Pre-populate session with any persisted Akamai cookies — sending them back
-    # makes Akamai see a continued browser session rather than a fresh-process
-    # "forgetful client" pattern.
-    persisted = _load_cookies()
-    for c in persisted:
-        try:
-            session.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"])
-        except Exception as exc:  # noqa: BLE001
-            print(
-                f"# Warning: could not apply persisted cookie {c.get('name', '?')}: {exc}",
-                file=sys.stderr,
-            )
-    if persisted:
-        print(
-            f"# Loaded {len(persisted)} Akamai cookie(s) from {_COOKIE_JAR_PATH}",
-            file=sys.stderr,
-        )
-    else:
-        print("# No prior Akamai cookies — fresh browser session", file=sys.stderr)
-
+    # Mirror production src/extractors/fda.py:320-329 exactly.
     try:
-        response = session.post(
-            url,
-            data={"payLoad": json.dumps(payload)},
-            headers={
-                # Auth headers — curl_cffi merges these with the impersonate defaults.
-                "Authorization-User": settings.fda_authorization_user.get_secret_value(),
-                "Authorization-Key": settings.fda_authorization_key.get_secret_value(),
-                # Browser-typical for cross-origin XHR; Akamai checks Origin /
-                # Referer against the page that loads the iRES dashboard.
-                "Origin": "https://www.accessdata.fda.gov",
-                "Referer": "https://www.accessdata.fda.gov/scripts/ires/apidocs/",
-            },
-            impersonate=_IMPERSONATE,
-            timeout=60,
-        )
-    except Exception as exc:  # noqa: BLE001 — surface any curl_cffi failure as an error
+        with httpx.Client(
+            timeout=60.0,
+            follow_redirects=True,
+            headers={"User-Agent": _USER_AGENT},
+        ) as client:
+            response = client.post(
+                url,
+                data={"payLoad": json.dumps(payload)},
+                headers={
+                    "Authorization-User": settings.fda_authorization_user.get_secret_value(),
+                    "Authorization-Key": settings.fda_authorization_key.get_secret_value(),
+                },
+            )
+    except httpx.TransportError as exc:
         print(f"ERROR: network failure: {exc}", file=sys.stderr)
         return 2
-
-    # Persist whatever Akamai cookies the response set, so the next probe
-    # invocation continues the same session.
-    saved_count = _save_cookies(session)
-    if saved_count:
-        print(
-            f"# Persisted {saved_count} cookie(s) to {_COOKIE_JAR_PATH}",
-            file=sys.stderr,
-        )
 
     content_type = response.headers.get("Content-Type", "")
     if "text/html" in content_type:
         print(
             f"ERROR: FDA anti-abuse throttle detected "
             f"(HTTP {response.status_code}, HTML response in place of JSON). "
-            "Wait at least 30 minutes before retrying. "
-            "If persistent, --clear-cookies and wait an hour, or run from CI.",
+            "This is the production-extractor 302→/apology_objects/ redirect pattern. "
+            "Wait at least 30 minutes before retrying.",
             file=sys.stderr,
         )
         return 2
     if response.status_code == 204:
         print(
-            "ERROR: HTTP 204 No Content — Akamai bot-manager silent block. "
-            "curl_cffi impersonation + cookie persistence is the strongest "
-            "Python-level fix; if this still 204s the residual blocker is "
-            "IP-class scoring (residential ISP) — wait an hour, then try "
-            "--clear-cookies, or move probing to CI.",
+            "ERROR: HTTP 204 No Content — Akamai edge silent block. Most common "
+            "cause is Finding O (sort column not in displaycolumns) but the "
+            "pre-flight check should have caught that. Remaining candidates: "
+            "(a) per-IP rate limit burned by recent prior runs, (b) per-auth-key "
+            "budget exhausted, (c) IP-class scoring deteriorated today. Wait "
+            "an hour, then retry; if still 204, escalate to FDA OII for a "
+            "whitelist exception.",
             file=sys.stderr,
         )
         print("  Response headers:", file=sys.stderr)
@@ -317,6 +253,20 @@ def main() -> int:
             file=sys.stderr,
         )
         return 0
+    if status == 406:
+        # Finding K0: requested column is not in the 33-column bulk POST
+        # datagroup. Most likely a lookup-endpoint-only field.
+        print(
+            f"ERROR: FDA STATUSCODE 406: {body.get('MESSAGE')}. "
+            "Per Finding K0, only 33 columns are valid for the bulk POST "
+            "datagroup (see api_observations.md). Lookup-endpoint-only fields "
+            "(productlmd, pressreleaseurl, pressreleaseissuedt, pressreleasetype, "
+            "all *short and *indicator variants, createdt) cannot be requested "
+            "here — use the corresponding /recalls/event/{id}, "
+            "/recalls/product/{id}, or /search/pressreleaseurls/ endpoint instead.",
+            file=sys.stderr,
+        )
+        return 2
     if status != 400:
         print(
             f"ERROR: FDA STATUSCODE {status}: {body.get('MESSAGE')}",

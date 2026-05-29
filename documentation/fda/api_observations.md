@@ -240,6 +240,30 @@ The filter did real work: productid 218953 dropped out of the filtered populatio
 
 **R2 landing sanity check (2026-05-09).** Confirms end-to-end exclusion of `PRODUCTLMD` from the bulk POST extraction path. The most recent FDA landing in R2 at the time of writing (`fda/2026-05-09/d4ee85d6-522a-4f56-8da0-925c954d450c.json.gz`) yielded zero case-insensitive `productlmd` matches when grepped via `aws s3 cp <key> - | gunzip | grep -ic productlmd`. Consistent with `_DISPLAY_COLUMNS` at `src/extractors/fda.py:117-123`, which excludes the field from the request payload — FDA's bulk POST response honors the exclusion. Rules out the alternate hypothesis that FDA returns unrequested fields anyway and that bronze projection silently drops them. Closes the third potential information path: lookup endpoint (null), history endpoint (empty), bulk POST landing (field absent). All three are empirically silent on `PRODUCTLMD`.
 
+### K0.2. Bulk POST `sort` column must appear in `displaycolumns` or Akamai returns HTTP 204
+
+Empirical: a POST `/recalls/` request whose `sort` value is **not** present in the `displaycolumns` list returns **HTTP 204 No Content** at the edge — not a STATUSCODE 406 from the FDA app, not a 4xx from the iRES API, just a silent 204 from Akamai with `_abck=~-1~` (unvalidated bot-manager slot) in the response headers. Confirmed 2026-05-29 by controlled binary search:
+
+| Probe | `displaycolumns` | `sort` | Result |
+|---|---|---|---|
+| Step 1 (production-set) | 21-col production set (includes `eventlmd`) | `eventlmd` | ✓ 100 records |
+| Step 2 | `recalleventid,productid,producttypeshort,codeinformation` (no `eventlmd`) | `eventlmd` | HTTP 204 |
+| Step 1 re-run | 21-col production set | `eventlmd` | ✓ 100 records (refutes progressive-scoring hypothesis) |
+| Test C | `recalleventid,productid,producttypeshort,phasetxt` (no `eventlmd`, no `codeinformation`) | `eventlmd` | HTTP 204 |
+| Test E | `recalleventid,productid,producttypeshort,phasetxt,eventlmd` | `eventlmd` | ✓ 100 records |
+| Test D | `recalleventid,productid,producttypeshort,codeinformation,eventlmd` | `eventlmd` | ✓ 100 records (codeinformation works once `eventlmd` is added) |
+
+Single-variable difference between Test C and Test E (adding `eventlmd` to displaycolumns) flips 204 → 200. Same for Step 2 → Test D (same flip after adding `eventlmd`). Decisive.
+
+**Mechanism (inferred, not directly observed).** The malformed-payload check appears to live at Akamai's edge WAF — Akamai detects the unfulfillable `sort` reference and returns 204 with the unvalidated bot-manager cookie slot, rather than forwarding to the FDA app which would have returned STATUSCODE 406 ("The payload sort does not match with the datagroup" per PDF page 8 line 631). Two pieces of evidence point to Akamai rather than FDA: (a) no STATUSCODE 407 in the body — there is no body, (b) the `_abck=~-1~` slot pattern matches Akamai's documented "unvalidated request" state.
+
+**Implications.**
+
+- The 204 was previously misdiagnosed as an "impersonation paradox" (curl_cffi Chrome131 making us look *more* like a bot than vanilla httpx). That hypothesis was refuted when the simple-stack probe (no impersonation, no cookies) also 204'd on a sort/displaycolumns mismatch. The misdiagnosis cost approximately a session's worth of debug time; the lesson is to check single-variable controlled tests early when the failure mode looks like bot-detection.
+- Probe budget at the Akamai edge is **not** burned by 204s on this rule — Akamai catches the malformed payload before it reaches the FDA app's per-key budget. This makes iterating on `displaycolumns` cheap as long as the `sort` rule is satisfied.
+- `scripts/fda/audit/probe_displaycolumns.py` enforces this rule via a `--sort` pre-flight check at argument-parse time (errors before sending the request), so the probe never burns even an Akamai roundtrip on a known-malformed payload.
+- Production `src/extractors/fda.py` is structurally immune: `_DISPLAY_COLUMNS` ends with `eventlmd` and the payload's `sort: "eventlmd"` matches. Any future `_DISPLAY_COLUMNS` edit must preserve the invariant `sort_field ∈ displaycolumns`.
+
 ### K. GET lookup endpoints handle the empty-result case cleanly
 
 Confirmed against `get_press_release_urls.yml` for `event_id=98815` (which has zero press releases):

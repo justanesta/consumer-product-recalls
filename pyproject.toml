@@ -42,7 +42,6 @@ dev = [
     "pyright>=1.1.389,<2",
     "pre-commit>=4.6.0,<5",
     "hypothesis>=6.155.0,<7",
-    "curl-cffi>=0.15.0",
 ]
 
 [tool.hatch.build.targets.wheel]
