@@ -242,7 +242,7 @@ USDA's audit is unusual in that the (b) capture-expansion PR has **zero adds** �
 
 ## 9. R2 validation status
 
-USDA is also Akamai-fronted (per `documentation/usda/recall_api_observations.md` Finding O — the `refresh-user-agents` weekly workflow exists specifically to keep our UA fresh against Akamai bot detection). The `data/user_agents.json` hookup auto-rotates Chrome/Firefox UAs weekly so the production extractor stays unblocked. Per Task 6b in `project_scope/current_branch_staged_tasks.md`, the Akamai-playbook section being added to `documentation/audit/methodology.md` will codify how to probe USDA without re-tripping bot scoring.
+USDA is also Akamai-fronted (per `documentation/usda/recall_api_observations.md` Finding O — the `refresh-user-agents` weekly workflow exists specifically to keep our UA fresh against Akamai bot detection). The `data/user_agents.json` hookup auto-rotates Chrome/Firefox UAs weekly so the production extractor stays unblocked.
 
 ### Completed 2026-05-28
 
