@@ -69,6 +69,85 @@ The user's three streams are not a bolt-on — they reshape Phase 6 into a **fou
 - Building RapidFuzz on top of a wrong firm grain forces a retro-fit.
 - Designing gold aggregates / search index against semantically wrong silver columns (e.g., a `description` field that's actually a distribution area) produces wrong dashboards.
 
+### Phase 6a.5 — Historical Backfill (CPSC + NHTSA + FDA)
+
+**Why insert between 6a and 6b.** Phase 6b's load-bearing work (RapidFuzz fuzzy matching thresholds, CPSC suffix-strip regex, USDA disambiguation signal calibration, NHTSA `mfgname` normalization) is sensitive to the long-tail shape of the data. The 2026-05-29 SQL run on ~1,400 CPSC records surfaced 3-4 data-quality outliers ("United Stateso", "R", narrative-as-RemedyOption, NULL Description); the same ratios on full historical corpora plausibly surface qualitatively new patterns (alternate country-name spellings, archaic enum values, schema-drift artifacts from older records). Tuning normalization rules and fuzzy-match thresholds against the full corpus once is cheaper than tuning twice — once on dev-bronze, then again on production-bronze. Aligns with the `feedback_full_corpus_validation` principle of not committing to architecture on a dev-bronze slice.
+
+**Scope — explicit:**
+
+- **In scope:** One-time historical seed for CPSC, NHTSA (both PRE_2010 + POST_2010 archives), and FDA. Replay against full available history.
+- **Out of scope:**
+  - Production cron readiness (Phase 7).
+  - TODO.md #33's 2-3 day local production-simulation (Phase 7).
+  - ETag tuning, per-environment YAML overlays (Phase 7).
+  - Periodic re-seeding (one-shot now; recurring = Phase 7).
+  - USDA — already returns the full ~2,000-record corpus on every fetch; no backfill needed.
+  - USCG — indefinitely deferred.
+
+**Sources + treatment:**
+
+| Source | Action | Acquisition | Storage signal | Risk class |
+|---|---|---|---|---|
+| **CPSC** | `recalls deep-rescan cpsc --lookback-days 7700 --change-type=historical_seed` | Fresh API extraction (no auth, no Akamai) | ~30 MB | Low |
+| **NHTSA** | `recalls deep-rescan nhtsa --change-type=historical_seed` | Fresh re-download of both PRE_2010 + POST_2010 archives via `NhtsaDeepRescanLoader` (`src/extractors/nhtsa.py:565`). Config's `historical_seed_urls` already lists PRE_2010 (`config/sources/nhtsa.yaml:16`); no code change needed. | ~400-450 MB | Low operationally; dominant on storage |
+| **FDA** | `recalls deep-rescan fda --change-type=historical_seed` w/ multi-year window covering everything iRES offers (per user 2026-05-29: "Pull in everything") | Fresh API extraction | ~500 MB - 1 GB (sized after FDA depth probe) | Medium (Akamai) |
+
+**Pre-flight (one-time, completes before any seed runs):**
+
+1. **FDA depth probe** — Bruno request or one-shot API call to find oldest available `eventlmd`. Determines the FDA deep-rescan date window. Per user direction, the target is "everything iRES will give us" — no artificial cap.
+2. **R2 inventory check** — `aws s3 ls` against the NHTSA + CPSC + FDA R2 prefixes to size existing payloads. Confirms what's already there. NHTSA POST_2010 confirmed present from prior daily incremental runs; PRE_2010 + CPSC/FDA depth TBD.
+3. **Storage estimate finalized** — tighten the per-source estimates above with the depth probe + R2 inventory data.
+4. **Neon tier upgrade** — pick a tier with 6 months of growth headroom past the combined ~1-1.5 GB estimate. Single upgrade event, not per-source. User-executed.
+5. **Akamai readiness for FDA** — `data/user_agents.json` rotation current; plan to run the FDA seed off-peak hours.
+6. **NHTSA bronze assertion handling — reactive (no pre-flight action)** — per user 2026-05-29. The existing `dbt/tests/source_assumptions/assert_nhtsa_eleven_tuple_identity_stable.sql` is `severity=warn` (cannot block dbt build) and runs at dbt-test time, not bronze-insert time. POST_2010 re-download produces identical content (content-hash dedup → no new bronze rows → no new assertion signal); PRE_2010 brings brand-new campnos with no group overlap. Reactive plan: run the seed, then run dbt, then inspect warn-count delta. Investigate any new drift groups — likely real signal worth folding into the audit, not noise.
+
+**Execution — CPSC → NHTSA → FDA (low → medium-storage → high-operational risk):**
+
+| Step | Command | Notes |
+|---|---|---|
+| 1. CPSC | `recalls deep-rescan cpsc --lookback-days 7700 --change-type=historical_seed` | Smallest, validates 6a.5 mechanics end-to-end. Archive-migration race handled by content-hash dedup (proven via the 3-row excess scenario in `documentation/cpsc/array_stability_findings.md`). |
+| 2. NHTSA | `recalls deep-rescan nhtsa --change-type=historical_seed` | Pulls both PRE_2010 + POST_2010 in one run via `NhtsaDeepRescanLoader`. This is the storage-dominant step; verify Neon tier holds before moving to FDA. |
+| 3. FDA | `recalls deep-rescan fda --change-type=historical_seed` w/ window from depth probe | Akamai posture: rate-limited, off-peak, pause-and-resume if HTTP 204 hit. Saved for last so we've validated Neon tier + 6a.5 mechanics first. |
+
+After each step, before moving to the next:
+- Verify expected bronze row count landed (within ~10% of projection)
+- Quarantine rate < 5%, or investigate the dominant quarantine pattern
+- Existing dbt assertions still green-or-known-warn (warn count delta documented per step)
+
+**Post-seed re-validation (drives audit doc updates):**
+
+- Re-run `python scripts/cpsc/audit/inspect_landed_payloads.py --date <multi-year date list>` against expanded corpus
+- Re-run `psql -f scripts/sql/cpsc/bronze/inspect_array_field_population.sql` (now at corpus scale)
+- Build FDA equivalent: `python scripts/fda/audit/inspect_landed_payloads.py --date <multi-year list>` (script exists from Phase 6a)
+- NHTSA: the existing `scripts/nhtsa/tsv_analysis/` toolkit + `assert_nhtsa_eleven_tuple_identity_stable.sql` + `decompose_eleven_tuple_drift.sql` already cover most of what an audit script would do; supplement only if a corpus-scale field-rate inspect doesn't already exist
+- Fold §9 updates into CPSC + FDA + NHTSA audit docs. NHTSA audit doc is created as part of Phase 6a continuation when we get to that source.
+
+**Quality gates:**
+
+- [ ] FDA depth probe complete; date window documented in this plan
+- [ ] R2 inventory sized; storage estimate within 20% of pre-flight projection
+- [ ] Neon tier upgraded; new monthly cost recorded
+- [ ] CPSC seed: bronze row count >= 9,000 (or documented reason for shortfall — e.g., archive migration still incomplete at CPSC's end)
+- [ ] NHTSA seed: bronze row count = (existing) + (~380-440k PRE_2010 + POST_2010 combined, modulo content-hash dedup of existing POST_2010)
+- [ ] NHTSA bronze 11-tuple assertion: warn-count delta documented; any new drift groups triaged
+- [ ] FDA seed: bronze row count > 5× current; no Akamai 204 blocks during seed
+- [ ] Combined quarantine rate < 5% (or each pattern's quarantine class triaged)
+- [ ] CPSC + FDA + NHTSA field audit §9 re-run; deltas folded into audit docs
+- [ ] No Phase 6a architectural surprises that require restart (Bug 1/2/3 framings + Option B still hold at corpus scale)
+
+**Risks + mitigations:**
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| Akamai blocks FDA mid-seed | Medium | Medium — partial seed, resume needed | Pre-flight UA rotation check; seed during off-peak hours; rate-limit; resume from last `started_at` if blocked |
+| Storage tier surprise mid-NHTSA-load | Medium | Medium — abort, upgrade, resume | R2 inventory sizing during pre-flight; Neon tier picked with headroom |
+| NHTSA bronze 11-tuple assertion fires new spurious warnings | Low (per analysis above) | Low (severity=warn, doesn't block) | Reactive triage; per user decision 2026-05-29 |
+| NHTSA older-year schema drift | Medium | Low (quarantine handles) | Review quarantine class profile post-seed; tweak Pydantic optionals if pattern > 50 records |
+| CPSC archive-migration race | Already proven OK | Low | Content-hash dedup; documented in `array_stability_findings.md` |
+| Schema drift on old FDA records | Medium | Low (quarantine handles) | Accept quarantine; review patterns; iterate schema if a class > 50 records |
+| New `LastPublishDate` semantics surprise on old CPSC records | Low | Low | Per `last_publish_date_semantics.md` we already understand the bimodal distribution |
+| One-shot vs iterative recovery (too-expensive Neon surprise) | Low | High | Run CPSC first (small); validate Neon tier holds at NHTSA before kicking off FDA |
+
 ### Phase 6b — Firm Entity Resolution
 
 Pending Phase 6 items, executed **after 6a settles the firm model**.
@@ -218,9 +297,10 @@ Final deliverable, after all schema work is done (user-confirmed: "after Phase 6
 
 ## Phase 6 Quality Gates (post-reorganization)
 
-Re-checked against `implementation_plan.md:649–654`, all four still apply but gain a prerequisite (6a):
+Re-checked against `implementation_plan.md:649–654`, all four still apply but gain prerequisites (6a, 6a.5):
 
 - [ ] **Foundation audit complete** (Phase 6a) — all field mappings reviewed, errors fixed, `silver_design_notes.md` covers 4 sources.
+- [ ] **Historical backfill complete** (Phase 6a.5) — CPSC + NHTSA + FDA seeded against full available history; audit doc §9 sections reflect corpus-scale figures; no architectural surprises requiring 6a restart.
 - [ ] All dbt tests pass (60–80 generic + 5 singular + freshness).
 - [ ] Firm resolution works on cross-source examples (Honda, Tyson, etc.).
 - [ ] Re-ingest command idempotent.
@@ -262,7 +342,9 @@ Re-checked against `implementation_plan.md:649–654`, all four still apply but 
 
 ## Sequencing Constraints
 
-- **6a precedes 6b/6c/6e** — corrected silver is a hard prerequisite for firm resolution, history, and gold (otherwise you build on broken foundations).
+- **6a precedes 6a.5** — audit findings drive the seed quality gates and post-seed §9 re-validation; running the seed before the audit would force re-doing the audit at corpus scale (the audit's purpose is to design what to validate, not to be validated against arbitrary data).
+- **6a.5 precedes 6b** — Phase 6b normalization tuning (RapidFuzz thresholds, CPSC suffix-strip regex, NHTSA `mfgname` patterns) is materially better against the full corpus. Running 6b first means tuning twice (dev-bronze, then production-bronze).
+- **6a / 6a.5 precede 6c/6e** — corrected silver is a hard prerequisite for history and gold (otherwise you build on broken foundations).
 - **6c internal order** — `recall_event_history` before `recall_lifecycle` (per `implementation_plan.md:487`).
 - **6d is independent** — can run any time after 6a (or in parallel with 6b/6c).
 - **6f is last** — diagrams freeze the schema; doing them before 6e means redrawing.
