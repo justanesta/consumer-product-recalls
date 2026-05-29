@@ -94,6 +94,19 @@ This blocks:
 - Geographic aggregations like "all recalls from Texas establishments" that need per-recall location
 - Approximately ~14% of USDA recall-side rows being silently ambiguous
 
+**Empirical category breakdown of duplicate-name groups (2026-05-28, via `scripts/sql/usda_establishments/bronze/inspect_duplicate_names.sql`):**
+
+| Category | Groups | Records | Avg/group | Description |
+|---|---|---|---|---|
+| `multi_grant_same_state` | 276 (60%) | 600 (39%) | 2.17 | Same name + same state, different establishment_numbers. Typically the same physical facility holding multiple FSIS grants (Meat M, Poultry P, Voluntary V) — `M1234 + P1234 + V1234` at one address |
+| `multi_state` | 103 (23%) | 248 (16%) | 2.41 | Same name in different states — likely different businesses with identical legal names. State-match alone resolves most |
+| `mixed` | 77 (17%) | 693 (45%) | 9.00 | Multi-location chains — same name across many states + multiple grants. Max group size 59 (Lineage Logistics, LLC). Dominant pattern by record count |
+
+**Two architectural reframings surfaced by the empirical breakdown — adopt as Phase 6b sub-tasks alongside the signal hierarchy:**
+
+- **Same-facility collapse for `multi_grant_same_state`.** A (name, city, state) tuple with multiple establishment_numbers (M1234 + P1234 + V1234) almost always refers to one physical facility holding multiple FSIS grant types, not multiple facilities at the same site. Collapsing the disambiguation problem from "pick one of N grant numbers" to "this facility has N grants" drops 60% of duplicate-name groups out of the signal-hierarchy work entirely. Implementation: in `firm_establishment_attributes` (or a sibling table), allow `establishment_id` to be a tuple of FSIS numbers when they share (name, city, state). Downstream consumers see one "facility" entity.
+- **Cold-storage vs producer firm attribution.** The largest duplicate-name groups in the `mixed` bucket are cold-storage operators — Lineage Logistics (59), Lineage Logistics PFS (38), Americold Logistics (32 + 31). Cold-storage facilities don't typically produce recalled products — they store products from other producers. When `field_establishment` is a cold-storage operator, the firm-of-interest for landing-page rendering is the *producer*, not the storage facility. This is **not** a disambiguation problem — it's a wrong-firm-attribution problem. The `field_product_items` structured-parse workstream (Phase 6/7) becomes the producer-extraction surface: extract the producer name from product description text, then resolve the producer (not the storage facility) as the recall_event_firm.
+
 **Disambiguation signal hierarchy (highest confidence first).**
 
 1. **`field_product_items` text-embedded establishment number.** The FSIS establishment number frequently appears verbatim in the product description (per audit sample: `"...with establishment number P-33901..."`). When extraction yields a number matching exactly one candidate establishment's `establishment_number`, that's a *deterministic* match. Coverage TBD; expected to be a meaningful fraction of multi-match cases since FSIS labeling regulations require the establishment number to appear on product packaging.
@@ -115,6 +128,16 @@ This blocks:
 3. New silver model `dbt/models/silver/recall_event_establishment_resolution.sql` that implements the signal hierarchy. Runs before `recall_event_firm.sql` so the bridge can use the resolved `establishment_number`.
 4. dbt test: verify `match_confidence='ambiguous_null'` rate is < 10% of multi-match cases (signal hierarchy resolves at least 90% of fan-outs).
 5. Operational query: surface the `ambiguous_null` rate as a per-extraction-run quality KPI; investigate signal-extraction quality if it climbs.
+
+**Signal effectiveness by category (empirically informed):**
+
+| Category | Primary disambiguation lever | Expected resolution rate |
+|---|---|---|
+| `multi_grant_same_state` (60% of groups, 39% of records) | Same-facility collapse (architectural reframing) | Drops the problem from disambiguation to facility aggregation |
+| `multi_state` (23% of groups, 16% of records) | Signal 2 (`field_states` ∩ `establishment.state`) + Signal 5 (Active-vs-Inactive) tiebreaker | ~80% of groups resolvable to a single Active facility |
+| `mixed` (17% of groups, 45% of records) | Signal 1 (`field_product_items` extraction) is dominant; Signals 2+3 narrow but rarely resolve alone | Highly dependent on Phase 6/7 extraction quality |
+
+The `mixed` bucket dominates by record count — most disambiguation work happens here — and is where Signal 1 (text-embedded establishment number from `field_product_items`) matters most. Phase 6b ships with whatever extraction quality is available; the `match_confidence` column lets us track improvement as the structured-parse workstream matures.
 
 **Cross-reference to RapidFuzz work.** The name-matching step in `firm.sql:75-86` is currently `upper(trim()) =` (exact-after-normalization). The RapidFuzz work above will add fuzzy matching for cases like " Tyson Foods, Inc." vs "Tyson Foods Inc" (no period, leading whitespace). Fuzzy matching *expands* the candidate set — a 90%-similarity match may surface 5 candidates instead of 3 — which makes the disambiguation hierarchy *more important*, not less. Plan RapidFuzz and disambiguation as paired workstreams.
 
