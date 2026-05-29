@@ -76,8 +76,51 @@ Pending Phase 6 items, executed **after 6a settles the firm model**:
 - Add `rapidfuzz` to `pyproject.toml` (per ADR 0002, `implementation_plan.md:599`).
 - Implement cross-source firm matching with FDA `firm_fei_num` as anchor (per ADR 0002).
 - Resolve AC DELCO / ACDELCO drift class (currently produces 2 rows per `firm.sql:21–22`).
-- Resolve 4 multi-establishment USDA edge cases (per `establishment_join_coverage.md:218–224`).
+- **USDA recall-to-establishment disambiguation** — expanded scope per Phase 6a audit findings. See `documentation/usda/field_audit_2026_w22.md` §6 + §9 (2026-05-28 R2 validation). Detail in subsection below.
 - dbt tests for cross-source firm rollups (Honda, Tyson, etc.) per Phase 6 quality gate.
+
+#### USDA recall-to-establishment disambiguation (Phase 6a audit follow-on)
+
+**Problem statement.** USDA recalls carry only free-text `field_establishment` (firm name) — there is no FSIS establishment number on the recall side. The current silver join in `firm.sql:75-86` matches on `upper(trim(name))` and stores all matched FSIS numbers in `firm.observed_company_ids` as a JSONB array. Per the 2026-05-28 R2 validation (`documentation/usda/field_audit_2026_w22.md` §9):
+
+- **~14% of FSIS establishments share names** with at least one other establishment (6885 distinct names across 7970 records — same business with multiple grant numbers, or genuinely different businesses with identical legal names).
+- When "Tyson Foods, Inc." appears as a recall's `field_establishment`, the LEFT JOIN fans out to multiple Tyson establishments.
+- `recall_event_firm` currently has no `establishment_number` column — only `firm_id` (md5 of normalized name). For a recall of "Tyson Foods, Inc.", silver knows it was *a* Tyson establishment but not *which* one.
+
+This blocks:
+
+- Landing-page rendering of the specific establishment's address, MPI lifecycle dates, activities, DBAs
+- FastAPI endpoint `GET /recalls/{id}/firm` returning the right `establishment_number` (per `project_scope/implementation_plan.md`'s API plan)
+- Geographic aggregations like "all recalls from Texas establishments" that need per-recall location
+- Approximately ~14% of USDA recall-side rows being silently ambiguous
+
+**Disambiguation signal hierarchy (highest confidence first).**
+
+1. **`field_product_items` text-embedded establishment number.** The FSIS establishment number frequently appears verbatim in the product description (per audit sample: `"...with establishment number P-33901..."`). When extraction yields a number matching exactly one candidate establishment's `establishment_number`, that's a *deterministic* match. Coverage TBD; expected to be a meaningful fraction of multi-match cases since FSIS labeling regulations require the establishment number to appear on product packaging.
+
+2. **`field_states` ∩ `establishment.state`.** A recall affecting "Texas" most likely came from a candidate establishment located in Texas. When `field_states` parses to exactly one state and exactly one candidate establishment's `state` matches, confident assignment. (Watch for "Nationwide", "Midwest", and other non-state values from §1a's `field_states` finding — those are non-disambiguating.)
+
+3. **`field_processing` ∩ `establishment.activities`.** A "Heat Treated - Not Fully Cooked - Not Shelf Stable" recall most plausibly came from a Meat Processing or Poultry Processing establishment, not a pure Slaughter or Egg Product one. When processing-to-activities intersection narrows candidates to one, confident assignment.
+
+4. **Combined signals 2+3.** Even when state or processing alone doesn't disambiguate, the intersection often does (Texas × Meat Processing).
+
+5. **`field_recall_date` proximity to `establishment.LatestMPIActiveDate`.** A 2026-05 recall shouldn't associate with an establishment whose MPI active date is 2022 (likely inactive at time of recall). Useful as a tiebreaker after signals 1-4.
+
+**Principle: precision over recall (literally).** When signals don't uniquely disambiguate, store NULL `establishment_number` on `recall_event_firm` rather than guess. A wrong association (Texas Tyson recall attributed to a Georgia Tyson establishment) is *worse* than no association — landing pages render misleading addresses, geographic aggregates carry errors. The audit's 35.1% recall-side `field_establishment` NULL ceiling already accepts that ~37% of USDA recalls have no `firm.company_id`; the additional ambiguity from name-fan-out is a smaller incremental gap that downstream consumers can handle with "no specific establishment identified — see candidates: [...]".
+
+**Implementation approach.**
+
+1. Add `recall_event_firm.establishment_number` column (nullable). Populates only when disambiguation produces a confident single match.
+2. Add `recall_event_firm.match_confidence` column with structured values: `'unambiguous'` (only one candidate), `'product_items_extract'` (signal 1), `'state_match'` (signal 2), `'processing_match'` (signal 3), `'multi_signal'` (signals 2+3+5), `'ambiguous_null'` (multiple candidates, no signals resolved). Useful for downstream consumers (can filter to high-confidence only) and for retrospective quality measurement.
+3. New silver model `dbt/models/silver/recall_event_establishment_resolution.sql` that implements the signal hierarchy. Runs before `recall_event_firm.sql` so the bridge can use the resolved `establishment_number`.
+4. dbt test: verify `match_confidence='ambiguous_null'` rate is < 10% of multi-match cases (signal hierarchy resolves at least 90% of fan-outs).
+5. Operational query: surface the `ambiguous_null` rate as a per-extraction-run quality KPI; investigate signal-extraction quality if it climbs.
+
+**Cross-reference to RapidFuzz work.** The name-matching step in `firm.sql:75-86` is currently `upper(trim()) =` (exact-after-normalization). The RapidFuzz work above will add fuzzy matching for cases like " Tyson Foods, Inc." vs "Tyson Foods Inc" (no period, leading whitespace). Fuzzy matching *expands* the candidate set — a 90%-similarity match may surface 5 candidates instead of 3 — which makes the disambiguation hierarchy *more important*, not less. Plan RapidFuzz and disambiguation as paired workstreams.
+
+**Phase 6/7 dependency for Signal 1.** Text-embedded establishment number extraction from `field_product_items` is part of the Phase 6/7 structured-parse enrichment workstream (per `documentation/usda/field_audit_2026_w22.md` §7 decision #4). For Phase 6b it can be partially mocked with a regex like `r'establishment number ([MPIGV]-?\d+[A-Z]?(?:\s*\+\s*[MPIGV]-?\d+[A-Z]?)*)'` and refined as the structured-parse work matures. Phase 6b ships with whatever extraction quality is available; the `match_confidence` column lets us track improvement over time.
+
+**Future-source generalization.** This pattern (per-recall disambiguation when name matching fans out) likely applies to NHTSA and possibly CPSC. NHTSA's `mfgname` doesn't have a structured-ID counterpart at all (no FEI analog), so the name-fan-out problem there is *worse*. NHTSA disambiguation by `maketxt` (vehicle make) + `yeartxt` is an analogous Phase 6b workstream — keep the signal-hierarchy + match_confidence pattern source-agnostic so it generalizes.
 
 ### Phase 6c — History + Lifecycle
 

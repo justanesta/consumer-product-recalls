@@ -195,6 +195,7 @@ See §9 for the full table. Headlines that shape this section:
 - **`establishment_name` is only 86.4% unique** (6885 distinct / 7970 records) — same-business multi-grant duplicates exist
 - **DBAs marginal at best for closing the join gap**: only 32.3% of establishments have populated DBAs, with ~2% of element values being literal 'N/A'/'None' placeholders. Doesn't address the dominant 35.1% recall-side NULL
 - **Phase 6b RapidFuzz** could target both sides of the gap, but the recall-side NULL is fundamental — net coverage ceiling for any name-based join is ~64.9%, regardless of fuzzy-matching quality
+- **Per-recall disambiguation when name fans out to multiple establishments** (~14% of establishments share names with at least one other) is a separate Phase 6b workstream. Detail in `project_scope/phase-6-execution-plan.md` § Phase 6b → "USDA recall-to-establishment disambiguation" — signal hierarchy (1: `field_product_items` embedded establishment number, 2: `field_states` ∩ establishment state, 3: `field_processing` ∩ activities, 4: combined, 5: `LatestMPIActiveDate` proximity), `match_confidence` column on `recall_event_firm`, precision-over-recall principle (NULL beats wrong association)
 
 ## 7. Decisions locked in (confirmed 2026-05-28)
 
