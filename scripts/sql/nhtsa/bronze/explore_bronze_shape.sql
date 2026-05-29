@@ -231,12 +231,12 @@ order by fmvss_length;
 -- (per the CPSC Phase 3 lesson: cassette/extraction failures are schema
 -- bugs, not test failures to skip).
 select
-  rejection_reason,
+  failure_reason,
   count(*) as rows,
-  min(extraction_timestamp) as first_seen,
-  max(extraction_timestamp) as last_seen
+  min(rejected_at) as first_seen,
+  max(rejected_at) as last_seen
 from nhtsa_recalls_rejected
-group by rejection_reason
+group by failure_reason
 order by rows desc;
 
 \echo ''
