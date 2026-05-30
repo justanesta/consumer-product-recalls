@@ -183,6 +183,73 @@ def test_parse_listing_page_raises_not_implemented(
         extractor._parse_listing_page(b"<html/>", "https://example/listing")
 
 
+# --- Work-list --limit cap (cheap dev validation / chunked seeding) ---
+
+
+def _fake_work(n: int) -> list[dict[str, object]]:
+    """N synthetic work-list items shaped like ``_build_work_list`` output."""
+    work: list[dict[str, object]] = []
+    for i in range(1, n + 1):
+        item: dict[str, object] = {
+            "mic": f"M{i:03d}",
+            "uscg_directory_id": i,
+            "detail_url": f"https://example/{i}",
+        }
+        work.append(item)
+    return work
+
+
+def test_work_list_limit_caps_fetches(
+    extractor: UscgManufacturerDetailExtractor, details_html: bytes
+) -> None:
+    """``--limit`` (work_list_limit) fetches only the first N work-list items."""
+    extractor.work_list_limit = 2
+    mock_resp = MagicMock(status_code=200, headers={})
+    with (
+        patch.object(extractor, "_work_list", return_value=_fake_work(5)),
+        patch.object(
+            extractor, "_fetch_page", return_value=(mock_resp, details_html)
+        ) as mock_fetch,
+    ):
+        records = extractor.extract()
+    assert len(records) == 2
+    assert mock_fetch.call_count == 2
+
+
+def test_no_limit_fetches_full_work_list(
+    extractor: UscgManufacturerDetailExtractor, details_html: bytes
+) -> None:
+    """Default (work_list_limit=None) fetches the entire work-list."""
+    assert extractor.work_list_limit is None
+    mock_resp = MagicMock(status_code=200, headers={})
+    with (
+        patch.object(extractor, "_work_list", return_value=_fake_work(3)),
+        patch.object(
+            extractor, "_fetch_page", return_value=(mock_resp, details_html)
+        ) as mock_fetch,
+    ):
+        records = extractor.extract()
+    assert len(records) == 3
+    assert mock_fetch.call_count == 3
+
+
+def test_limit_larger_than_work_list_is_safe(
+    extractor: UscgManufacturerDetailExtractor, details_html: bytes
+) -> None:
+    """A limit >= work-list size fetches everything (slice is safe, no error)."""
+    extractor.work_list_limit = 50
+    mock_resp = MagicMock(status_code=200, headers={})
+    with (
+        patch.object(extractor, "_work_list", return_value=_fake_work(2)),
+        patch.object(
+            extractor, "_fetch_page", return_value=(mock_resp, details_html)
+        ) as mock_fetch,
+    ):
+        records = extractor.extract()
+    assert len(records) == 2
+    assert mock_fetch.call_count == 2
+
+
 # --- Schema validation ---
 
 

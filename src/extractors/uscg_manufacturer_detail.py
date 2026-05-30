@@ -248,6 +248,13 @@ class UscgManufacturerDetailExtractor(HtmlScrapingExtractor[UscgManufacturerDeta
     start_url: str = _DETAIL_URL  # required by HtmlScrapingExtractor; the per-row
     # detail URLs come from the bronze work-list, not pagination of start_url.
     settings: Settings
+    # Optional cap on the work-list (CLI ``--limit``). None = full work-list.
+    # Two uses: (1) cheap dev validation — a handful of detail pages exercises
+    # fetch → R2 → bronze → dbt end-to-end without the full ~4.5h sweep; (2)
+    # chunked/resumable seeding — repeated capped runs march through the corpus
+    # in uscg_directory_id order because the incremental cursor + content-hash
+    # dedup skip already-loaded MICs each pass. Inherited by the deep-rescan loader.
+    work_list_limit: int | None = None
 
     _engine: sa.Engine = PrivateAttr()
     _r2_client: R2LandingClient = PrivateAttr()
@@ -278,6 +285,18 @@ class UscgManufacturerDetailExtractor(HtmlScrapingExtractor[UscgManufacturerDeta
                 f"USCG manufacturer-detail work-list returned {len(work)} rows — exceeds "
                 f"guard of {_MAX_DETAIL_ROWS}. Possible cause: work-list join blow-up or "
                 "upstream record-count explosion."
+            )
+
+        # ``--limit`` (CLI): cap AFTER the blow-up guard (which must see the true
+        # work-list size). Slicing is safe when the limit >= work-list size.
+        if self.work_list_limit is not None:
+            full_size = len(work)
+            work = work[: self.work_list_limit]
+            logger.info(
+                "uscg_manufacturer_details.work_list_limited",
+                limit=self.work_list_limit,
+                fetching=len(work),
+                work_list_size=full_size,
             )
 
         records: list[dict[str, Any]] = []
