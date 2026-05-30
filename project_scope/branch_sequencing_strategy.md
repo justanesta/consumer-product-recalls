@@ -17,41 +17,44 @@
 ## Dependency graph
 
 ```
-                            main (post-USCG)
-                                 │
-                                 ▼
-              feature/phase-6a-foundation-audit
-              (hard prereq for 6b, 6c, 6e per
-               phase-6-execution-plan.md:159)
-                                 │
-                  ┌──────────────┴──────────────┐
-                  ▼                             ▼
-   feature/silver-v15-scd-prototype    feature/phase-6c-history-lifecycle
-       (Layer 2 — parallel models;        (recall_event_history + recall_lifecycle;
-        new files, low overlap risk)       consumes from snapshot eventually)
-                  │                             │
-                  └──────────────┬──────────────┘
-                                 ▼
-                  ┌──────────────┴──────────────┐
-                  ▼                             ▼
-   feature/silver-v15-migration         feature/phase-6b-firm-resolution
-       (Layer 3 — gated by               (RapidFuzz; needs 6a's corrected
-        Phase 6c integration                staging baseline)
-        decision per migration plan
-        pre-condition #3)
-                  │                             │
-                  └──────────────┬──────────────┘
-                                 ▼
-              feature/phase-6d-operational-tooling
-                                 │
-                                 ▼
-              feature/phase-6e-gold-layer
-                                 │
-                                 ▼
-              feature/phase-6f-diagrams
-                                 │
-                                 ▼
-                            (Phase 6 complete)
+main (post-USCG)
+  │
+  ▼
+feature/phase-6a-foundation-audit  — audit docs; hard prereq for 6b/6c/6e (:159)
+  │
+  ▼
+Phase 6a.5  — historical backfill (CPSC/NHTSA/FDA full-corpus seed)
+              + Neon tier upgrade + production cutover  (:74; :353 "6a precedes 6a.5")
+  │
+  ▼
+feature/silver-field-remap  — audit-driven staging/silver fixes on full-corpus bronze;
+              builds cross_source_consolidation.md; precedes 6b/6c  (:355)
+  │
+  ▼
+  ├──> feature/silver-v15-scd-prototype (Layer 2) — STARTS AFTER 6a.5 (not just 6a):
+  │       full-corpus snapshot baseline + NHTSA remap columns; its ~2-wk observation
+  │       window runs CONCURRENTLY with 6b/6c/6d below
+  ├──> feature/phase-6c-history-lifecycle — recall_event_history + recall_lifecycle
+  └──> feature/phase-6b-firm-resolution — RapidFuzz + USCG SCD-2 dim (ADR 0035);
+          needs the remapped silver baseline + 6a foundation
+  │
+  ▼
+feature/silver-v15-migration (Layer 3 cutover) — gated by Layer 2 evidence +
+              6c's recall_event_history integration decision (pre-cond #3);
+              re-keys recall_product_id consumers → COORDINATE the cutover with
+              6c/6b (not free parallel)
+  │
+  ▼
+feature/phase-6d-operational-tooling
+  │
+  ▼
+feature/phase-6e-gold-layer
+  │
+  ▼
+feature/phase-6f-diagrams  (last — diagrams freeze the schema)
+  │
+  ▼
+(Phase 6 complete)
 
 Throughout: docs/findings-YYYY-Wn branches ship daily/weekly, low conflict
 risk because file scope is documentation/ and scripts/sql/ only.
@@ -62,10 +65,11 @@ risk because file scope is documentation/ and scripts/sql/ only.
 ## Recommended sequence (rationale per step)
 
 1. **`feature/phase-6a-foundation-audit` first.** Hard prereq per `phase-6-execution-plan.md:159–164`. Corrects silver field mappings (FDA `description ← distribution_area_summary_txt` is the known case; CPSC/USDA/NHTSA likely have analogues). Building any of 6b/6c/6e on broken foundations bakes in rework.
-2. **After 6a merges: `feature/silver-v15-scd-prototype` and `feature/phase-6c-history-lifecycle` in parallel.** Both add new files (Layer 2: `recall_product_v15.sql`, `recall_product_history.sql`, snapshot; 6c: `recall_event_history.sql`, `recall_lifecycle.sql`). File scopes don't intersect at code level; coordinate at gate-evaluation time on whether 6c's history model consumes the v1.5 snapshot directly (per ADR 0033's "Real_drift taxonomy" subsection forward-integration note).
-3. **After both land: `feature/silver-v15-migration` (Layer 3) and `feature/phase-6b-firm-resolution` in parallel.** Layer 3 needs Phase 6c's `recall_event_history` design done (migration plan pre-condition #3). 6b also needs 6a's foundation. Neither blocks the other.
-4. **Then `feature/phase-6d` → `feature/phase-6e` → `feature/phase-6f`.** Per the execution plan's sequencing constraints (6f last because diagrams freeze schema).
-5. **Daily/weekly findings throughout.** `docs/findings-YYYY-Wn` branches stay tiny (days, not weeks), open PR + merge same day or next.
+2. **Then Phase 6a.5 (historical seed + Neon tier upgrade + production cutover), then `feature/silver-field-remap`.** Hard chain per `phase-6-execution-plan.md:353–356`: 6a → 6a.5 → silver-remap → 6b/6c. The remap makes per-source silver identity/grain decisions on full-corpus bronze (and builds `documentation/audit/cross_source_consolidation.md`) — the right place to fold in the **cross-source SCD-applicability** question (which of CPSC/FDA/USDA/USCG-recalls also warrant a stable-anchor snapshot dim; `silver_v15_migration_plan.md` Open Q#4).
+3. **After the remap: `feature/silver-v15-scd-prototype` (Layer 2), `feature/phase-6c-history-lifecycle`, and `feature/phase-6b-firm-resolution`.** Layer 2 **starts after 6a.5, not after 6a**: its dbt snapshot must initialize against the full-corpus NHTSA bronze so the 6a.5 PRE_2010 backfill doesn't land as a spurious version-wave, and the 6-tuple anchor is validated against the full corpus; it also mirrors NHTSA's remapped `recall_product` columns (`silver_v15_migration_plan.md` Open Q#2 + the `full_corpus_validation` principle). The *dbt mechanics* can be authored anytime (cheap, reversible), but the *snapshot baseline + ~2-week observation* that feeds the Layer 3 gate must run post-6a.5. All three branches add/edit non-overlapping files (Layer 2: new `recall_product_v15.sql`/`recall_product_history.sql`/snapshot; 6c: `recall_event_history.sql`/`recall_lifecycle.sql`; 6b: `firm.sql`/`recall_event_firm.sql`), so Layer 2's observation window runs concurrently with 6b/6c/6d. Coordinate at gate time on whether 6c consumes the v1.5 snapshot directly (ADR 0033 forward-integration note).
+4. **Then `feature/silver-v15-migration` (Layer 3).** Gated by Layer 2 evidence + Phase 6c's `recall_event_history` integration decision (migration-plan pre-condition #3); it re-keys `recall_product_id` consumers, so it's a **coordinated cutover with 6c/6b**, not free parallel.
+5. **Then `feature/phase-6d` → `feature/phase-6e` → `feature/phase-6f`.** Per the execution plan's sequencing constraints (6f last because diagrams freeze schema).
+6. **Daily/weekly findings throughout.** `docs/findings-YYYY-Wn` branches stay tiny (days, not weeks), open PR + merge same day or next.
 
 ## Git workflow
 
