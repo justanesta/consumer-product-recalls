@@ -54,6 +54,12 @@ EtLT (Extract, light-transform, Load, Transform) data pipeline for US federal co
 - ruff for linting
 - Keep functions pure where possible (easier to test)
 
+### Helper scripts in `scripts/`
+- Anything written under `scripts/` is held to the **same bar as `src/`** and MUST be verified *immediately after writing*, before handing it back — do not leave the user to discover failures at commit time (this has repeatedly cost debugging time).
+- Required gates (the pre-commit hooks): `ruff check`, `ruff format --check`, and `pyright` (its config already includes `scripts/**/*.py`). Run all three on the new/changed file and fix everything before reporting done.
+- **Test the pure logic with pytest.** Parsers, transforms, and helpers in a script need adequate `tests/scripts/test_<name>.py` coverage — happy path, the obvious edge/empty cases, and a regression test for any bug found. Run the suite and confirm it's green. Import the script via the repo-root `sys.path` shim (see `tests/scripts/test_refresh_user_agents.py`).
+- Keep network/DB/pipeline side effects behind functions so the parse/transform layer is unit-testable without I/O (mirrors the extractor `_parse_*` separation).
+
 ### Documentation Requirements
 - README.md: What data flows where, how to run pipeline
 - documentation/
