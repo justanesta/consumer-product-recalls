@@ -122,10 +122,12 @@ def test_documented_intent_fields_accepted_on_rest_config() -> None:
 # --- Registry dicts ---
 
 
-def test_extractor_registry_covers_all_six_sources() -> None:
-    # Six sources after Phase 5d Step 2 lands USCG (2026-05-16). When the
-    # seventh lands, bump this test and the deep-rescan companion together.
+def test_extractor_registry_covers_all_seven_sources() -> None:
+    # Seven sources after Phase 5d Step 7 lands uscg_manufacturers (2026-05-30).
+    # Prior count was six after Phase 5d Step 2 landed USCG recalls (2026-05-16);
+    # when an eighth lands, bump this test and the deep-rescan companion together.
     from src.extractors.uscg import UscgScrapingExtractor
+    from src.extractors.uscg_manufacturer import UscgManufacturerExtractor
 
     assert set(EXTRACTOR_BY_SOURCE_NAME.keys()) == {
         "cpsc",
@@ -134,6 +136,7 @@ def test_extractor_registry_covers_all_six_sources() -> None:
         "usda_establishments",
         "nhtsa",
         "uscg",
+        "uscg_manufacturers",
     }
     assert EXTRACTOR_BY_SOURCE_NAME["cpsc"] is CpscExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["fda"] is FdaExtractor
@@ -141,20 +144,30 @@ def test_extractor_registry_covers_all_six_sources() -> None:
     assert EXTRACTOR_BY_SOURCE_NAME["usda_establishments"] is UsdaEstablishmentExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["nhtsa"] is NhtsaExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["uscg"] is UscgScrapingExtractor
+    assert EXTRACTOR_BY_SOURCE_NAME["uscg_manufacturers"] is UscgManufacturerExtractor
 
 
-def test_deep_rescan_registry_covers_four_sources() -> None:
-    # Four after Phase 5d Step 2 lands USCG (2026-05-16). USCG's deep-rescan
-    # is symmetry-only — same fetches as the incremental path, skips
-    # freshness touch only — but still wired so `recalls deep-rescan uscg`
-    # works uniformly across sources.
+def test_deep_rescan_registry_covers_five_sources() -> None:
+    # Five after Phase 5d Step 7 lands uscg_manufacturers (2026-05-30). Both
+    # USCG sources have deep-rescan loaders that are symmetry-only — same
+    # fetches as the incremental path, skip freshness + records_count touches
+    # only — but still wired so `recalls deep-rescan <source>` works uniformly
+    # across sources.
     from src.extractors.uscg import UscgDeepRescanLoader
+    from src.extractors.uscg_manufacturer import UscgManufacturerDeepRescanLoader
 
-    assert set(DEEP_RESCAN_BY_SOURCE_NAME.keys()) == {"fda", "usda", "nhtsa", "uscg"}
+    assert set(DEEP_RESCAN_BY_SOURCE_NAME.keys()) == {
+        "fda",
+        "usda",
+        "nhtsa",
+        "uscg",
+        "uscg_manufacturers",
+    }
     assert DEEP_RESCAN_BY_SOURCE_NAME["fda"] is FdaDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["usda"] is UsdaDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["nhtsa"] is NhtsaDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["uscg"] is UscgDeepRescanLoader
+    assert DEEP_RESCAN_BY_SOURCE_NAME["uscg_manufacturers"] is UscgManufacturerDeepRescanLoader
 
 
 def test_html_scraping_to_extractor_kwargs_returns_full_shape() -> None:

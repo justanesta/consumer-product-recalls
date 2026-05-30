@@ -478,6 +478,11 @@ If EITHER fails → fall through to the existing full 1,834-fetch walk. Correctn
 - `src/cli/main.py`: update `_LOOKBACK_NO_OP_MESSAGES["uscg"]` text to reflect short-circuit behavior.
 - `tests/extractors/test_uscg_extractor.py`: new test class for short-circuit eligibility + the fall-through path.
 - `documentation/uscg/scraping_observations.md` Finding J: add a Step-N postscript documenting the empirical short-circuit hit-rate after a few weeks of daily runs.
+
+**Step 7 — USCG manufacturer-directory ingestion** (done 2026-05-30, branch `feature/phase-5d-uscg-manufacturers`) ✓
+
+Sibling non-recall source `uscg_manufacturers` ingested via `HtmlScrapingExtractor` from `https://uscgboating.org/content/manufacturers-identification.php` (16,263 manufacturer records, 651 pages × ~25 rows, listing-only extraction per `manufacturer_scraping_observations.md` Finding C). Mirrors the USDA `recalls + establishments` design pattern: separate extractor + schema + bronze + staging + silver attributes table (`firm_manufacturer_attributes`), plus a directory LEFT JOIN in `firm.sql` USCG branch (and `recall_event_firm.sql` USCG branch in lockstep) that rescues 5 of the §3 Bug 3 mic-only-no-name rows and provides general canonical-name enrichment for ~18 additional USCG firms. Cross-source recall→directory coverage: 99.44% (Phase 6b firm-resolution gains a richer anchor). Plan: `project_scope/phase-5d-uscg-manufacturers.md`. Empirical observations: `documentation/uscg/manufacturer_scraping_observations.md`. Audit fold-in: `documentation/uscg/field_audit_2026_w22.md` §3 Bug 3 update + §6 update.
+
 ---
 
 ### Quality gates per source

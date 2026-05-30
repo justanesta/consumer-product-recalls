@@ -93,6 +93,22 @@ models:
               arguments:
                 values: ['', 'Inactive']
 
+  - name: firm_manufacturer_attributes
+    description: >
+      USCG-registered boat-manufacturer dim with directory metadata.
+      Phase 5d Step 7 Step 5; one row per mic (= USCG Manufacturer
+      Identification Code, also written to firm.observed_company_ids for
+      USCG firms via the recalls-side join). Listing-only extraction;
+      address is truncated at ~30 chars at source per Step 1 Finding F.1.
+    columns:
+      - name: mic
+        tests:
+          - not_null
+          - unique
+      - name: detail_url
+        tests:
+          - not_null
+
   - name: recall_event_firm
     description: Many-to-many between recall events and firms with role.
     columns:

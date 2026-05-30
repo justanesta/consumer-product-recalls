@@ -14,13 +14,17 @@
 --   Multiple bronze rows per campno (one per recall component); DISTINCT
 --   collapses to one bridge row per (campno, mfgname) — typically one firm
 --   per recall, occasionally co-recalls with multiple manufacturers.
--- USCG: firm anchor is coalesce(mic, company_name) per Finding S — the
---   Manufacturer Industry Code (MIC) is the structured firm identifier, with
---   company_name as a fallback. Always 'manufacturer' role. Finding S
---   null-firm-anchor rows (~23 records, both mic AND company_name NULL) are
---   filtered out via the WHERE clause; they appear in recall_event but are
---   absent from this bridge. Phase 6 may revisit with a synthetic-anchor
---   strategy if cross-source firm rollups require placeholder rows.
+-- USCG: firm anchor is coalesce(directory.company_name, recalls.company_name,
+--   recalls.mic) per Phase 5d Step 7 directory enrichment. Always
+--   'manufacturer' role. Finding S null-firm-anchor rows (~23 records, both
+--   mic AND company_name NULL AND no directory match) are filtered out via
+--   the WHERE clause; they appear in recall_event but are absent from this
+--   bridge. The firm_id computation MUST stay in lockstep with firm.sql's
+--   uscg_normalized CTE — both use the same case-insensitive LEFT JOIN to
+--   stg_uscg_manufacturers on upper(trim(mic)) and the same 3-way coalesce
+--   priority. Any divergence causes recall_event_firm.firm_id orphans
+--   against firm.firm_id (1549 orphans observed 2026-05-30 before this
+--   alignment was applied).
 
 with cpsc_firms as (
     select source_recall_id, 'manufacturer' as role,
@@ -83,19 +87,25 @@ nhtsa_event_firms as (
 ),
 
 uscg_event_firms as (
-    -- Two filters: (1) coalesce(mic, company_name) IS NOT NULL drops the
-    -- ~23 Finding S null-firm-anchor rows; (2) announced_at IS NOT NULL
-    -- mirrors the recall_event filter so this bridge does not produce
-    -- orphan recall_event_id rows. The latter is required for the
-    -- relationships test on recall_event_firm.recall_event_id.
+    -- Three filters: (1) coalesce(directory.company_name, recalls.company_name,
+    -- recalls.mic) IS NOT NULL drops the ~23 Finding S null-firm-anchor rows
+    -- that don't recover via the directory either; (2) announced_at IS NOT
+    -- NULL mirrors the recall_event filter so this bridge does not produce
+    -- orphan recall_event_id rows (required for the relationships test on
+    -- recall_event_firm.recall_event_id). The firm_id computation mirrors
+    -- firm.sql's uscg_normalized CTE EXACTLY — directory enrichment via
+    -- case-insensitive LEFT JOIN on mic, then 3-way coalesce. Keep these
+    -- two CTEs in lockstep.
     select distinct
-        md5('USCG' || '|' || source_recall_id)               as recall_event_id,
-        md5(upper(trim(coalesce(mic, company_name))))        as firm_id,
-        'manufacturer'                                       as role
-    from {{ ref('stg_uscg_recalls') }}
-    where coalesce(mic, company_name) is not null
-      and trim(coalesce(mic, company_name)) <> ''
-      and announced_at is not null
+        md5('USCG' || '|' || r.source_recall_id)                                   as recall_event_id,
+        md5(upper(trim(coalesce(m.company_name, r.company_name, r.mic))))          as firm_id,
+        'manufacturer'                                                             as role
+    from {{ ref('stg_uscg_recalls') }} r
+    left join {{ ref('stg_uscg_manufacturers') }} m
+        on upper(trim(r.mic)) = upper(trim(m.mic))
+    where coalesce(m.company_name, r.company_name, r.mic) is not null
+      and trim(coalesce(m.company_name, r.company_name, r.mic)) <> ''
+      and r.announced_at is not null
 )
 
 select * from cpsc_event_firms
