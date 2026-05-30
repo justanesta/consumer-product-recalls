@@ -1,0 +1,45 @@
+name: Deep Rescan USCG Manufacturer Details
+
+# Full ~16.3k-row detail-page sweep (Tier-2) — fetches EVERY MIC's detail page,
+# catching detail-only drift (e.g. a Date Modified bump with no listing change)
+# that the incremental listing-delta cursor misses. Does NOT touch
+# source_watermarks freshness (the incremental extractor owns it — a rebaseline
+# run stays invisible to freshness alerts). ~4.5h at the 1s polite throttle.
+#
+# No cron yet — cron turns on in Phase 7. No --start-date / --end-date inputs:
+# the detail pages have no date-range query surface.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  deep-rescan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
+          [[ -n "$R2_BUCKET_NAME" ]] || (echo "::error::R2_BUCKET_NAME secret is missing" && exit 1)
+          [[ -n "$R2_ACCOUNT_ID" ]] || (echo "::error::R2_ACCOUNT_ID secret is missing" && exit 1)
+          [[ -n "$R2_ACCESS_KEY_ID" ]] || (echo "::error::R2_ACCESS_KEY_ID secret is missing" && exit 1)
+          [[ -n "$R2_SECRET_ACCESS_KEY" ]] || (echo "::error::R2_SECRET_ACCESS_KEY secret is missing" && exit 1)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Run USCG manufacturer-details deep rescan
+        run: uv run recalls deep-rescan uscg_manufacturer_details
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}

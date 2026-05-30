@@ -1,0 +1,32 @@
+version: 2
+
+models:
+  - name: stg_uscg_manufacturer_details
+    description: >
+      One row per USCG-registered MIC, latest detail-page version from
+      uscg_manufacturer_details_bronze (Phase 5d Step 7 detail / Path B).
+      Carries the succession lineage (past_company_1/2/3, parent_company,
+      parent_mic), the FULL untruncated address, contact/status fields, and
+      the M/D/YYYY dates the listing source lacks. Applies Finding F.3 sentinel
+      normalization ('UNK', '-', '', and '-, -' for company_official → NULL).
+      The eventual SCD-2 firm_manufacturer_attributes history + the time-sensitive
+      recall→manufacturer join consume this (Phase 6 / ADR 0035 — not built here).
+    columns:
+      - name: source_recall_id
+        description: USCG Manufacturer Identification Code (MIC) — regulatory 3-character alphanumeric. Stable natural key (joinable to stg_uscg_manufacturers / firm.sql on mic).
+        tests:
+          - not_null
+          - unique
+      - name: mic
+        description: Convenience alias of source_recall_id (the MIC) so cross-source joins read naturally.
+        tests:
+          - not_null
+          - unique
+      - name: content_hash
+        description: SHA-256 of canonicalized record payload (ADR 0007), excluding detail_url and uscg_directory_id; includes date_modified. Dedup key.
+        tests:
+          - not_null
+      - name: extraction_timestamp
+        description: When the extractor wrote this row.
+        tests:
+          - not_null

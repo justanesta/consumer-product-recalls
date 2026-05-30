@@ -61,6 +61,15 @@ _LOOKBACK_NO_OP_MESSAGES: dict[str, str] = {
         "uscg: --lookback-days has no effect (page-0 precheck + full HTML "
         "re-scrape on cache miss; see scraping_observations.md Finding J)."
     ),
+    "uscg_manufacturers": (
+        "uscg_manufacturers: --lookback-days has no effect (page-0 Records-Found "
+        "precheck + full HTML re-scrape on cache miss; see "
+        "manufacturer_scraping_observations.md Finding K)."
+    ),
+    "uscg_manufacturer_details": (
+        "uscg_manufacturer_details: --lookback-days has no effect (work-list is a "
+        "listing-delta cursor over bronze; see phase-5d-uscg-manufacturers-detail.md)."
+    ),
 }
 
 # Per-source notices when deep-rescan ignores --start-date/--end-date.
@@ -73,6 +82,14 @@ _DEEP_RESCAN_NO_DATE_WINDOW_MESSAGES: dict[str, str] = {
     "uscg": (
         "uscg: --start-date / --end-date are ignored "
         "(USCG listing has no date-range query surface; full re-scrape every run)."
+    ),
+    "uscg_manufacturers": (
+        "uscg_manufacturers: --start-date / --end-date are ignored "
+        "(directory has no date-range query surface; full re-scrape every run)."
+    ),
+    "uscg_manufacturer_details": (
+        "uscg_manufacturer_details: --start-date / --end-date are ignored "
+        "(detail pages have no date-range query surface; full sweep on deep-rescan)."
     ),
 }
 

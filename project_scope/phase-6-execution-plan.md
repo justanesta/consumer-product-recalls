@@ -288,13 +288,19 @@ Existing Phase 6 items, safe to build after audit-corrected silver is in place:
 - Silver/gold Alembic migrations.
 - dbt promotion of structural uniqueness (e.g., `recall_event_firm._silver.yml:114–116`) to enforced tests.
 
-### Phase 6f — Diagrams (Stream 3)
+### Phase 6f — Diagrams + written-documentation sync (Stream 3)
 
-Final deliverable, after all schema work is done (user-confirmed: "after Phase 6 complete"):
+Final deliverable, after all schema work is done (user-confirmed: "after Phase 6 complete"). By this stage the diagrams AND the top-level prose docs lag the real architecture badly — they describe a ~4-source REST/flat-file pipeline and predate: USCG reactivation (2026-05-29), the USCG manufacturer **listing** source (Phase 5d Step 7, #40), the **`uscg_manufacturer_details` detail-capture source + its SCD-2 `firm_manufacturer_attributes` dim** (`feature/uscg-manufacturers-detail-addition`), and the cross-source SCD-2 work (ADR 0035). 6f must bring ALL of it current:
 
-- **ERD** (`documentation/diagrams/silver-gold-erd.drawio` + `.svg`) — column-level ERD covering both silver and gold (closes TODO.md item 5 + `implementation_plan.md:647`).
-- **DAG update** — refresh `pipeline-architecture.drawio` to reflect current 4-source architecture, FDA deep rescan (per ADR 0023, `b3ac952`), four-layer medallion (per ADR 0004), dbt staging→silver→gold flow.
-- **Cadence diagram review** — confirm `orchestration-schedule.drawio` is current with ADR 0010 amendments (CPSC/USDA per 2026-05-01 amendment).
+- **ERD** (`documentation/diagrams/silver-gold-erd.drawio` + `.svg`) — column-level ERD covering silver + gold. Must include the USCG manufacturer surfaces: `uscg_manufacturers_bronze` + **`uscg_manufacturer_details_bronze`**, their staging models, the **SCD-2 `firm_manufacturer_attributes`** dim + its snapshot/history table, and the `mic` join into `firm` / `recall_event_firm`. (Closes TODO.md item 5 + `implementation_plan.md:647`.)
+- **DAG update** — refresh `pipeline-architecture.drawio` to the CURRENT architecture: **all 8 extraction sources** (CPSC, FDA, USDA recalls, USDA establishments, NHTSA, USCG recalls, **`uscg_manufacturers`**, **`uscg_manufacturer_details`**), four-layer medallion (ADR 0004), the CPSC/FDA/USCG deep-rescan paths, and — load-bearing — the **`uscg_manufacturers` → `uscg_manufacturer_details` work-list dependency** (the detail source reads its per-MIC work-list from the listing bronze) plus the listing/detail → `firm_manufacturer_attributes` SCD-2 flow.
+- **Cadence diagram review** — `orchestration-schedule.drawio` current with ADR 0010 amendments AND the USCG cadences: `uscg_manufacturers` daily (Records-Found short-circuit, ~3s steady state) + `uscg_manufacturer_details` two-tier (Tier-1 listing-delta incremental + periodic Tier-2 full-sweep deep-rescan, ~4.5h). Rationale: `project_scope/phase-5d-uscg-manufacturers-detail.md` §3.
+- **Written-documentation sync (do this in 6f too).** Bring the prose docs current with everything that landed since they were written — they are materially stale (e.g. `operations.md` still lists USCG as "indefinitely deferred"; `architecture.md` says `HtmlScrapingExtractor` is "reserved for future use" and the registry has "5 entries / 3 entries" — now **8 / 6**; `data_schemas.md`'s bronze-table list omits all three USCG tables). At minimum update:
+  - `documentation/architecture.md` — extractor component table (add `_html_scraping.py`, the USCG concrete subclasses, `uscg_manufacturer_detail.py`), the registry counts (8/6), the source lists in the cron-schedule + end-to-end-flow diagrams, and the medallion narrative.
+  - `documentation/data_schemas.md` — bronze rows for `uscg_recalls_bronze` / `uscg_manufacturers_bronze` / **`uscg_manufacturer_details_bronze`**, the staging + `firm_manufacturer_attributes` silver rows, and glossary terms (MIC as a **temporal SCD anchor**; `Out of Business` vs `Past Company (OOB)`; HIN ⊃ MIC).
+  - `documentation/operations.md` — replace the stale USCG "indefinitely deferred" row with the live 3-source USCG cadence table; add the `uscg_manufacturer_details` extract/deep-rescan runbook + the bulk-`Date Modified`-re-touch re-baseline note (`change_type='schema_rebaseline'`).
+  - `documentation/silver_design_notes.md` — the `firm_manufacturer_attributes` SCD-2 mapping + the flag-as-time-sensitive recall→manufacturer join (ADR 0035).
+  - `documentation/commands.md` — the `recalls extract|deep-rescan uscg_manufacturer_details` commands.
 - **Walkthrough** — Claude guides setup, design choices, and SVG export workflow.
 
 ## Phase 6 Quality Gates (post-reorganization)
@@ -358,6 +364,7 @@ Re-checked against `implementation_plan.md:649–654`, all four still apply but 
 - TODO.md item 12: Blog post on string quoting/escaping (independent, not Phase 6).
 - TODO.md item 33: 2–3 day local run-through before historical seeding (Phase 7 prerequisite).
 - ADR 0029 v2 observability triggers: still v1 stance; revisit per ADR 0029 upgrade triggers.
+- **USCG manufacturer SCD-2 + time-sensitive recall join** — `firm_manufacturer_attributes` Type-2 history (dbt snapshot `strategy='check'` on the `mic` anchor) + the as-of-build-date / flag-as-time-sensitive recall→manufacturer attribution. Designed in `project_scope/phase-5d-uscg-manufacturers-detail.md` §11; **hard prerequisite:** the bronze-capture branch `feature/uscg-manufacturers-detail-addition` lands first (it provides the detail-page succession lineage the SCD-2 seed needs). Formalized by **new ADR 0035** (cross-source SCD-2; 0034 is reserved for NHTSA Layer-3). Bundle the silver model + the `recall_event_firm.match_confidence` time-sensitive flag into the **Phase 6b** firm-resolution PR to respect the `firm.sql` ↔ `recall_event_firm.sql` lockstep (the lockstep comment lives at `recall_event_firm.sql:22` / `:98`; `firm.sql` carries no explicit lockstep warning). Part of the `implementation_plan.md:707` cross-source SCD-2 item, not net-new scope.
 
 ## Notes on Implementation Plan Updates
 

@@ -1,7 +1,7 @@
 # Branch sequencing and workflow strategy
 
-- **Status:** Active 2026-05-25
-- **Scope:** Coordinates three concurrent workstreams off `main` — Phase 6 execution, NHTSA silver v1.5 migration, and weekly daily-findings branches
+- **Status:** Active 2026-05-30
+- **Scope:** Coordinates four concurrent workstreams off `main` — Phase 6 execution, NHTSA silver v1.5 migration, weekly daily-findings branches, and USCG manufacturer detail capture (Phase 5d Step 7 detail)
 - **Supersedes:** Branching guidance scattered across `project_scope/silver_v15_migration_plan.md` (lines 160–191), `project_scope/phase-6-execution-plan.md`, and prior weekly findings retros
 - **Sunset condition:** Phase 6 complete + v1.5 migration landed (Layer 3 merged); update or delete this doc when both are true
 
@@ -12,6 +12,7 @@
 | NHTSA silver v1.5 migration | `project_scope/silver_v15_migration_plan.md` | `feature/silver-v15-scd-prototype` (Layer 2), `feature/silver-v15-migration` (Layer 3) |
 | Phase 6 execution (6a foundation audit → 6b firm res → 6c history → 6d ops → 6e gold → 6f diagrams) | `project_scope/phase-6-execution-plan.md` | `feature/phase-6{a,b,c,d,e,f}-<topic>` — one branch per phase letter |
 | Daily findings + diagnostic scripts | (per-branch staged-tasks doc) | `docs/findings-YYYY-Wn` — one branch per ISO week, short-lived |
+| USCG Phase 5d detail capture (Path B, **bronze-only**) | `project_scope/phase-5d-uscg-manufacturers-detail.md` | `feature/uscg-manufacturers-detail-addition` — one-off, off `main` post-#41 |
 
 ## Dependency graph
 
@@ -55,6 +56,8 @@
 Throughout: docs/findings-YYYY-Wn branches ship daily/weekly, low conflict
 risk because file scope is documentation/ and scripts/sql/ only.
 ```
+
+**USCG Phase 5d detail-capture branch (`feature/uscg-manufacturers-detail-addition`).** Cut off `main` post-#41; **bronze-capture only** (new migration `0017`/`0018` + `UscgManufacturerDetailExtractor` + schema + thin `stg_uscg_manufacturer_details.sql`). **Independent of Phase 6a** — it touches no silver `firm.sql` / field-mapping files, so it can land before or in parallel with 6a. Its deferred SCD-2 silver half (`firm_manufacturer_attributes` history + the as-of-build-date / flag-as-time-sensitive recall join) is **Phase 6 work (new ADR 0035)** deliberately kept off-branch to avoid a `firm.sql` ↔ `recall_event_firm.sql` lockstep collision with Phase 6b — bundle it into the Phase 6b PR that already edits both files. Conflict risk: **low** (new files + bronze/staging only). Plan: `project_scope/phase-5d-uscg-manufacturers-detail.md`.
 
 ## Recommended sequence (rationale per step)
 
