@@ -20,7 +20,8 @@
 main (post-USCG)
   │
   ▼
-feature/phase-6a-foundation-audit  — audit docs; hard prereq for 6b/6c/6e (:159)
+feature/phase-6a-foundation-audit  — audit docs DONE (#39); silver fixes → the remap;
+              hard prereq for 6b/6c/6e (:159)
   │
   ▼
 Phase 6a.5  — historical backfill (CPSC/NHTSA/FDA full-corpus seed)
