@@ -309,12 +309,82 @@ The fix lives at `dbt/models/silver/firm.sql:107-129` USCG branch (`on upper(tri
 - ✅ **Q#9 (boundary page contents)** — page 651 emitted a placeholder row with empty `id=` query parameter, caught by the Finding L defensive guard. Empty-row break terminated the walk cleanly.
 - ✅ **Q#10 (out-of-range page behavior)** — HTTP 200 + placeholder row; NOT 404, NOT redirect.
 - ✅ **Q#11 (recall→directory coverage)** — 99.44% (714/718). The 4 orphans are real retirements/sentinels.
-- 🟡 **Q#2 (detail-page contents when fetched directly)** — still deferred. Listing-only extraction is sufficient for v1; address-detail enrichment via per-record GET remains a Phase 6+ candidate.
-- 🟡 **Q#3 (MIC reassignment over time)** — still deferred. Pattern not observed empirically (each MIC resolves to exactly one company in current snapshot); would need a multi-snapshot comparison.
+- ✅ **Q#2 (detail-page contents when fetched directly)** — **partially resolved 2026-05-30** (see §M.2): the detail page DOES answer a direct GET (despite its `class="iframe"` lightbox markup) and exposes ~20 fields beyond the 5 listing columns — `DBA`, `Parent Company` / `Parent MIC`, `Past Company 1–3 (OOB year)`, `In Business` / `Out of Business`, `Date Modified`, `Company Official`, `Zip`, `Phone`, `Fax`, `Type`. Whether to *ingest* them (Path B) remains a Phase 6+ decision.
+- ✅ **Q#3 (MIC reassignment over time)** — **resolved 2026-05-30** by the first incremental run: MICs *are* reassigned. `AXY` and `COP` each passed to a new company between the seed and first-incremental snapshots, corroborated by detail-page `Past Company` lineage (see §M). `mic` stays the bronze natural key but is an SCD *anchor*, not a static key.
 - 🟡 **Q#5 (detail-page id stability across crawls)** — still deferred. Page-offset-deterministic suggests instability; would need re-crawl comparison. Hash-excluded from content_hash defensively.
 - 🟡 **Q#6 (sentinel rates corpus-wide)** — addressed via staging coercion (Q4 = 0 leakage) but per-column NULL rates measured at silver: company_name 0.02%, address 0.24%, city 0.45%, state 0.38%.
 - 🟡 **Q#7 (multi-line addresses with > 1 newline)** — not yet measured corpus-wide; HONDA example is the only observed 2-line case.
 - 🟡 **Q#8 (rate-limit envelope)** — no `Retry-After` / `X-RateLimit-*` headers observed during the 651-page walk at 1-second throttle. Production cadence stays safe.
+
+## M. First incremental run (2026-05-30) — MIC reassignment confirmed (resolves Open Question #3)
+
+The first incremental `recalls extract uscg_manufacturers` after the §L historical seed ran at 17:03 UTC on 2026-05-30. It did **not** short-circuit — the deep-rescan seed via `UscgManufacturerDeepRescanLoader` deliberately leaves `source_watermarks.last_records_count` NULL (a rebaseline must not advance the short-circuit baseline), so the first incremental always full-walks to re-establish it. This is by design and mirrors the USCG-recalls `force_full_walk.sql` semantics. The full walk re-fetched all 16,263 listing rows; content-hash dedup (ADR 0007) inserted exactly **2** — and those 2 are the load-bearing finding.
+
+### M.1 — Two MICs changed company between the seed and the first incremental
+
+| MIC | dir id | Seed snapshot (2026-05-30 01:30 UTC) | First-incremental snapshot (2026-05-30 17:18 UTC) |
+|---|---|---|---|
+| `AXY` | 655 | `ARMY SURPLUS OUTLET OF MEMPH` — MEMPHIS, TN | `SOSA PERFORMANCE BOATS` — Lake Havasu, AZ |
+| `COP` | 1786 | `CONSER CATAMARAN` — COSTA MESA, CA | `COPALO INC` — Osprey, FL |
+
+MIC and `uscg_directory_id` were identical across both snapshots; `company_name` / `address` / `city` / `state` all changed. The hash excludes `uscg_directory_id` (Finding B), so the directory-id ripple from records shifting elsewhere in the alphabet does not churn rows — only these genuine attribute changes triggered the insert. A useful side-confirmation: the stored `uscg_directory_id` equals each MIC's alphabetical rank (`AXY`→655, `COP`→1786), confirming the id is *positional* rather than a stable per-manufacturer PK (validates the Finding B hash-exclusion). Bronze, being append-only, now holds both versions per MIC (16,265 rows / 16,263 distinct MICs).
+
+### M.2 — Detail pages confirm: this is MIC *succession*, not a name edit or parse artifact
+
+Direct fetch of the per-manufacturer detail pages (2026-05-30, via the `manufacturers-identification-detail.php?id=N` endpoint — which answers a direct GET despite `class="iframe"` markup, partially resolving Open Question #2) shows the source maintains its own succession lineage:
+
+- **`id=655` (AXY):** Company `SOSA PERFORMANCE BOATS`, DBA `AXIOM OFFSHORE`, **Past Company 1 `ARMY SURPLUS OUTLET OF MEMPH (OOB 1978)`**, In Business `5/29/2026`, **Date Modified `5/29/2026`**.
+- **`id=1786` (COP):** Company `COPALO INC`, DBA `SPLEV`, **Past Company 1 `CONSER CATAMARAN (OOB 2008)`**, **Past Company 2 `COPALIS BOAT SHOP (OOB)`**, In Business `5/29/2026`, **Date Modified `5/29/2026`**.
+
+`Date Modified: 5/29/2026` on both (our seed ran 2026-05-30 01:15 UTC ≈ 2026-05-29 ~21:15 ET; the incremental ran 2026-05-30 17:03 UTC ≈ 13:03 ET) means USCG applied a record update the evening of 5/29 ET that our two crawls straddled. The address/location change is therefore not one firm relocating — it is the MIC code passing to a **different business entirely**, the prior holder long out of business (ARMY SURPLUS OOB 1978, CONSER CATAMARAN OOB 2008).
+
+### M.3 — Why this is structural, not incidental: MIC ⊂ HIN
+
+Per 33 CFR 181 Subpart C, a Hull Identification Number is 12 characters: **MIC (chars 1–3) + serial (4–8) + date of certification/manufacture (9–10/9–12)**. The MIC is literally the first three characters of every hull's permanent, physical ID. Two facts collide:
+
+1. **HINs are permanent** — stamped on the hull for life. A boat ARMY SURPLUS built in 1975 carries a HIN beginning `AXY` forever.
+2. **MICs are recycled** — the 3-character code space is finite, so when a builder goes out of business USCG can reassign its code to a new builder (`AXY`: ARMY SURPLUS (–1978) → SOSA (2026); `COP`: CONSER (–2008) / COPALIS → COPALO).
+
+Therefore **`MIC → manufacturer` is a time-varying function**, and the disambiguator (the boat's build date) is encoded in the HIN itself. The same `AXY` prefix denotes ARMY SURPLUS on a 1975 hull and SOSA on a 2026 hull.
+
+### M.4 — Resolution of Open Question #3, with observation-vs-inference caveats
+
+**Open Question #3 ("are MICs ever reassigned?") is resolved: YES.** The seed-vs-incremental snapshot pair is the multi-snapshot comparison the question called for, and the detail-page lineage corroborates it independently. `mic` remains the correct bronze natural key (the regulatory identifier is stable), but it is an SCD anchor whose descriptive attributes (company, address, …) change over time — not a static key.
+
+Caveats — do not over-read from n=2:
+- The reassignment **rate** is unknown from listing data — `Past Company` is detail-page-only and our extraction is listing-only (see M.5). A sampled detail-page probe is needed to quantify it (scoped in `project_scope/implementation_plan.md` Step 7 follow-up).
+- `In Business: 5/29/2026` on both records looks like a record-touch/activation date, not a true founding date — do **not** treat it as the succession effective-date without more samples. The `OOB` years on Past Company entries (1978, 2008) are the more credible historical anchors.
+
+### M.5 — Data-design consequence (factual; the decision lives in the plan)
+
+Our extractor is listing-only (Path A, Finding C), so the source-native lineage — `Past Company 1–3`, `OOB` / `In Business` dates, `Parent MIC`, `DBA`, and crucially **`Date Modified`** — is **not captured in bronze** (migration 0015 has only the 5 listing fields + `uscg_directory_id` + `detail_url`). Consequences, stated factually:
+
+- Silver's "latest row per MIC" semantic = *current code holder* — correct for "who holds this MIC today," wrong for "who built this recalled boat."
+- The two-gate short-circuit (Finding K: `Records Found` count + page-0 MIC membership) is **blind to same-MIC reassignment** — neither gate changes — so under an active short-circuit these are caught only by the weekly safety-net deep-rescan. Today's catch happened only because the first-incremental forced a full walk.
+- `Date Modified` would be a far better incremental/change signal than re-walking + re-hashing 16k listing rows, but it is detail-page-only.
+
+What to *do* about this (Path B detail enrichment, SCD-2 modeling of `firm_manufacturer_attributes`, and a HIN-build-date time-aware recall↔manufacturer join) is future work tracked in `project_scope/implementation_plan.md` (Phase 6 cross-source SCD-2 item + Step 7 follow-up) and `project_scope/silver_v15_migration_plan.md` (cross-source SCD application), per the findings-vs-plan separation.
+
+### M.6 — Quantified resolution: reassignment is material, and recalled MICs are disproportionately affected
+
+A detail-page sampling probe (`scripts/uscg/probe_mic_reassignment_rate.py`, 2026-05-30) measured the rate two ways, on two tiers per the observation-vs-inference discipline: **≥1 `Past Company`** (upper bound — includes same-firm renames) and **≥1 `(OOB)`-marked `Past Company`** (high-confidence "prior holder ceased, code recycled").
+
+| Population | n | ≥1 Past Company | (OOB)-recycled | Parent MIC | current-holder OOB |
+|---|---|---|---|---|---|
+| Random MICs | 1,000 | 28.1% | 17.3% | 1.2% | 65.5% |
+| **Recalled MICs** (recall-directed) | 714 of 718 | **51.1% (365)** | **28.7% (205)** | 6.4% (46) | 47.8% (341) |
+
+**Key finding: recall and reassignment correlate — they are not independent.** Recalled MICs are ~1.8× more likely to be reassigned than random ones (51.1% vs 28.1%; 28.7% vs 17.3% recycled). An independence estimate (rate × recalled count) predicted ~124–200 affected MICs; the recall-directed probe found **205 recalled MICs (28.7%) recycled from a defunct prior holder, and 365 (51.1%) with any prior company** — substantially higher. Plausible mechanism: recalls skew toward long-established codes that have had time to change hands (and builder failure → OOB → recycle may itself correlate with a recall history). This is why the recall-directed probe (`--recalled-only`), not the sampled bridge, was the right instrument.
+
+**Misattribution surface (the affected set):** under today's "current MIC holder" silver join, recalls on those **205 `(OOB)`-recycled MICs** (broadly, the 365 with any prior holder) are *potentially* misattributed to the current — different — company. "Potentially," not "definitely": misattribution occurs only where the recalled boat was built *before* the reassignment, which needs the HIN build-date comparison (§M.3). The affected-MIC list is captured at `data/exploratory/uscg_manufacturers/recalled_reassigned_mics.json`.
+
+**Two distinct OOB signals (do not conflate):**
+- **top-level `Out of Business`** (47.8% of recalled MICs) = the *current* holder is defunct. NOT reassignment — a recall on such a MIC resolves correctly to that (defunct) firm; it is the natural SCD `valid_to` for the current interval.
+- **`Past Company N (OOB)`** (28.7%) = a *prior* holder ceased → code recycled → the reassignment/attribution signal.
+
+**Date-reliability caveat (tempers the precise time-aware join):** of the 205 recalled-recycled MICs, only **13 carry a parseable `(OOB YYYY)` year** — ~94% give bare `(OOB)`. And `In Business` is contaminated by record-touches: MERCURY (115), VOLVO PENTA (123), CATERPILLAR all show `In Business = Date Modified ≈ 2025/2026` (clearly not founding dates), while defunct 4WN shows a real `In Business = 1972`. The source's own dates rarely pin a precise reassignment date — which is why the v1 silver treatment is **flag-as-time-sensitive** (implementation_plan.md Phase 6), not precise build-date resolution.
+
+**Decision: build Path B + SCD-2.** The misattribution surface is large and confirmed (≈29% of recalled MICs recycled), not a negligible edge case. Methodology + the affected list are reproducible via `--recalled-only`.
 
 ## Step 2 architectural decisions (locked, contingent on Finding H probe)
 
@@ -425,8 +495,8 @@ DEEP_RESCAN_BY_SOURCE_NAME = {
 ## Open questions deferred to Step 3 (corpus-scale validation) or later
 
 1. **(GATING)** Does the bulk CSV at `/downloads/MIC.csv` return a valid CSV when fetched? See §H.
-2. Does `manufacturers-identification-detail.php?id=N` return useful content when fetched directly (not in iframe context)? What fields does it expose beyond the 5 listing columns? Materially affects whether Path B (listing + details walk) becomes desirable.
-3. Are MICs ever reassigned to a different company over time, or is the regulatory rule "once-issued-always-that-company" enforced? Affects whether `(mic, snapshot_date)` should be the natural key vs just `mic`.
+2. Does `manufacturers-identification-detail.php?id=N` return useful content when fetched directly (not in iframe context)? What fields does it expose beyond the 5 listing columns? Materially affects whether Path B (listing + details walk) becomes desirable. **✅ Partially resolved 2026-05-30 — yes, direct GET works; ~20 extra fields including the succession lineage and `Date Modified`. See §M.2.**
+3. Are MICs ever reassigned to a different company over time, or is the regulatory rule "once-issued-always-that-company" enforced? Affects whether `(mic, snapshot_date)` should be the natural key vs just `mic`. **✅ Resolved 2026-05-30 — MICs are reassigned (code recycled after the prior holder goes out of business); see §M. `mic` remains the bronze key as an SCD anchor.**
 4. Does the corpus contain any MIC values not matching `^[A-Z0-9]{3}$`? Sample shows uniform 3-char alphanumeric; full-corpus confirmation would let us add a Field pattern constraint without quarantining real records.
 5. Are detail-page `id` values strictly sequential 1..16263 with no gaps or duplicates, or do they skip / re-use? Affects whether `uscg_directory_id` is a usable secondary key.
 6. How common is the `UNK` / `-` / empty-string sentinel pattern across the full corpus per column? Sets per-column NULL-coercion priorities in silver.

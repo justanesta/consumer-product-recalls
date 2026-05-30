@@ -222,9 +222,29 @@ These need resolution before or during the indicated layer:
 1. **Snapshot retention policy** — Layer 2. Indefinite retention is the conservative choice given audit purpose. Confirm at Layer 2 deliverable time.
 2. **Snapshot initialization timing** — Layer 2. First snapshot run against existing bronze backfill should create one version per existing logical product. Verify timing isn't disruptive on the dev database (Pierce-class events will produce ~5–10k existing versions; this is small but worth a dry-run check).
 3. **`recall_event_history` integration mode** — Layer 3 pre-condition #3. Should the Phase 6 `recall_event_history` model consume from the snapshot table directly (richer attribute-change events) or stay on the `LAG()`-over-bronze mechanism (event-grain only)? Decision needed before Layer 3 cutover.
-4. **Cross-source rollout order** — post-Layer 3. CPSC is the next candidate (ordinality-shift hazard). FDA and USDA are low-priority (already well-anchored or 1:1 grain). USCG should be designed with SCD framing from the start. Sequence and timing TBD.
+4. **Cross-source rollout order** — post-Layer 3. CPSC is the next candidate (ordinality-shift hazard). FDA and USDA are low-priority (already well-anchored or 1:1 grain). USCG should be designed with SCD framing from the start. USCG manufacturers now has a concrete confirmed reassignment case (2026-05-30) and a unique source-native-history property — see the "Cross-source application" section below. Sequence and timing TBD.
 5. **dbt snapshot conventions for this project** — Layer 2. Where in the dbt project structure do snapshots live? `dbt/snapshots/` is the dbt-default convention; confirm the project's preferences match.
 6. **Schema location for snapshot table** — Layer 2. ADR 0033 proposes `silver_snapshots` schema. Confirm this fits the existing dbt schema-naming conventions (or pick an alternative).
+
+## Cross-source application — USCG manufacturers MIC reassignment (added 2026-05-30)
+
+This plan's mechanism is NHTSA-scoped (see Non-goals), but the 2026-05-30 USCG discovery is the first **non-NHTSA** confirmation that ADR 0033's SCD-on-stable-anchor framing generalizes — and it stresses the framework in a new way worth recording here for the eventual cross-source ADR (implementation_plan.md Phase 6).
+
+**The case.** The first incremental `uscg_manufacturers` run caught two MIC reassignments (`AXY`: ARMY SURPLUS → SOSA; `COP`: CONSER / COPALIS → COPALO), confirmed against the source's own detail-page lineage. Full evidence: `documentation/uscg/manufacturer_scraping_observations.md` §M.
+
+**Mapping onto the ADR 0033 axes:**
+
+| ADR 0033 concept | NHTSA `recall_product` | USCG `firm_manufacturer_attributes` |
+|---|---|---|
+| Stable anchor (surrogate key) | 6-tuple `(campno, make, model, year, compname, rcl_cmpt_id)` | 1-tuple `mic` (regulatory code; = first 3 chars of every hull's HIN per 33 CFR 181) |
+| Type 1 latest-wins attributes | `mfr_comp_desc`, etc. | `company_name`, `address`, `city`, `state` (+ detail fields if Path B) |
+| Type 2 history mechanism | dbt snapshot (`strategy='check'`) over our snapshots | our snapshots (forward-only from 2026-05-30) **and/or** source-native lineage |
+
+**The twist — source-native history.** Unlike NHTSA (where Type 2 history is *synthesized* from our bronze snapshots and only reaches back to our first observation), the USCG source **publishes its own succession history**: the detail page exposes `Past Company 1–3 (OOB year)`, `In Business`, `Parent MIC`, and `Date Modified`, predating our observation window by decades. Capturing it requires a Path B detail-page enrichment pass (listing-only extraction does not — see implementation_plan.md Step 7 follow-up). So the SCD-2 model for this dim **seeds historical intervals from the source-native lineage (`Past Company (OOB year)` + `In Business`) and extends them forward with our own bronze snapshots** (forward-only from 2026-05-30) — a hybrid the NHTSA case does not need. Capturing that lineage is a bronze-side prerequisite (the `feature/uscg-manufacturers-detail-addition` branch, bronze-only); this SCD-2 silver model and the HIN-build-date join are Phase 6 work, deliberately kept off the detail-capture branch (would otherwise collide with Phase 6b on `firm.sql`).
+
+**The decision-forcing query is as-of-*build-date*, not as-of-*recall-date*.** Because the MIC is embedded in the HIN, correct recall→manufacturer attribution joins on the **boat's build date** (HIN chars 9–12; recalls bronze carries `hin` and `model_year`), not the recall publication date. A recall on a pre-1978 ARMY SURPLUS hull must resolve to ARMY SURPLUS, not the current holder SOSA. This is a sharper instance of the "as-of-date dimensional join" surface the cross-source SCD-2 ADR must design. In practice the v1 join **flags** recalls on a reassigned MIC as "attribution time-sensitive" rather than resolving precisely — the source's reassignment dates are mostly unusable (only ~13 of 205 recalled-recycled MICs carry a parseable OOB year; `In Business` is contaminated by record-touches). The recall-directed probe (2026-05-30) measured the surface: **28.7% (205) of recalled MICs `(OOB)`-recycled, 51.1% (365) with any prior holder** — see `documentation/uscg/manufacturer_scraping_observations.md` §M.6.
+
+**Execution stays out of this plan** (Non-goal: USCG Phase 5d tracked separately). Tracked in `project_scope/implementation_plan.md` (Phase 6 cross-source SCD-2 item + Step 7 follow-up + the reassignment-rate probe). Recorded here as cross-source applicability evidence for ADR 0033 and as input to Open Question #4 above.
 
 ## References
 

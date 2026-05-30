@@ -316,6 +316,7 @@ recalls extract usda_establishments
 recalls extract nhtsa --since=2023-12-01
 # USCG auto-short-circuits on page 0 if Records Found + page-0 IDs match prior run
 recalls extract uscg
+recalls extract uscg_manufacturers
 
 # 2. Pipeline-health snapshot
 psql -f scripts/sql/_pipeline/recent_runs.sql
