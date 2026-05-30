@@ -122,12 +122,13 @@ def test_documented_intent_fields_accepted_on_rest_config() -> None:
 # --- Registry dicts ---
 
 
-def test_extractor_registry_covers_all_seven_sources() -> None:
-    # Seven sources after Phase 5d Step 7 lands uscg_manufacturers (2026-05-30).
-    # Prior count was six after Phase 5d Step 2 landed USCG recalls (2026-05-16);
-    # when an eighth lands, bump this test and the deep-rescan companion together.
+def test_extractor_registry_covers_all_eight_sources() -> None:
+    # Eight sources after Phase 5d Step 7 detail lands uscg_manufacturer_details
+    # (2026-05-30). Prior count was seven after the listing source landed; when a
+    # ninth lands, bump this test and the deep-rescan companion together.
     from src.extractors.uscg import UscgScrapingExtractor
     from src.extractors.uscg_manufacturer import UscgManufacturerExtractor
+    from src.extractors.uscg_manufacturer_detail import UscgManufacturerDetailExtractor
 
     assert set(EXTRACTOR_BY_SOURCE_NAME.keys()) == {
         "cpsc",
@@ -137,6 +138,7 @@ def test_extractor_registry_covers_all_seven_sources() -> None:
         "nhtsa",
         "uscg",
         "uscg_manufacturers",
+        "uscg_manufacturer_details",
     }
     assert EXTRACTOR_BY_SOURCE_NAME["cpsc"] is CpscExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["fda"] is FdaExtractor
@@ -145,16 +147,17 @@ def test_extractor_registry_covers_all_seven_sources() -> None:
     assert EXTRACTOR_BY_SOURCE_NAME["nhtsa"] is NhtsaExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["uscg"] is UscgScrapingExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["uscg_manufacturers"] is UscgManufacturerExtractor
+    assert EXTRACTOR_BY_SOURCE_NAME["uscg_manufacturer_details"] is UscgManufacturerDetailExtractor
 
 
-def test_deep_rescan_registry_covers_five_sources() -> None:
-    # Five after Phase 5d Step 7 lands uscg_manufacturers (2026-05-30). Both
-    # USCG sources have deep-rescan loaders that are symmetry-only — same
-    # fetches as the incremental path, skip freshness + records_count touches
-    # only — but still wired so `recalls deep-rescan <source>` works uniformly
-    # across sources.
+def test_deep_rescan_registry_covers_six_sources() -> None:
+    # Six after Phase 5d Step 7 detail lands uscg_manufacturer_details (2026-05-30).
+    # All three USCG sources have deep-rescan loaders; the manufacturer-detail one
+    # is a full ~16.3k-row sweep (Tier-2) vs the incremental listing-delta path.
+    # CPSC and USDA establishments have no deep-rescan path.
     from src.extractors.uscg import UscgDeepRescanLoader
     from src.extractors.uscg_manufacturer import UscgManufacturerDeepRescanLoader
+    from src.extractors.uscg_manufacturer_detail import UscgManufacturerDetailDeepRescanLoader
 
     assert set(DEEP_RESCAN_BY_SOURCE_NAME.keys()) == {
         "fda",
@@ -162,12 +165,17 @@ def test_deep_rescan_registry_covers_five_sources() -> None:
         "nhtsa",
         "uscg",
         "uscg_manufacturers",
+        "uscg_manufacturer_details",
     }
     assert DEEP_RESCAN_BY_SOURCE_NAME["fda"] is FdaDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["usda"] is UsdaDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["nhtsa"] is NhtsaDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["uscg"] is UscgDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["uscg_manufacturers"] is UscgManufacturerDeepRescanLoader
+    assert (
+        DEEP_RESCAN_BY_SOURCE_NAME["uscg_manufacturer_details"]
+        is UscgManufacturerDetailDeepRescanLoader
+    )
 
 
 def test_html_scraping_to_extractor_kwargs_returns_full_shape() -> None:

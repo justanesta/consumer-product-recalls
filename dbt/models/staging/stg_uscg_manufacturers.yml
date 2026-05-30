@@ -7,9 +7,10 @@ models:
       bronze. Applies Finding F.3 sentinel normalization ('UNK', '-', '' →
       NULL across company_name / address / city), and Finding G empty-state
       handling for Canadian rows. Listing addresses are truncated at ~30
-      chars at source (Finding F.1) — documented limitation; full address
-      would require a per-manufacturer detail-page walk, deferred to a
-      Phase 6+ enrichment pass.
+      chars at source (Finding F.1) on THIS listing table; the full untruncated
+      address (and the succession lineage) is captured by the companion source
+      `uscg_manufacturer_details` (Phase 5d Step 7 detail /
+      `stg_uscg_manufacturer_details`).
     columns:
       - name: source_recall_id
         description: USCG Manufacturer Identification Code (MIC) — regulatory 3-character alphanumeric per USCG-2013-0133-0005. Stable natural key.

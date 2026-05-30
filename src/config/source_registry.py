@@ -11,11 +11,12 @@ Two key design choices:
 1. **Lightweight registry as static dicts.** ADR 0012 explicitly rejects
    dcpy's heavy ``ConnectorRegistry`` ("we have three operation types and five
    sources; direct Python imports are simpler than runtime dispatch at this
-   scale"). The mapping below is exactly that — a 7-entry dict and a 5-entry
+   scale"). The mapping below is exactly that — an 8-entry dict and a 6-entry
    dict, populated at module import time (the ADR's "five sources" referenced
    the original five recall sources; ``usda_establishments`` was added in
-   Phase 5b.2 and ``uscg_manufacturers`` in Phase 5d Step 7 as sibling
-   non-recall directories). Tests that need to mock a specific extractor class
+   Phase 5b.2, ``uscg_manufacturers`` in Phase 5d Step 7, and
+   ``uscg_manufacturer_details`` in Phase 5d Step 7 detail as sibling
+   non-recall directories/enrichment sources). Tests that need to mock a specific extractor class
    do so via ``patch.dict("src.config.source_registry.
    EXTRACTOR_BY_SOURCE_NAME", {"cpsc": mock_cls})`` rather than patching the
    class symbol in its defining module.
@@ -52,6 +53,10 @@ from src.extractors.uscg_manufacturer import (
     UscgManufacturerDeepRescanLoader,
     UscgManufacturerExtractor,
 )
+from src.extractors.uscg_manufacturer_detail import (
+    UscgManufacturerDetailDeepRescanLoader,
+    UscgManufacturerDetailExtractor,
+)
 from src.extractors.usda import UsdaDeepRescanLoader, UsdaExtractor
 from src.extractors.usda_establishment import UsdaEstablishmentExtractor
 
@@ -71,6 +76,7 @@ EXTRACTOR_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
     "nhtsa": NhtsaExtractor,
     "uscg": UscgScrapingExtractor,
     "uscg_manufacturers": UscgManufacturerExtractor,
+    "uscg_manufacturer_details": UscgManufacturerDetailExtractor,
 }
 
 # Source-name → deep-rescan loader class for ``recalls deep-rescan <source>``.
@@ -86,6 +92,7 @@ DEEP_RESCAN_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
     "nhtsa": NhtsaDeepRescanLoader,
     "uscg": UscgDeepRescanLoader,
     "uscg_manufacturers": UscgManufacturerDeepRescanLoader,
+    "uscg_manufacturer_details": UscgManufacturerDetailDeepRescanLoader,
 }
 
 

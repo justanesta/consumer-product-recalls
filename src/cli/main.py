@@ -46,6 +46,12 @@ _ETAG_AUDIT_SOURCES = {"usda", "usda_establishments"}
 # would defeat the latter under test.
 _LOOKBACK_DAYS_SOURCES = {"cpsc", "fda"}
 
+# Sources that honor --limit (cap the work-list to the first N items). Only the
+# bronze-work-list-driven detail extractor supports it — for cheap dev validation
+# (a few detail pages exercise the full fetch->R2->bronze->dbt path) and for
+# chunked/resumable seeding. Other sources emit an ignored-notice for parity.
+_WORK_LIST_LIMIT_SOURCES = {"uscg_manufacturer_details"}
+
 # Per-source notices when --lookback-days is passed to a source that does not
 # honor it (no override_watermark_lookback method). Keeps the user's existing
 # CLI feedback intact under the new generic dispatch.
@@ -61,6 +67,15 @@ _LOOKBACK_NO_OP_MESSAGES: dict[str, str] = {
         "uscg: --lookback-days has no effect (page-0 precheck + full HTML "
         "re-scrape on cache miss; see scraping_observations.md Finding J)."
     ),
+    "uscg_manufacturers": (
+        "uscg_manufacturers: --lookback-days has no effect (page-0 Records-Found "
+        "precheck + full HTML re-scrape on cache miss; see "
+        "manufacturer_scraping_observations.md Finding K)."
+    ),
+    "uscg_manufacturer_details": (
+        "uscg_manufacturer_details: --lookback-days has no effect (work-list is a "
+        "listing-delta cursor over bronze; see phase-5d-uscg-manufacturers-detail.md)."
+    ),
 }
 
 # Per-source notices when deep-rescan ignores --start-date/--end-date.
@@ -73,6 +88,14 @@ _DEEP_RESCAN_NO_DATE_WINDOW_MESSAGES: dict[str, str] = {
     "uscg": (
         "uscg: --start-date / --end-date are ignored "
         "(USCG listing has no date-range query surface; full re-scrape every run)."
+    ),
+    "uscg_manufacturers": (
+        "uscg_manufacturers: --start-date / --end-date are ignored "
+        "(directory has no date-range query surface; full re-scrape every run)."
+    ),
+    "uscg_manufacturer_details": (
+        "uscg_manufacturer_details: --start-date / --end-date are ignored "
+        "(detail pages have no date-range query surface; full sweep on deep-rescan)."
     ),
 }
 
@@ -170,6 +193,18 @@ def extract(
             ),
         ),
     ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit",
+            help=(
+                "Cap the work-list to the first N items. Only "
+                "uscg_manufacturer_details honors it (its work-list is derived "
+                "from bronze): use a small N for cheap dev validation, or repeated "
+                "capped runs for chunked/resumable seeding. Ignored by other sources."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run the incremental extractor for a given source.
 
@@ -182,6 +217,10 @@ def extract(
     configure_logging()
     change_type = _validate_change_type(change_type)
     _validate_etag_audit_source(change_type, source)
+
+    if limit is not None and limit < 1:
+        typer.echo("--limit must be >= 1", err=True)
+        raise typer.Exit(code=1)
 
     if source not in EXTRACTOR_BY_SOURCE_NAME:
         typer.echo(f"Unknown source: {source}", err=True)
@@ -223,6 +262,18 @@ def extract(
     # Forces unconditional GET so the audit-check SQL can verify ETag honesty.
     if change_type == "etag_audit":
         extractor.etag_enabled = False  # type: ignore[attr-defined]
+
+    # --limit: only the bronze-work-list-driven detail extractor caps its
+    # work-list (mirrors the etag_audit post-construction mutation). Other
+    # sources get an ignored-notice for CLI shape parity.
+    if limit is not None:
+        if source in _WORK_LIST_LIMIT_SOURCES:
+            extractor.work_list_limit = limit  # type: ignore[attr-defined]
+        else:
+            typer.echo(
+                f"{source}: --limit has no effect "
+                "(only uscg_manufacturer_details caps a bronze work-list)."
+            )
 
     result = extractor.run(change_type=change_type)
     _print_run_summary(f"{source}: ", result)

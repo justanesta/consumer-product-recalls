@@ -1,0 +1,17 @@
+source_name: uscg_manufacturer_details
+source_type: html_scraping
+# Phase 5d Step 7 (detail) — Path B detail-page enrichment. Plan:
+# project_scope/phase-5d-uscg-manufacturers-detail.md.
+#
+# start_url is the canonical base detail URL. NOTE: unlike the listing source,
+# this extractor does NOT paginate start_url — it sources a work-list of
+# (mic, uscg_directory_id, detail_url) tuples from uscg_manufacturers_bronze and
+# fetches each row's already-absolutized detail_url. start_url is required by
+# HtmlScrapingExtractor and kept here as the canonical base.
+start_url: https://uscgboating.org/content/manufacturers-identification-detail.php
+timeout_seconds: 30.0
+scrape_delay_seconds: 1
+# No expected_columns: the detail page has no listing table. The schema-drift
+# fence is the RAISE-on-unknown-label check in
+# UscgManufacturerDetailExtractor._parse_details_page (against _DETAIL_LABEL_MAP),
+# not a column-header check.

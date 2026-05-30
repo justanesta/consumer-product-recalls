@@ -13,7 +13,8 @@ Step 1):
   ``https://uscgboating.org/content/manufacturers-identification.php``. NO
   per-manufacturer detail-page fetches (Finding C decision — listing-only
   for v1; address column truncated at ~30 chars per Finding F.1 source-DB
-  VARCHAR constraint, documented limitation). ADR 0007 content-hash dedup
+  VARCHAR constraint — resolved by migration 0017 (``uscg_manufacturer_details_bronze``,
+  Phase 5d Step 7 detail enrichment), which captures full addresses). ADR 0007 content-hash dedup
   absorbs no-op runs; Finding J ``Records Found`` short-circuit (shared with
   USCG recalls via migration 0014 — ``source_watermarks.last_records_count``
   and ``extraction_runs.was_short_circuited`` are generic at the column

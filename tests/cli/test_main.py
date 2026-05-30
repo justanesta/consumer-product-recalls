@@ -183,6 +183,55 @@ def test_extract_fda_lookback_days_calls_override_method(
     mock_extractor.override_watermark_lookback.assert_called_once_with(7)
 
 
+def test_extract_uscg_manufacturer_details_limit_sets_work_list_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--limit sets work_list_limit on the detail extractor (cheap dev
+    validation / chunked seeding), mirroring the etag_audit post-construction
+    mutation pattern."""
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result(fetched=50, loaded=50)
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        _patch_extractor("uscg_manufacturer_details", mock_extractor),
+    ):
+        result = runner.invoke(app, ["extract", "uscg_manufacturer_details", "--limit", "50"])
+
+    assert result.exit_code == 0
+    assert mock_extractor.work_list_limit == 50
+
+
+def test_extract_limit_no_op_for_other_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--limit on a non-work-list source surfaces an ignored-notice (parity)."""
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_extractor = MagicMock()
+    mock_extractor.run.return_value = _fake_run_result()
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        _patch_extractor("cpsc", mock_extractor),
+    ):
+        result = runner.invoke(app, ["extract", "cpsc", "--limit", "50"])
+
+    assert result.exit_code == 0
+    assert "no effect" in result.output
+
+
+def test_extract_limit_rejects_non_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--limit < 1 exits 1 with a clear message before any extraction work."""
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+    result = runner.invoke(app, ["extract", "cpsc", "--limit", "0"])
+    assert result.exit_code == 1
+    assert "must be >= 1" in result.output
+
+
 # ---------------------------------------------------------------------------
 # deep-rescan command
 # ---------------------------------------------------------------------------
