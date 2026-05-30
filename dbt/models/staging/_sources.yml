@@ -212,3 +212,44 @@ sources:
       - name: uscg_recalls_rejected
         description: Quarantine table for USCG records that failed validation or invariant checks (ADR 0013).
         loaded_at_field: rejected_at
+
+  - name: uscg_manufacturers
+    description: Bronze layer for the USCG boat-manufacturer directory (Manufacturer Identification Code registry) scraped by src.extractors.uscg_manufacturer.UscgManufacturerExtractor. Phase 5d Step 7 — sibling non-recall source paralleling the USDA establishments pattern (recalls + directory).
+    schema: public
+    tables:
+      - name: uscg_manufacturers_bronze
+        description: >
+          One row per (source_recall_id, content_hash) landed by scraping
+          uscgboating.org/content/manufacturers-identification.php (listing).
+          source_recall_id = MIC (regulatory 3-char alphanumeric per
+          USCG-2013-0133-0005). hash_exclude_fields={detail_url,
+          uscg_directory_id} per ADR 0007 — detail_url defends against
+          URL-scheme rewrites; uscg_directory_id is page-offset-deterministic
+          (Step 1 Finding B) and would churn the content_hash on every
+          re-crawl when rows are added/removed earlier in the alphabetical
+          ordering. Listing-only extraction; per-manufacturer detail-page
+          fetches are not performed (Step 1 Finding C; address truncated at
+          ~30 chars per Finding F.1).
+        loaded_at_field: extraction_timestamp
+        freshness:
+          # Directory updates infrequently (the public CSV's Last-Modified
+          # was 2019-10-18; HTML view is more current). Weekly cadence on
+          # the extractor side; SLA covers a missed weekly run + safety margin.
+          warn_after: {count: 14, period: day}
+          error_after: {count: 30, period: day}
+        columns:
+          - name: source_recall_id
+            description: USCG Manufacturer Identification Code (MIC) — regulatory 3-character alphanumeric.
+            tests:
+              - not_null
+          - name: content_hash
+            description: SHA-256 of canonicalized record payload (ADR 0007), excluding detail_url and uscg_directory_id. Dedup key.
+            tests:
+              - not_null
+          - name: extraction_timestamp
+            description: When the extractor wrote this row.
+            tests:
+              - not_null
+      - name: uscg_manufacturers_rejected
+        description: Quarantine table for USCG manufacturer records that failed validation or invariant checks (ADR 0013).
+        loaded_at_field: rejected_at

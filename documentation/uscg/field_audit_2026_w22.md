@@ -210,6 +210,21 @@ Trade-off: the 10 mic-only-no-name rows lose their firm dim entry. But:
 
 **Recommended.** Cross-source firm rollup quality improves materially: a Bombardier landing page actually shows "Bombardier" instead of "YDV"; FDA + USDA + USCG firm rollup against `firm.normalized_name = 'BOMBARDIER...'` works correctly.
 
+#### Update 2026-05-30 — Phase 5d Step 7 directory enrichment supersedes the soft-fail in part
+
+The Step 7 USCG manufacturers directory ingestion (16,263 manufacturer records scraped from `https://uscgboating.org/content/manufacturers-identification.php`) provides a strictly-better rescue path than the original company_name-only proposal. Implementation: `dbt/models/silver/firm.sql` USCG branch (+ `recall_event_firm.sql` USCG branch kept in lockstep) does a case-insensitive LEFT JOIN to `stg_uscg_manufacturers` on `upper(trim(mic))` with 3-way coalesce priority `coalesce(directory.company_name, recalls.company_name, recalls.mic)`.
+
+**Empirical outcome (corpus-scale `dbt build` + measurement script run 2026-05-30):**
+
+- **§3 Bug 3 mic-only-no-name rescue count: 5** (within the audit's predicted 0-10 range). Rescued MICs: `BLB → BRUNSWICK FAMILY BOAT CO INC`, `BRP → BAYRIPPER LLC`, `CRC → BRUNSWICK BOAT GROUP`, `MHB → MCBC HYDRA BOATS LLC (DBA)`, `PCM → PLEASURECRAFT ENGINE GROUP`. The other 5 of the original 10 mic-only-no-name rows have MICs that aren't in the directory (likely truly-retired regulatory codes); they still fall through to the soft-fail per Option 3.
+- **General canonical-name enrichment: ~18 USCG firms collapsed** in the firm dim (Q7b went from 749 → 731 reachable firms after the directory canonicalization replaced stale recall-time names with current directory names). This is a Bonus over the original Bug 3 scope — recalls with both `mic` and `company_name` populated now use the directory's canonical name when available.
+- **Cross-source coverage: 99.44%** (714 of 718 distinct recall MICs resolve to a directory entry). 4 unresolvable orphans, all real: `111` (retired regulatory code per Finding I, 30 recall rows reference), `999` (17 rows, sentinel), `777` (1 row, sentinel), `N/A` (1 row, literal "N/A" string).
+- **Case-sensitivity finding (silver-only):** USCG recalls bronze contains 7 distinct lowercase MIC values (`cec`, `blb`, `kis`, `lbb`, `ser`, `vky`, `zep`) that are case-mismatched against the directory's all-uppercase canonical form. The case-insensitive JOIN handles them cleanly; bronze still preserves verbatim per ADR 0027.
+
+Measurement script: `scripts/sql/uscg_manufacturers/silver/measure_rescue_and_coverage.sql`. Implementation files: `dbt/models/silver/firm.sql:99-130` (USCG branch with directory LEFT JOIN) + `dbt/models/silver/recall_event_firm.sql:85-103` (USCG branch in lockstep). Plan: `project_scope/phase-5d-uscg-manufacturers.md`. Empirical observations: `documentation/uscg/manufacturer_scraping_observations.md` §L.
+
+The "Option 3 soft-fail" decision still applies for the 5 mic-only-no-name rows that DON'T have a directory entry. Phase 6b can revisit if those retired-MIC rows become recoverable via a synthetic-anchor strategy.
+
 ## 4. Underused captures — lift from `source_payload_raw` JSONB to first-class silver columns
 
 USCG bundles 15 fields into `recall_event.source_payload_raw` JSONB at `recall_event.sql:190-206` + more in `recall_product.source_specific_attrs`. Several are landing-page-critical or cross-source-alignable:
@@ -302,6 +317,14 @@ Under the §3 Bug 3 fix:
 - The 10 mic-only-no-name rows (mic populated, company_name NULL) lose their firm dim entry; their `mic` lives in `recall_event.source_payload_raw.mic` for landing-page rendering
 
 This is the Phase 6b-aligned architecture — same shape as USDA's `firm.company_id = establishment_number` + `firm.raw_name = establishment_name` design.
+
+### Update 2026-05-30 — Phase 5d Step 7 adds directory enrichment as a third firm-source
+
+Step 7 ingests the USCG manufacturer directory (16,263 records) as a sibling non-recall source `uscg_manufacturers` — paralleling the USDA `usda_establishments` design. Silver lands `stg_uscg_manufacturers` (staging) + `firm_manufacturer_attributes` (per-MIC dim, sibling to `firm_establishment_attributes`). The directory becomes a third firm-name source for `firm.sql`'s USCG branch alongside recalls and the raw `mic` fallback (`coalesce(directory.company_name, recalls.company_name, recalls.mic)` priority).
+
+**Cross-source ID anchor coverage rises materially:** the 99.44% recalls→directory match rate (714/718 distinct USCG recall MICs resolve) puts USCG's structured-ID coverage at parity with USDA when measured corpus-wide. The 4 orphans (`111`, `999`, `777`, `N/A`) are real retirements/sentinels, not coverage gaps. Phase 6b firm-resolution gains a richer anchor: a recall referencing `mic='YDV'` can now resolve to both the structured MIC AND the canonical USCG-registered company name in a single JOIN, with the regulatory address as bonus enrichment.
+
+The case-insensitive JOIN (`upper(trim(r.mic)) = upper(trim(m.mic))`) mirrors the USDA precedent at `firm.sql:82-83`. Both `firm.sql` and `recall_event_firm.sql` USCG branches use the identical computation; a comment on each enforces "keep these two CTEs in lockstep" so future changes don't recreate the firm_id orphan problem we surfaced and resolved during Step 5/6 (1549 orphans → 0).
 
 ### USCG-specific firm-name patterns (Phase 6b name-cleaning inputs)
 

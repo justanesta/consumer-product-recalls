@@ -20,11 +20,15 @@
 -- 'manufacturer' role. company_id=null — NHTSA has no analog to FDA's firmfeinum.
 -- The 'AC DELCO' vs 'ACDELCO' drift class (ADR 0031) currently produces two
 -- firm rows; reconciliation is Phase 6 RapidFuzz work per ADR 0002.
--- USCG contributes coalesce(mic, company_name) as the firm anchor, always
--- 'manufacturer' role. company_id = mic when populated (USCG's structured
--- Manufacturer Industry Code), falling back to null when only company_name
--- exists. Finding S null-anchor rows (both mic AND company_name NULL) are
--- filtered out — they never reach the firm dimension.
+-- USCG contributes a directory-enriched firm anchor (Phase 5d Step 7),
+-- always 'manufacturer' role. raw_name preference: directory.company_name
+-- > recalls.company_name > recalls.mic. company_id = recalls.mic (the
+-- structured Manufacturer Identification Code). LEFT JOIN to
+-- stg_uscg_manufacturers via mic supplies the canonical USCG-registered
+-- name when available, rescuing the ~10 mic-only-no-name recall rows
+-- (Phase 6a USCG audit §3 Bug 3). Finding S null-anchor rows (both mic AND
+-- company_name AND directory NULL) are filtered out — they never reach
+-- the firm dimension.
 -- Matching by normalized_name enables implicit cross-source firm deduplication:
 -- a firm that appears in multiple sources with the same normalized name will
 -- collapse to a single row with all company IDs in observed_company_ids.
@@ -97,17 +101,48 @@ nhtsa_normalized as (
 ),
 
 uscg_normalized as (
-    -- Firm anchor = coalesce(mic, company_name) per Finding S. company_id
-    -- is mic when populated (USCG's structured Manufacturer Industry Code,
-    -- a 3-character alpha identifier), null otherwise.
+    -- USCG firm anchor coalesces (in priority order):
+    --   1. directory.company_name — USCG-registered canonical name from
+    --      the manufacturer directory (Phase 5d Step 7 enrichment).
+    --   2. recalls.company_name — per-recall name as scraped at recall
+    --      time (may be stale relative to the live directory).
+    --   3. recalls.mic — last resort when neither directory nor recalls
+    --      has a name (Finding S null-anchor rows that still have a MIC).
+    -- company_id stays mic — the LEFT JOIN does not change the structured
+    -- ID, only adds a richer raw_name source.
+    --
+    -- The LEFT JOIN serves the Phase 6a USCG audit §3 Bug 3 rescue: the
+    -- ~10 mic-only-no-name recall rows resolve to their canonical directory
+    -- name (e.g., recalls mic='YDV' + NULL company_name → directory
+    -- company_name 'YAMAHA DEALER VENTURES'). It also performs general
+    -- firm-name canonicalization across the corpus (recalls company_name
+    -- was scraped at recall time and may be stale; directory is the live
+    -- USCG registry of record).
+    --
+    -- Coverage caveat: ~93.2% of recalls have populated mic (per Finding S);
+    -- recalls without a mic cannot join the directory and fall through to
+    -- recalls.company_name (or null anchor) as before.
+    --
+    -- Case-insensitive JOIN per Step 3 corpus-validation finding (2026-05-30):
+    -- USCG recalls bronze contains 7 distinct lowercase MICs (cec, blb, kis,
+    -- lbb, ser, vky, zep) that have uppercase matches in the directory.
+    -- The case-sensitive equality `r.mic = m.mic` missed these and they
+    -- showed up as Q3b orphans in measure_rescue_and_coverage.sql at 98.48%
+    -- match rate. Aligning the JOIN with the USDA precedent
+    -- (firm.sql line 82-83: `upper(trim(r.establishment)) =
+    -- upper(trim(e.establishment_name))`) recovers them — coverage rises
+    -- to ~99.4% and the rescue count from 5 to ~12.
     select distinct
-        'manufacturer'                                  as role,
-        coalesce(mic, company_name)                     as raw_name,
-        upper(trim(coalesce(mic, company_name)))        as normalized_name,
-        mic                                             as company_id
-    from {{ ref('stg_uscg_recalls') }}
-    where coalesce(mic, company_name) is not null
-      and trim(coalesce(mic, company_name)) <> ''
+        'manufacturer'                                          as role,
+        coalesce(m.company_name, r.company_name, r.mic)         as raw_name,
+        upper(trim(coalesce(m.company_name, r.company_name, r.mic)))
+                                                                as normalized_name,
+        r.mic                                                   as company_id
+    from {{ ref('stg_uscg_recalls') }} r
+    left join {{ ref('stg_uscg_manufacturers') }} m
+        on upper(trim(r.mic)) = upper(trim(m.mic))
+    where coalesce(m.company_name, r.company_name, r.mic) is not null
+      and trim(coalesce(m.company_name, r.company_name, r.mic)) <> ''
 ),
 
 all_normalized as (

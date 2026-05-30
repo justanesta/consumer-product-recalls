@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: stg_uscg_manufacturers
+    description: >
+      One row per USCG-registered boat-manufacturer MIC, latest version from
+      bronze. Applies Finding F.3 sentinel normalization ('UNK', '-', '' →
+      NULL across company_name / address / city), and Finding G empty-state
+      handling for Canadian rows. Listing addresses are truncated at ~30
+      chars at source (Finding F.1) — documented limitation; full address
+      would require a per-manufacturer detail-page walk, deferred to a
+      Phase 6+ enrichment pass.
+    columns:
+      - name: source_recall_id
+        description: USCG Manufacturer Identification Code (MIC) — regulatory 3-character alphanumeric per USCG-2013-0133-0005. Stable natural key.
+        tests:
+          - not_null
+          - unique
+      - name: mic
+        description: Convenience alias of source_recall_id (the MIC) — provided so cross-source joins read naturally (e.g. `on r.mic = m.mic`).
+        tests:
+          - not_null
+          - unique
+      - name: content_hash
+        description: SHA-256 of canonicalized record payload (ADR 0007), excluding detail_url and uscg_directory_id. Dedup key.
+        tests:
+          - not_null
+      - name: extraction_timestamp
+        description: When the extractor wrote this row.
+        tests:
+          - not_null

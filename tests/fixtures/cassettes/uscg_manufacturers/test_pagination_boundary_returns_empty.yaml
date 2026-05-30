@@ -1,0 +1,356 @@
+interactions:
+- request:
+    body: ''
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Host:
+      - uscgboating.org
+      User-Agent:
+      - 'consumer-product-recalls/0.8.0 (contact: adriannesta@gmail.com)'
+    method: GET
+    uri: https://uscgboating.org/content/manufacturers-identification.php?pageNum_manufacturers=999
+  response:
+    body:
+      string: "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n<html
+        xmlns=\"http://www.w3.org/1999/xhtml\" lang=\"en\">\n<head><!-- Google Tag
+        Manager -->\n<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':\nnew
+        Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],\nj=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=\n'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);\n})(window,document,'script','dataLayer','GTM-M6276VV');</script>\n<!--
+        End Google Tag Manager -->\n<meta http-equiv=\"Content-Type\" content=\"text/html;
+        charset=utf-8\" />\n<title>Manufacturers Identification</title>\n\n   <link
+        href=\"../css/frontpage_styles.css\" rel=\"stylesheet\" type=\"text/css\"
+        />\n   <link rel=\"stylesheet\" href=\"../script/cssmenu/styles.css\">\n   <link
+        rel=\"stylesheet\" href=\"../script/lightbox/example1/colorbox.css\" />\n
+        \  \n   <script src=\"https://cdnjs.cloudflare.com/ajax/libs/jquery/3.5.1/jquery.min.js\"></script>\n
+        \  \n   <script src=\"../script/cssmenu/script.js\"></script>\n   <script
+        src=\"../script/lightbox/jquery.colorbox.js\"></script>\n   <script>\n\t\t\t$(document).ready(function(){\n\t\t\t\t//Examples
+        of how to assign the Colorbox event to elements\n\t\t\t\t$(\".group1\").colorbox({rel:'group1'});\n\t\t\t\t$(\".group2\").colorbox({rel:'group2',
+        transition:\"fade\"});\n\t\t\t\t$(\".group3\").colorbox({rel:'group3', transition:\"none\",
+        width:\"75%\", height:\"75%\"});\n\t\t\t\t$(\".group4\").colorbox({rel:'group4',
+        slideshow:true});\n\t\t\t\t$(\".ajax\").colorbox();\n\t\t\t\t$(\".youtube\").colorbox({iframe:true,
+        innerWidth:640, innerHeight:390});\n\t\t\t\t$(\".vimeo\").colorbox({iframe:true,
+        innerWidth:500, innerHeight:409});\n\t\t\t\t$(\".iframe\").colorbox({iframe:true,
+        width:\"80%\", height:\"70%\"});\n\t\t\t\t$(\".info-frame\").colorbox({iframe:true,
+        width:\"50%\", height:\"50%\"});\n\t\t\t\t$(\".inline\").colorbox({inline:true,
+        width:\"50%\"});\n\t\t\t\t$(\".callbacks\").colorbox({\n\t\t\t\t\tonOpen:function(){
+        alert('onOpen: colorbox is about to open'); },\n\t\t\t\t\tonLoad:function(){
+        alert('onLoad: colorbox has started to load the targeted content'); },\n\t\t\t\t\tonComplete:function(){
+        alert('onComplete: colorbox has displayed the loaded content'); },\n\t\t\t\t\tonCleanup:function(){
+        alert('onCleanup: colorbox has begun the close process'); },\n\t\t\t\t\tonClosed:function(){
+        alert('onClosed: colorbox has completely closed'); }\n\t\t\t\t});\n\n\t\t\t\t$('.non-retina').colorbox({rel:'group5',
+        transition:'none'})\n\t\t\t\t$('.retina').colorbox({rel:'group5', transition:'none',
+        retinaImage:true, retinaUrl:true});\n\t\t\t\t\n\t\t\t\t//Example of preserving
+        a JavaScript event for inline calls.\n\t\t\t\t$(\"#click\").click(function(){
+        \n\t\t\t\t\t$('#click').css({\"background-color\":\"#f00\", \"color\":\"#fff\",
+        \"cursor\":\"inherit\"}).text(\"Open this window again and this message will
+        still be here.\");\n\t\t\t\t\treturn false;\n\t\t\t\t});\n\t\t\t});\n\t\t</script>\n\n</head>\n\n<body><!--
+        Google Tag Manager (noscript) -->\n<noscript><iframe src=\"https://www.googletagmanager.com/ns.html?id=GTM-M6276VV\"\nheight=\"0\"
+        width=\"0\" style=\"display:none;visibility:hidden\"></iframe></noscript>\n<!--
+        End Google Tag Manager (noscript) -->\n<!--Coast Guard Bar Red-->\n<div class=\"skipnav\">\n
+        \ <a href=\"#pagecontent\">Skip Navigation </a></div>\n<div align=\"center\"
+        class=\"log_container\">\n\n  <div class=\"uscg_logo\"> <a href=\"http://www.gocoastguard.com\"
+        target=\"_blank\"><img src=\"https://uscgboating.org/images/USCoastGuard_Logo.png\"
+        alt=\"United States Coast Guard\" width=\"229\" height=\"16\" border=\"0\"
+        /></a>\n    </div>\n</div>\n   <!--start content-->\n            \n   <!--end
+        content-->\n   <!--CORONA VIRUS ALERT-->\n<!--<div style=\"padding:1px;\"></div>\n<div
+        class=\"alert-corona\" align=\"center\">\n<a href=\"https://www.cdc.gov/coronavirus/2019-ncov/if-you-are-sick/steps-when-sick.html?CDC_AA_refVal=https%3A%2F%2Fwww.cdc.gov%2Fcoronavirus%2F2019-ncov%2Fabout%2Fsteps-when-sick.html\"
+        target=\"_blank\" class=\"alert-corona\">If you are sick with COVID-19 or
+        suspect you are infected with the virus that causes COVID-19 please follow
+        CDC guidelines located here.</a> \n</div>-->\n<!--CORONA VIRUS ALERT END--><!--Main
+        Menu-->\n<div align=\"center\" class=\"container_boater_responsibility_logo\">\n\n\n<div
+        id=\"response_logo\">\n\n\n<table width=\"100%\" border=\"0\" cellspacing=\"0\"
+        cellpadding=\"0\">\n  <tr>\n    <td width=\"306\" rowspan=\"2\"><a href=\"https://uscgboating.org/index.php\"><img
+        src=\"https://uscgboating.org/images/BoatingResponsibility.png\" alt=\"United
+        States Coast Guard - Boating Safety\" width=\"306\" height=\"74\" border=\"0\"
+        /></a></td>\n    <td align=\"center\" class=\"main-menu-text-no\">&nbsp;</td>\n
+        \   <td align=\"center\" valign=\"bottom\" class=\"mini-menu-no\"><a href=\"https://uscgboating.org/content/frequently-asked-questions.php\"
+        title=\"FAQs\" class=\"mini-menu\">FAQ'S</a> | <a href=\"https://uscgboating.org/content/site_map.php\"
+        title=\"Site Map\" class=\"mini-menu\">SITE MAP</a> | <a href=\"https://uscgboating.org/content/contact.php\"
+        title=\"Contact Us\" class=\"mini-menu\">CONTACT US</a></td>\n  </tr>\n  <tr>\n
+        \   <td align=\"center\" valign=\"middle\" class=\"main-menu-text-no\">\n
+        \       <a href=\"https://uscgboating.org/manufacturers/index.php?m=m\" title=\"Manufacturers\"
+        class=\"main-menu-text\">Manufacturers</a>\n         |\n        <a href=\"https://uscgboating.org/recreational-boaters/index.php?m=rb\"
+        title=\"Recreational Boaters\" class=\"main-menu-text\">Recreational Boaters</a>\n
+        \      <br />\n\n        <a href=\"https://uscgboating.org/safety-partners/index.php?m=r\"
+        class=\"main-menu-text\">Boating Safety Partners</a></td>\n    \n    <td align=\"center\"><form
+        action=\"https://uscgboating.org/search/index.php\" class=\"fineprint\" id=\"search
+        site\" title=\"Search\">\n      <label for=\"search\">Search:</label>\n      <input
+        name=\"search\" type=\"text\" class=\"search-box\" id=\"search\" />\n      <input
+        name=\"Search\" type=\"submit\" value=\"GO\" class=\"search_button\" id=\"Search
+        Button\" /></form></td>\n  </tr>\n</table>\n   </div>\n</div><!--submenu-->\n<div
+        id='cssmenu' align=\"center\">\n  <ul>\n    <!--Home Link-->\n        <!--End
+        Home Link-->\n    <!--Start About Menu-->\n    <li  class='active has-sub'>\n
+        \     <a href='https://uscgboating.org/content/about.php'><span>About</span></a>\n
+        \     <ul>\n        <li class='has-sub'><a href='https://uscgboating.org/content/strategic-plan.php'><span>Strategic
+        Plan</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/content/frequently-asked-questions.php'><span>Frequently
+        Asked Questions</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/content/us-coast-guard-facts.php'><span>U.S.
+        Coast Guard Facts</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/content/people-of-boating-safety.php'><span>People
+        of Boating Safety</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/content/District-RBS-Specialists.php'><span>District
+        Recreational Boating Program Specialists</span></a> </li>\n        <li class='has-sub'><a
+        href='https://uscgboating.org/content/vision-and-mission.php'><span>Vision/Mission</span></a>
+        </li>\n        <li class='has-sub'><a href='https://uscgboating.org/content/partnerships.php'><span>Partnerships</span></a>
+        </li>\n        <li class='has-sub'><a href='https://uscgboating.org/content/site_map.php'><span>Site
+        Map</span></a> </li>\n      </ul>\n    </li>\n    <!--End About Menue-->\n
+        \   <!--Start Manufacturers Menu-->\n        <li class='active has-sub'>\n
+        \     <a href='https://uscgboating.org/regulations/index.php?m=r'><span>Regulations</span></a>\n
+        \     <ul>\n        <li class='has-sub'><a href='https://uscgboating.org/regulations/federal-laws.php'><span>Federal
+        Laws</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/regulations/federal-regulations.php'><span>Federal
+        Regulations</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/regulations/state-boating-laws.php'><span>State
+        Boating Laws</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/regulations/State-Guidance/'><span>State
+        Guidance</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/regulations/navigation-rules.php'><span>Navigation
+        Rules</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/regulations/federal-register.php'><span>Federal
+        Register</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/regulations/vessel-determinations.php'><span>Vessel
+        Determinations and<br>Policy Letters</span></a> </li>\n      </ul>\n    </li>\n
+        \       <!--End Manufacturers Menu-->\n    <!--Start Safety Menue-->\n        <li
+        class='active has-sub'>\n      <a href='https://uscgboating.org/recreational-boaters/index.php?m=rb'><span>Safety</span></a>\n
+        \     <ul>\n        <li class='has-sub'><a href='http://www.safetyseal.net/'><span>Vessel
+        Safety Check</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/recreational-boaters/boating-safety-courses.php'><span>Boating
+        Safety Courses</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/recreational-boaters/accident-reporting.php'><span>Accident
+        Reporting</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/recreational-boaters/boating-under-the-influence.php'><span>BUI
+        Initiatives</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/recreational-boaters/carbon-monoxide.php'><span>Carbon
+        Monoxide</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/recreational-boaters/life-jacket-wear-wearing-your-life-jacket.php'><span>Life
+        Jacket Wear / Wearing your Life Jacket</span></a> </li>\n        <li class='has-sub'><a
+        href='https://uscgboating.org/recreational-boaters/floating-plan.php'><span>Float
+        Planning</span></a> </li>\n        <li class='has-sub'>\n          <a href='https://uscgboating.org/recreational-boaters/floating-plan.php'><span>Regulations</span></a>\n
+        \         <ul>\n            <li class='has-sub'><a href='https://uscgboating.org/regulations/state-boating-laws.php'><span>State
+        Boating Laws</span></a> </li>\n            <li class='has-sub'><a href='https://uscgboating.org/regulations/navigation-rules.php'><span>Navigation
+        Rules</span></a> </li>\n          </ul>\n        </li>\n      </ul>\n    </li>\n
+        \       <!--End Safety Menu-->\n    <!--Start Recall and Safety Menu-->\n
+        \       <li  class='active has-sub'>\n      <a href='https://uscgboating.org/content/recalls_and_safety_defects.php'><span>Recalls
+        & Safety Defects</span></a>\n      <ul>\n        <li class='has-sub'><a href='https://uscgboating.org/content/manufacturers-identification.php'><span>Manufacturers
+        Identification</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/content/consumer-safety-defect-report.php'><span>Consumer
+        Safety Defect Report</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/content/recalls.php'><span>Recalls</span></a>
+        </li>\n        <li class='has-sub'><a href='https://uscgboating.org/content/product-assurance-branch.php'><span>Product
+        Assurance Branch</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/content/boating-safety-circulars.php'><span>Boating
+        Safety Circulars</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/multimedia/repository.php'><span>Beacon
+        Alerts</span></a> </li>\n        <li class='has-sub'><a href='http://www.dco.uscg.mil/Our-Organization/Assistant-Commandant-for-Prevention-Policy-CG-5P/Inspections-Compliance-CG-5PC-/Office-of-Investigations-Casualty-Analysis/Safety-Alerts/'
+        target=\"_blank\"><span>Marine Safety Alerts</span></a> </li>\n      </ul>\n
+        \   </li>\n        <!--End Recall and Safety Menu-->\n    <!--Start Multimedia
+        Menu-->\n        <li class='active has-sub'>\n      <a href='https://uscgboating.org/content/multimedia.php'><span>Multimedia</span></a>\n
+        \     <ul>\n        <li class='has-sub'><a href='https://uscgboating.org/multimedia/public-service-announcements.php'><span>PSA's</span></a>
+        </li>\n        <li class='has-sub'><a href='https://uscgboating.org/multimedia/gallery.php'><span>Image
+        Library</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/multimedia/repository.php'><span>News</span></a>
+        </li>\n        <li class='has-sub'><a href='https://uscgboating.org/multimedia/videos.php'><span>Videos</span></a>
+        </li>\n        <li class='has-sub'><a href='https://uscgboating.org/multimedia/graphics.php'><span>Graphics</span></a>
+        </li>\n        <li class='has-sub'><a href='https://uscgboating.org/multimedia/PFDlabelsgraphics.php'><span>PFD
+        Labels & POS Graphics</span></a> </li>\n        <li class='has-sub'><a href='https://www.safeafloat.com/'
+        target=\"_blank\"><span>Safeafloat</span></a> </li>\n      </ul>\n    </li>\n
+        \       <!--End Multimedia Menu-->\n    <!--Start Statistics Menu-->\n        <li
+        \ class='active has-sub'>\n      <a href='https://uscgboating.org/statistics/index.php'><span>Statistics</span></a>\n
+        \     <ul>\n        <li class='has-sub'><a href='https://uscgboating.org/statistics/accident_statistics.php'><span>Accident
+        Statistics</span></a> </li>\n        <li class='has-sub'><a href='https://bard.knightpoint.systems/PublicInterface/Report1.aspx'><span>Search
+        Data</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/statistics/national-life-jacket-wear-rate-study.php'><span>National
+        Life Jacket Wear Rate Observational Study</span></a> </li>\n        <li class='has-sub'><a
+        href='https://uscgboating.org/statistics/research-on-recreational-boating-accidents.php'><span>Recent
+        Research on Recreational Boating Accidents and the Contribution of Boating
+        Under the Influence</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/statistics/national-recreational-boating-safety-survey.php'><span>National
+        Recreational Boating Safety Survey</span></a> </li>\n        <li class='has-sub'><a
+        href='https://uscgboating.org/statistics/education-quick-phase-in-study.php'><span>Education
+        Quick Phase In Study</span></a> </li>\n      </ul>\n    </li>\n        <!--End
+        Statistics Menu-->\n    <!--Start NBSAC Menu-->\n        <li class='active'>\n
+        \     <a href='https://uscgboating.org/NBSAC/index.php'><span>NBSAC</span></a>\n
+        \     <!--\n      <ul>\n        <li class='has-sub'><a href='https://uscgboating.org/NBSAC/meeting-information.php'><span>Meeting
+        Information</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/NBSAC/resolutions.php'><span>Resolutions</span></a>
+        </li>\n        <li class='has-sub'><a href='https://uscgboating.org/NBSAC/apply-to-nbsac.php'><span>How
+        to Apply to NBSAC</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/NBSAC/further-infromation-about-nbsac.php'><span>Further
+        Information About NBSAC</span></a> </li>\n        <li class='has-sub'><a href='https://homeport.uscg.mil/missions/federal-advisory-committees/national-boating-safety-advisory-committee-(nbsac)'
+        target=\"_blank\"><span>Homeport</span></a></li>\n      </ul>\n      -->\n
+        \   </li>\n        <!--End NBSAC Menu-->\n    <!--Start Grants Menu-->\n        <li
+        \ class='active has-sub'>\n      <a href='https://uscgboating.org/grants/index.php'><span>Grants</span></a>\n
+        \     <ul>\n        <li class='has-sub'><a href='https://uscgboating.org/grants/state-grants.php'><span>State
+        Grants</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/grants/nonprofit-grants.php'><span>Nonprofit
+        Organization Grants</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/grants/grant-archives.php'><span>Grant
+        Archives</span></a> </li>\n        <li class='has-sub'><a href='https://uscgboating.org/links/grants.php'><span>Grant
+        Links</span></a> </li>\n      </ul>\n    </li>\n        <!--End Grants Menu-->\n
+        \   <!--Start Links Menu-->\n        <!--End Links Menu-->\n  </ul>\n  <a
+        name=\"pagecontent\" id=\"pagecontent\"></a>\n</div><!--header image-->\n<div
+        align=\"center\">\n\t<div class=\"header-backgound\">\n    \n    </div>\n</div>\n<!--header
+        image-->\n<div align=\"center\">\n\n<div align=\"center\" class=\"white-boarder\">\n\t<div
+        align=\"center\" class=\"header-orange-box\">\n    Manufacturers Identification</div>\n</div>\n\n\n</div>\n\n<!--Start
+        Body-->\n<div align=\"center\">\n<div class=\"body-container\" align=\"left\">\n
+        \ <table width=\"980\" border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\n
+        \   <tr>\n      <td valign=\"top\"><div>\n        <div>\n          <h2>Search
+        Manufacturers List</h2><div><p>\n         \n <!--search by company-->        \n
+        \           <table width=\"100%\" border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\n
+        \             <tr>\n                <td width=\"30%\" valign=\"top\"><div>\n
+        \                 <form id=\"form1\" name=\"form1\" method=\"post\" action=\"manufacturers-identification-result2.php\">\n
+        \                   <table width=\"100%\" border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\n
+        \                     <tr>\n                        <td align=\"center\"><table
+        width=\"50%\" border=\"0\" cellpadding=\"5\" cellspacing=\"0\">\n                          <tr>\n
+        \                             <td width=\"171\" align=\"right\"><strong><label
+        for=\"company\">Company Name or MIC:</label></strong></td>\n                              <td
+        width=\"166\">\n                              <input name=\"company\" type=\"text\"
+        id=\"company\" value=\"\" />\n                                <a class=\"info-frame\"
+        href=\"mic-info.php\"><img src=\"../images/info-icon.png\" alt=\"information\"
+        width=\"15\" height=\"15\" border=\"0\" /></a></td>\n                              </tr>\n
+        \                           <tr>\n                              <td align=\"right\"><strong><label
+        for=\"state\">State:                                </label></strong></td>\n
+        \                             <td><select name=\"state\" id=\"state\">\n                                <option
+        value=\"\" selected=\"selected\">All States</option>\n                                                                <option
+        value=\"AL\">Alabama</option>\n                                                                <option
+        value=\"AK\">Alaska</option>\n                                                                <option
+        value=\"AS\">American Samoa</option>\n                                                                <option
+        value=\"AZ\">Arizona</option>\n                                                                <option
+        value=\"AR\">Arkansas</option>\n                                                                <option
+        value=\"CA\">California</option>\n                                                                <option
+        value=\"CO\">Colorado</option>\n                                                                <option
+        value=\"CT\">Connecticut</option>\n                                                                <option
+        value=\"DE\">Delaware</option>\n                                                                <option
+        value=\"DC\">District of Columbia</option>\n                                                                <option
+        value=\"FL\">Florida</option>\n                                                                <option
+        value=\"GA\">Georgia</option>\n                                                                <option
+        value=\"GU\">Guam</option>\n                                                                <option
+        value=\"HI\">Hawaii</option>\n                                                                <option
+        value=\"ID\">Idaho</option>\n                                                                <option
+        value=\"IL\">Illinois</option>\n                                                                <option
+        value=\"IN\">Indiana</option>\n                                                                <option
+        value=\"IA\">Iowa</option>\n                                                                <option
+        value=\"KS\">Kansas</option>\n                                                                <option
+        value=\"KY\">Kentucky</option>\n                                                                <option
+        value=\"LA\">Louisiana</option>\n                                                                <option
+        value=\"ME\">Maine</option>\n                                                                <option
+        value=\"MD\">Maryland</option>\n                                                                <option
+        value=\"MA\">Massachusetts</option>\n                                                                <option
+        value=\"MI\">Michigan</option>\n                                                                <option
+        value=\"MN\">Minnesota</option>\n                                                                <option
+        value=\"MS\">Mississippi</option>\n                                                                <option
+        value=\"MO\">Missouri</option>\n                                                                <option
+        value=\"MT\">Montana</option>\n                                                                <option
+        value=\"NE\">Nebraska</option>\n                                                                <option
+        value=\"NV\">Nevada</option>\n                                                                <option
+        value=\"NH\">New Hampshire</option>\n                                                                <option
+        value=\"NJ\">New Jersey</option>\n                                                                <option
+        value=\"NM\">New Mexico</option>\n                                                                <option
+        value=\"NY\">New York</option>\n                                                                <option
+        value=\"NC\">North Carolina</option>\n                                                                <option
+        value=\"ND\">North Dakota</option>\n                                                                <option
+        value=\"MP\">Northern Marianna Islands</option>\n                                                                <option
+        value=\"OH\">Ohio</option>\n                                                                <option
+        value=\"OK\">Oklahoma</option>\n                                                                <option
+        value=\"OR\">Oregon</option>\n                                                                <option
+        value=\"PA\">Pennsylvania</option>\n                                                                <option
+        value=\"PR\">Puerto Rico</option>\n                                                                <option
+        value=\"RI\">Rhode Island</option>\n                                                                <option
+        value=\"SC\">South Carolina</option>\n                                                                <option
+        value=\"SD\">South Dakota</option>\n                                                                <option
+        value=\"TN\">Tennessee</option>\n                                                                <option
+        value=\"TX\">Texas</option>\n                                                                <option
+        value=\"UT\">Utah</option>\n                                                                <option
+        value=\"VT\">Vermont</option>\n                                                                <option
+        value=\"VI\">Virgin Islands</option>\n                                                                <option
+        value=\"VA\">Virginia</option>\n                                                                <option
+        value=\"WA\">Washington</option>\n                                                                <option
+        value=\"WV\">West Virginia</option>\n                                                                <option
+        value=\"WI\">Wisconsin</option>\n                                                                <option
+        value=\"WY\">Wyoming</option>\n                                                              </select></td>\n
+        \                             </tr>\n                            <tr>\n                              <td
+        align=\"right\">&nbsp;</td>\n                              <td><span class=\"defaultFont\">\n
+        \                               <input type=\"submit\" name=\"button\" id=\"button\"
+        value=\"Submit\" />\n                              </span></td>\n                              </tr>\n
+        \                       </table></td>\n                        </tr>\n                      \n
+        \                     </table>\n                    </form>\n                </div></td>\n
+        \               </tr>\n            </table>\n            \n <!--Search by
+        company and state-->\n          \n          \n            \n            </p></div>\n
+        \ </div>\n        </div>\n        <div align=\"center\"> <img src=\"../images/dividers.png\"
+        alt=\"\" width=\"868\" height=\"14\" />        </div>\n        <h2>Manufacturers
+        List</h2>\n        <p>\n          <div>\n            <table width=\"100%\"
+        border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\n              <tr>\n                <td>
+        Records Found: 16263</td>\n                <td align=\"right\"><< <a href=\"/content/manufacturers-identification.php?pageNum_manufacturers=0&totalRows_manufacturers=16263\">First</a>
+        &lt; <a href=\"/content/manufacturers-identification.php?pageNum_manufacturers=998&totalRows_manufacturers=16263\">Previous</a>
+        | <a href=\"/content/manufacturers-identification.php?pageNum_manufacturers=650&totalRows_manufacturers=16263\">Next</a>
+        &gt; <a href=\"/content/manufacturers-identification.php?pageNum_manufacturers=650&totalRows_manufacturers=16263\">Last</a>
+        >></td>\n              </tr>\n              <tr>\n                <td>&nbsp;</td>\n
+        \               <td align=\"right\">&nbsp;</td>\n              </tr>\n            </table>\n
+        \         </div><table width=\"100%\" border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\n
+        \           <tr>\n              <td><strong>MIC</strong></td>\n              <td><strong>Company</strong></td>\n
+        \             <td><strong>Address</strong></td>\n              <td><strong>City</strong></td>\n
+        \             <td><strong>State</strong></td>\n            </tr>\n                          <tr
+        class=\"defaultFont\">\n                <td><a href=\"manufacturers-identification-detail.php?id=\"
+        class=\"iframe\" ></a></td>\n                <td></td>\n                <td></td>\n
+        \               <td></td>\n                <td></td>\n              </tr>\n
+        \                       </table>\n        </p>\n        \n        \n      </td>\n
+        \     </tr>\n    <tr>\n      <td align=\"center\" valign=\"top\"><img src=\"../images/dividers.png\"
+        alt=\"\" width=\"868\" height=\"14\" /></td>\n    </tr>\n    <!--<tr>\n      <td
+        valign=\"top\"><h2>Download All Manufacturers Data<br />\n        <br />\n
+        \     </h2></td>\n    </tr>-->\n    <tr>\n      <td valign=\"top\"><table
+        border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\n<!--        <tr>\n          <td
+        width=\"50\" align=\"center\"><a href=\"../downloads/MIC.mdb\"><img src=\"../images/icons/access.jpg\"
+        alt=\"Access\" width=\"25\" height=\"25\" border=\"0\" /></a></td>\n          <td
+        width=\"50\" align=\"center\"><a href=\"../downloads/MIC.csv\" download=\"MIC.csv\"
+        target=\"_blank\"><img src=\"../images/icons/excel.jpg\" alt=\"MS Excel\"
+        width=\"25\" height=\"25\" border=\"0\" /></a></td>\n          </tr>-->\n<!--
+        \       <tr class=\"frontpage_text_copy\">\n          <td align=\"center\">Access</td>\n
+        \         <td align=\"center\">Excel</td>\n          </tr>-->\n        </table></td>\n
+        \   </tr>\n  </table>\n</div></div>\n\n<!--End Body-->\n\n<div align=\"center\"><div
+        class=\"footer-container-light\">\n    <table width=\"980\" border=\"0\" align=\"center\"
+        cellpadding=\"10\" cellspacing=\"0\">\n      <tr>\n        <td width=\"33%\"
+        align=\"left\"><h3>Site Content</h3></td>\n        <td align=\"left\"><h3>Categories</h3></td>\n
+        \       <td width=\"33%\" align=\"left\"><h3>About USCG Boating</h3></td>\n
+        \     </tr>\n      <tr>\n        <td align=\"left\" valign=\"top\"><table
+        width=\"100%\" border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\n          <tr>\n
+        \           <td width=\"45%\" align=\"left\" valign=\"top\"><a href=\"../index.php\"
+        title=\"Home\">Home</a><br />\n              <a href=\"../content/about.php\"
+        title=\"About Us\">About Us</a><br />\n              <a href=\"../recreational-boaters/?m=rb\"
+        title=\"Safety\">Safety</a><br />\n              <a href=\"../regulations/?m=r\"
+        title=\"Regulations\">Regulations</a><br />\n              <a href=\"../manufacturers/?m=m\"
+        title=\"Recalls &amp; Safety Defects\">Recalls &amp; Safety Defects</a><br
+        />\n            <a href=\"../manufacturers/?m=m\" title=\"Manufacturers\">Manufacturers</a><br
+        />\n            <a href=\"../content/manufacturers-identification.php\" title=\"MIC
+        Search\">MIC Search </a><br /></td>\n            <td align=\"left\" valign=\"top\">&nbsp;</td>\n
+        \           <td width=\"45%\" align=\"left\" valign=\"top\"><a href=\"http://uscgboating.org/content/multimedia.php\"
+        title=\"Resource Center\">Resource Center</a><br />\n              <a href=\"../statistics/index.php\"
+        title=\"Statistics\">Statistics</a><br />\n              <a href=\"../NBSAC/index.php\"
+        title=\"NBSAC\">NBSAC</a><br />\n              <a href=\"../grants/index.php\"
+        title=\"Grants\">Grants</a><br />\n              <a href=\"../links/index.php\"
+        title=\"Related Links\">Related Links</a><br />\n<a href=\"http://uscgboating.org/content/site_map.php\"
+        title=\"Site Map\">Site Map</a><br />\n<a href=\"http://get.adobe.com/reader/otherversions/\"
+        title=\"Download Plugins\" target=\"_blank\">Dowload Plugins</a></td>\n          </tr>\n
+        \       </table></td>\n        <td rowspan=\"2\" align=\"left\" valign=\"top\"><table
+        width=\"100%\" border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\n          <tr>\n
+        \             <td width=\"45%\" align=\"left\" valign=\"top\"><a href=\"../manufacturers/?m=m\"
+        title=\"Manufacturers\">Manufacturers</a><br />\n                <a href=\"../recreational-boaters/?m=rb\"
+        title=\"Recreational Boaters\">Recreational Boaters</a><br />\n                <a
+        href=\"http://www.uscgboating.org/safety-partners/index.php\" title=\"Regulations\">Boating
+        Safety Partners</a><br /></td>\n              <td align=\"left\" valign=\"top\">&nbsp;</td>\n
+        \             <td width=\"45%\" align=\"left\" valign=\"top\">&nbsp;</td>\n
+        \           </tr>\n          </table>\n        <!--<p>The  Strategic Plan
+        of the National Recreational Boating Safety Program 2012-2016 is finalized
+        and can be downloaded.  <a href=\"../content/strategic-plan.php\" title=\"Strategic
+        Plan\" target=\"_blank\">Download the Strategic Plan</a></p>--></td>\n        <td
+        rowspan=\"2\" align=\"left\" valign=\"top\"><p>The U.S. Coast Guard's Boating
+        Safety Division (CG-BSX-2) is dedicated   to reducing loss of life, injuries,
+        and property damage that occur on   U.S. waterways by improving the knowledge,
+        skills, and abilities of   recreational boaters.</p>\n          </td>\n      </tr>\n
+        \     <tr>\n        <td align=\"left\" valign=\"top\">&nbsp;</td>\n      </tr>\n
+        \   </table>\n  </div>\n</div>\n\n<div align=\"center\">\n  <div class=\"footer-container\">\nWWW.USCGBOATING.ORG<br
+        />\n  <a href=\"http://www.uscg.mil/access/\" target=\"_blank\">Customer Accessibility</a>
+        | <a href=\"http://www.uscgboating.org/content/contact.php\">Webmaster (Technical
+        Website Issues)</a> | <a href=\"http://www.overview.uscg.mil/Disclaim/\" target=\"_blank\">Disclaimer,
+        Privacy &amp; Internet Link Policies</a> | <a href=\"http://uscg.mil\" target=\"_blank\">USCG
+        Home</a> | <a href=\"https://www.dcms.uscg.mil/Our-Organization/Assistant-Commandant-for-C4IT-CG-6/The-Office-of-Information-Management-CG-61/FOIA-Library/\"
+        target=\"_blank\">FOIA</a><br />\n  Last Modified: May 2026</div>\n</div>\n\n</body>\n</html>\n"
+    headers:
+      Cache-Control:
+      - no-store, no-cache, must-revalidate
+      Connection:
+      - Keep-Alive
+      Content-Type:
+      - text/html; charset=UTF-8
+      Date:
+      - Sat, 30 May 2026 02:21:10 GMT
+      Expires:
+      - Thu, 19 Nov 1981 08:52:00 GMT
+      Keep-Alive:
+      - timeout=5, max=100
+      Pragma:
+      - no-cache
+      Transfer-Encoding:
+      - chunked
+    status:
+      code: 200
+      message: OK
+version: 1

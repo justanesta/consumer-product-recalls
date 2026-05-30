@@ -11,9 +11,12 @@ Two key design choices:
 1. **Lightweight registry as static dicts.** ADR 0012 explicitly rejects
    dcpy's heavy ``ConnectorRegistry`` ("we have three operation types and five
    sources; direct Python imports are simpler than runtime dispatch at this
-   scale"). The mapping below is exactly that — a 5-entry dict and a 3-entry
-   dict, populated at module import time. Tests that need to mock a specific
-   extractor class do so via ``patch.dict("src.config.source_registry.
+   scale"). The mapping below is exactly that — a 7-entry dict and a 5-entry
+   dict, populated at module import time (the ADR's "five sources" referenced
+   the original five recall sources; ``usda_establishments`` was added in
+   Phase 5b.2 and ``uscg_manufacturers`` in Phase 5d Step 7 as sibling
+   non-recall directories). Tests that need to mock a specific extractor class
+   do so via ``patch.dict("src.config.source_registry.
    EXTRACTOR_BY_SOURCE_NAME", {"cpsc": mock_cls})`` rather than patching the
    class symbol in its defining module.
 
@@ -45,6 +48,10 @@ from src.extractors.cpsc import CpscExtractor
 from src.extractors.fda import FdaDeepRescanLoader, FdaExtractor
 from src.extractors.nhtsa import NhtsaDeepRescanLoader, NhtsaExtractor
 from src.extractors.uscg import UscgDeepRescanLoader, UscgScrapingExtractor
+from src.extractors.uscg_manufacturer import (
+    UscgManufacturerDeepRescanLoader,
+    UscgManufacturerExtractor,
+)
 from src.extractors.usda import UsdaDeepRescanLoader, UsdaExtractor
 from src.extractors.usda_establishment import UsdaEstablishmentExtractor
 
@@ -63,19 +70,22 @@ EXTRACTOR_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
     "usda_establishments": UsdaEstablishmentExtractor,
     "nhtsa": NhtsaExtractor,
     "uscg": UscgScrapingExtractor,
+    "uscg_manufacturers": UscgManufacturerExtractor,
 }
 
 # Source-name → deep-rescan loader class for ``recalls deep-rescan <source>``.
-# Four of six sources have a deep-rescan path; CPSC and USDA establishments
+# Five of seven sources have a deep-rescan path; CPSC and USDA establishments
 # do not (CPSC has no deep-rescan command branch; establishments has no
 # historical archive). USCG's deep-rescan is symmetry-only — same fetches
 # as the incremental path, differs only in not touching freshness; see
-# UscgDeepRescanLoader docstring.
+# UscgDeepRescanLoader docstring. UscgManufacturerDeepRescanLoader follows
+# the same symmetry-only pattern.
 DEEP_RESCAN_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
     "fda": FdaDeepRescanLoader,
     "usda": UsdaDeepRescanLoader,
     "nhtsa": NhtsaDeepRescanLoader,
     "uscg": UscgDeepRescanLoader,
+    "uscg_manufacturers": UscgManufacturerDeepRescanLoader,
 }
 
 

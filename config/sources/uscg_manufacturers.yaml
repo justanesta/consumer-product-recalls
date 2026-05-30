@@ -1,0 +1,17 @@
+source_name: uscg_manufacturers
+source_type: html_scraping
+start_url: https://uscgboating.org/content/manufacturers-identification.php
+timeout_seconds: 30.0
+scrape_delay_seconds: 1
+# Phase 5d Step 7 Step 2 drift fence — listing-page column headers per
+# documentation/uscg/manufacturer_scraping_observations.md Finding A. The
+# parser in src/extractors/uscg_manufacturer.py:_parse_listing_page validates
+# observed headers against this list and aborts the run on mismatch.
+# Unlike recalls' " Company Name" header (leading-space quirk),
+# the manufacturer directory headers have no whitespace inside the <strong> tags.
+expected_columns:
+  - MIC
+  - Company
+  - Address
+  - City
+  - State
