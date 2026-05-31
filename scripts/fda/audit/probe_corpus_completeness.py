@@ -104,6 +104,37 @@ def completeness_verdict(
     return gap <= tolerance, gap
 
 
+def _recall_date_key(date_str: str) -> tuple[str, str, str]:
+    """Sort key turning MM/DD/YYYY into (YYYY, MM, DD) for chronological order.
+
+    Lexical sort of MM/DD/YYYY is wrong (01/01/2026 < 12/31/2003); reorder first.
+    Malformed values sort first (empty key) — fine for a probe.
+    """
+    parts = date_str.split("/")
+    return (parts[2], parts[0], parts[1]) if len(parts) == 3 else ("", "", "")
+
+
+def characterize_eventlmd_nulls(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize null-eventlmd rows in a sample (expected sorted recall-date DESC).
+
+    Tests the "the gap is recent un-edited recalls" hypothesis: if the null-eventlmd
+    rows cluster at the most-recent recall dates, they're new recalls not yet edited
+    (eventlmd advances on edits only — Finding H), i.e. transient and self-healing.
+    If their recall dates span old years, the gap is structural.
+    """
+    nulls = [r for r in records if not r.get("EVENTLMD")]
+    null_recall_dates = sorted(
+        (r["RECALLINITIATIONDT"] for r in nulls if r.get("RECALLINITIATIONDT")),
+        key=_recall_date_key,
+    )
+    return {
+        "sampled": len(records),
+        "null_eventlmd": len(nulls),
+        "null_recall_date_earliest": null_recall_dates[0] if null_recall_dates else None,
+        "null_recall_date_latest": null_recall_dates[-1] if null_recall_dates else None,
+    }
+
+
 def _post(
     settings: Settings,
     *,
@@ -166,6 +197,14 @@ def main() -> int:
         default=1,
         help="Page size; RESULTCOUNT is the whole-dataset count regardless (default 1).",
     )
+    parser.add_argument(
+        "--characterize",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Also pull the N most-recent recalls (by recallinitiationdt) and report how "
+        "many have null eventlmd + their recall-date range — tests the recent/new hypothesis.",
+    )
     args = parser.parse_args()
 
     settings = Settings()  # type: ignore[call-arg]
@@ -219,6 +258,31 @@ def main() -> int:
             "certainly null-eventlmd un-edited rows). Do NOT seed with an eventlmdfrom "
             "window; it would silently drop them. FdaDeepRescanLoader needs a no-filter "
             "full-pagination mode (filter []) for the historical seed — flag this before seeding."
+        )
+
+    if args.characterize > 0:
+        try:
+            char_body = _post(
+                settings,
+                filter_str="[]",
+                sort="recallinitiationdt",
+                sortorder="desc",
+                rows=args.characterize,
+            )
+        except ProbeError as exc:
+            print(f"ERROR (characterize): {exc}", file=sys.stderr)
+            return 2
+        summary = characterize_eventlmd_nulls(char_body.get("RESULT", []))
+        print()
+        print(f"=== characterize: {summary['sampled']} most-recent recalls (by recall date) ===")
+        print(f"null eventlmd among them:            {summary['null_eventlmd']}")
+        print(
+            "  null-rows recall-date range:       "
+            f"{summary['null_recall_date_earliest']} -> {summary['null_recall_date_latest']}"
+        )
+        print(
+            "  => null_eventlmd ~= the gap with all-recent dates: new un-edited recalls "
+            "(transient). Old/spread dates: structural gap."
         )
     return 0
 
