@@ -107,7 +107,7 @@ The user's three streams are not a bolt-on — they reshape Phase 6 into a **fou
 
 | Step | Command | Notes |
 |---|---|---|
-| 1. CPSC | `recalls deep-rescan cpsc --lookback-days 7700 --change-type=historical_seed` | Smallest, validates 6a.5 mechanics end-to-end. Archive-migration race handled by content-hash dedup (proven via the 3-row excess scenario in `documentation/cpsc/array_stability_findings.md`). |
+| 1. CPSC | `recalls extract cpsc --lookback-days 7700 --change-type=historical_seed` | Smallest, validates 6a.5 mechanics end-to-end. **CPSC has no `deep-rescan` path** (absent from `DEEP_RESCAN_BY_SOURCE_NAME`, `src/config/source_registry.py:89`; `deep-rescan cpsc` exits 1 at `src/cli/main.py:319`) — the historical pull is the `extract` cursor with a wide `--lookback-days`, matching `.github/workflows/deep-rescan-cpsc.yml`. Archive-migration race handled by content-hash dedup (proven via the 3-row excess scenario in `documentation/cpsc/array_stability_findings.md`). |
 | 2. NHTSA | `recalls deep-rescan nhtsa --change-type=historical_seed` | Pulls both PRE_2010 + POST_2010 in one run via `NhtsaDeepRescanLoader`. This is the storage-dominant step; verify Neon tier holds before moving to FDA. |
 | 3. FDA | `recalls deep-rescan fda --change-type=historical_seed` w/ window from depth probe | Akamai posture: rate-limited, off-peak, pause-and-resume if HTTP 204 hit. Saved for last so we've validated Neon tier + 6a.5 mechanics first. |
 
