@@ -81,9 +81,11 @@ Names are lowercase as in the PDF; bronze captures them via `validation_alias` a
 |---|---|
 | `fieldname`, `newvalue`, `oldvalue` | Value-tracking endpoint fields. Not applicable to `/recalls/` bulk POST |
 
-## 2. Current bronze capture (22 fields)
+## 2. Current bronze capture (33 fields as of Phase 6a.5; originally 22)
 
-`_DISPLAY_COLUMNS` in `src/extractors/fda.py:117-123` requests 21 fields; `RID` is response-injected (query-position counter, Finding F) for 22 total. Schema: `src/schemas/fda.py`. Staging projection: `dbt/models/staging/stg_fda_recalls.sql`.
+`_DISPLAY_COLUMNS` in `src/extractors/fda.py` requests 32 fields; `RID` is response-injected (query-position counter, Finding F) for 33 total. Schema: `src/schemas/fda.py`. Staging projection: `dbt/models/staging/stg_fda_recalls.sql`.
+
+> **Phase 6a.5 update (2026-05-31):** the original capture was 21 requested + RID = 22. The 11 §7a SHIP fields were added to the bulk-POST capture (migration `0019`) **before** the historical seed so the one-time ~134k-record FDA pull lands everything silver + Phase 6b need — R2 replay can't recover un-requested columns, so capturing later would force a second Akamai-risky re-pull. Adding `codeinformation` dropped `_PAGE_SIZE` 5000 → 2500 (§6 Decision 5). Silver mapping/naming for the new fields is still deferred to the (b) PR. The bronze-column ↔ API-field table below covers the original 22; the 11 added fields are listed in §7a.
 
 Bronze column → API field:
 
@@ -206,7 +208,9 @@ Re-categorized backlog reflects this in `documentation/audit/capture_expansion_b
 
 Logged in `documentation/audit/capture_expansion_backlog.md` § FDA. Original priority groupings + empirical verdicts from the 2026-05-29 probe sweep:
 
-### 7a. Bulk POST capture-expandable (ship in the (b) PR)
+### 7a. Bulk POST capture-expandable — SHIPPED in Phase 6a.5 (migration 0019, 2026-05-31)
+
+> **Status update:** these 11 fields were originally slated for the (b) PR but were pulled forward into the **Phase 6a.5 bronze capture** (migration `0019`, `_DISPLAY_COLUMNS` + `src/schemas/fda.py`) so the one-time historical seed captures them — see §2. Bronze columns: `code_information`, `firm_city_nam`, `firm_country_nam`, `firm_line1_adr`, `firm_line2_adr`, `firm_postal_cd`, `firm_state_cd`, `firm_state_prvnc_nam`, `firm_surviving_nam`, `firm_surviving_fei` (BigInteger), `posted_internet_dt` (TIMESTAMPTZ). Their **silver mapping/naming remains deferred to the (b) PR** for cross-source alignment — only the bronze capture moved.
 
 Confirmed in the 33-column bulk POST datagroup per `iRES_enforcement_reports_api_usage_documentation.pdf` page 7 and empirically validated via `scripts/fda/audit/probe_displaycolumns.py` against a 100-record window starting `eventlmdfrom=05/01/2026`.
 

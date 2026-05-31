@@ -38,6 +38,18 @@ _FULL_ROW: dict = {
     "PRODUCTDESCRIPTIONTXT": "Contaminated crackers",
     "PRODUCTSHORTREASONTXT": "Salmonella contamination",
     "PRODUCTDISTRIBUTEDQUANTITY": "50,000 cases",
+    # Phase 6a.5 capture-expansion fields (audit §7a SHIP)
+    "CODEINFORMATION": "Lot 12345; Best by 2027-01",
+    "FIRMCITYNAM": "Lake Havasu",
+    "FIRMCOUNTRYNAM": "United States",
+    "FIRMLINE1ADR": "1891 Industrial Blvd",
+    "FIRMLINE2ADR": None,
+    "FIRMPOSTALCD": "86403",
+    "FIRMSTATECD": "AZ",
+    "FIRMSTATEPRVNCNAM": "Arizona",
+    "FIRMSURVIVINGNAM": "Acme Holdings Corp",
+    "FIRMSURVIVINGFEI": "9876543",
+    "POSTEDINTERNETDT": "05/07/2025",
 }
 
 
@@ -143,6 +155,31 @@ class TestFdaRecord:
         assert record.firm_fei_num == 1610287
         assert record.recall_num == "F-0123-2026"
         assert record.recall_initiation_dt == datetime(2026, 4, 1, tzinfo=UTC)
+
+    def test_capture_expansion_fields(self) -> None:
+        """Phase 6a.5 §7a SHIP fields map via aliases; FEI coerces to int,
+        postedinternetdt to datetime, and the sparse firm_line2_adr stays None."""
+        record = FdaRecord.model_validate(_FULL_ROW)
+        assert record.code_information == "Lot 12345; Best by 2027-01"
+        assert record.firm_city_nam == "Lake Havasu"
+        assert record.firm_country_nam == "United States"
+        assert record.firm_line1_adr == "1891 Industrial Blvd"
+        assert record.firm_line2_adr is None
+        assert record.firm_postal_cd == "86403"
+        assert record.firm_state_cd == "AZ"
+        assert record.firm_state_prvnc_nam == "Arizona"
+        assert record.firm_surviving_nam == "Acme Holdings Corp"
+        assert record.firm_surviving_fei == 9876543
+        assert record.posted_internet_dt == datetime(2025, 5, 7, tzinfo=UTC)
+
+    def test_capture_expansion_fields_default_none_when_absent(self) -> None:
+        """All §7a fields are optional — a row without them validates (the
+        cassettes record 21-field responses, which must still replay cleanly)."""
+        record = FdaRecord.model_validate(_REQUIRED)
+        assert record.code_information is None
+        assert record.firm_city_nam is None
+        assert record.firm_surviving_fei is None
+        assert record.posted_internet_dt is None
 
     def test_productid_as_int_coerced_to_str(self) -> None:
         row = {**_REQUIRED, "PRODUCTID": 219875}

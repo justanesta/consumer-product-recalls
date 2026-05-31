@@ -18,7 +18,7 @@ from src.extractors._base import (
     RateLimitError,
     TransientExtractionError,
 )
-from src.extractors.fda import FdaDeepRescanLoader, FdaExtractor
+from src.extractors.fda import _PAGE_SIZE, FdaDeepRescanLoader, FdaExtractor
 from src.schemas.fda import FdaRecord
 
 _BASE_URL = "https://www.accessdata.fda.gov/rest/iresapi"
@@ -487,11 +487,11 @@ class TestFdaDeepRescanLoader:
         assert quarantined[0].failure_stage == "invariants"
 
     def test_paginate_multi_page_accumulates(self, deep_rescan: FdaDeepRescanLoader) -> None:
-        page1 = [_VALID_RAW] * 5_000
+        page1 = [_VALID_RAW] * _PAGE_SIZE
         page2 = [{**_VALID_RAW, "PRODUCTID": "999"}]
         with patch.object(deep_rescan, "_fetch_page", side_effect=[page1, page2]):
             result = deep_rescan._paginate("[{}]")
-        assert len(result) == 5_001
+        assert len(result) == _PAGE_SIZE + 1
 
     def test_fetch_page_200_returns_records(self, deep_rescan: FdaDeepRescanLoader) -> None:
         body = {"STATUSCODE": 400, "MESSAGE": "success", "RESULT": [_VALID_RAW]}
@@ -636,11 +636,11 @@ class TestFetchPageExtractor:
 
 class TestPaginateExtractor:
     def test_multi_page_accumulates_records(self, extractor: FdaExtractor) -> None:
-        page1 = [_VALID_RAW] * 5_000
+        page1 = [_VALID_RAW] * _PAGE_SIZE
         page2 = [{**_VALID_RAW, "PRODUCTID": "999"}]
         with patch.object(extractor, "_fetch_page", side_effect=[page1, page2]):
             result = extractor._paginate("[{}]")
-        assert len(result) == 5_001
+        assert len(result) == _PAGE_SIZE + 1
 
 
 # ---------------------------------------------------------------------------

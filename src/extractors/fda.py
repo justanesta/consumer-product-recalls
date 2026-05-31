@@ -62,6 +62,18 @@ _fda_bronze = sa.Table(
     sa.Column("product_description_txt", sa.Text),
     sa.Column("product_short_reason_txt", sa.Text),
     sa.Column("product_distributed_quantity", sa.Text),
+    # Phase 6a.5 capture expansion (2026-05-31, migration 0019) — audit §7a SHIP fields.
+    sa.Column("code_information", sa.Text),
+    sa.Column("firm_city_nam", sa.Text),
+    sa.Column("firm_country_nam", sa.Text),
+    sa.Column("firm_line1_adr", sa.Text),
+    sa.Column("firm_line2_adr", sa.Text),
+    sa.Column("firm_postal_cd", sa.Text),
+    sa.Column("firm_state_cd", sa.Text),
+    sa.Column("firm_state_prvnc_nam", sa.Text),
+    sa.Column("firm_surviving_nam", sa.Text),
+    sa.Column("firm_surviving_fei", sa.BigInteger),
+    sa.Column("posted_internet_dt", sa.TIMESTAMP(timezone=True)),
 )
 
 _fda_rejected = sa.Table(
@@ -108,18 +120,29 @@ _extraction_runs = sa.Table(
 
 _FDA_SOURCE = "fda"
 _DEFAULT_LOOKBACK_DAYS = 1
-_PAGE_SIZE = 5_000
+# 2500 (not 5000): codeinformation in _DISPLAY_COLUMNS caps the API page at 2500
+# rows (audit Decision 5). Both the `rows` request param and the pagination
+# stop-condition (len(page) < _PAGE_SIZE) key off this, so it must match the API's
+# real per-page cap — otherwise the historical seed silently truncates after page 1.
+_PAGE_SIZE = 2_500
 
 # displaycolumns sent to every bulk POST request. Matches the empirically-validated
 # column set from bruno/fda/incremental_extraction/post_recalls_eventlmd_range.yml.
-# codeinformation is excluded so the 5000-row page limit applies (not 2500).
-# productlmd is excluded — not available in bulk POST displaycolumns (finding K0).
+# The Phase 6a.5 capture expansion (2026-05-31, migration 0019) added the 11 audit
+# §7a SHIP fields — codeinformation, the 8 firm-address fields, firmsurviving{nam,fei},
+# and postedinternetdt — so the one-time historical seed captures everything silver +
+# Phase 6b firm-resolution need (R2 replay can't recover un-requested columns later).
+# Including codeinformation drops the API page cap 5000 → 2500 (see _PAGE_SIZE above).
+# productlmd stays excluded — lookup-endpoint only, not bulk POST (finding K0).
 _DISPLAY_COLUMNS = (
     "recalleventid,productid,producttypeshort,recallnum,phasetxt,centercd,"
     "centerclassificationtypetxt,firmlegalnam,firmfeinum,recallinitiationdt,"
     "centerclassificationdt,terminationdt,enforcementreportdt,determinationdt,"
     "initialfirmnotificationtxt,distributionareasummarytxt,voluntarytypetxt,"
-    "productdescriptiontxt,productshortreasontxt,productdistributedquantity,eventlmd"
+    "productdescriptiontxt,productshortreasontxt,productdistributedquantity,eventlmd,"
+    "codeinformation,firmcitynam,firmcountrynam,firmline1adr,firmline2adr,"
+    "firmpostalcd,firmstatecd,firmstateprvncnam,firmsurvivingnam,firmsurvivingfei,"
+    "postedinternetdt"
 )
 
 # Guard ceiling for the incremental path. Daily delta is ~20-300 records; archive

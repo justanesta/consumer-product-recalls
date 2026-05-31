@@ -130,3 +130,21 @@ class FdaRecord(BaseModel):
     product_distributed_quantity: str | None = Field(
         default=None, validation_alias="PRODUCTDISTRIBUTEDQUANTITY"
     )
+
+    # Phase 6a.5 capture expansion (2026-05-31) — audit §7a SHIP fields. All
+    # nullable: populations range from 0% (firm_line2_adr in the probe window)
+    # through 15% (firm_surviving_*) to 100% (firm_city/country). codeinformation
+    # is lot/serial text up to ~205k chars. firm_surviving_fei is an FEI (numeric,
+    # storage-forced to int like firm_fei_num). All silver mapping/naming is
+    # deferred to the (b) capture-expansion PR; bronze just lands the bytes.
+    code_information: str | None = Field(default=None, validation_alias="CODEINFORMATION")
+    firm_city_nam: str | None = Field(default=None, validation_alias="FIRMCITYNAM")
+    firm_country_nam: str | None = Field(default=None, validation_alias="FIRMCOUNTRYNAM")
+    firm_line1_adr: str | None = Field(default=None, validation_alias="FIRMLINE1ADR")
+    firm_line2_adr: str | None = Field(default=None, validation_alias="FIRMLINE2ADR")
+    firm_postal_cd: str | None = Field(default=None, validation_alias="FIRMPOSTALCD")
+    firm_state_cd: str | None = Field(default=None, validation_alias="FIRMSTATECD")
+    firm_state_prvnc_nam: str | None = Field(default=None, validation_alias="FIRMSTATEPRVNCNAM")
+    firm_surviving_nam: str | None = Field(default=None, validation_alias="FIRMSURVIVINGNAM")
+    firm_surviving_fei: _FdaNullableInt = Field(default=None, validation_alias="FIRMSURVIVINGFEI")
+    posted_internet_dt: _FdaNullableDate = Field(default=None, validation_alias="POSTEDINTERNETDT")
