@@ -63,6 +63,10 @@ CLAUDE.local.md
 # Locally downloaded NHTSA and USCG data for testing
 data/exploratory/
 
+# Seed / extractor run logs (nohup output etc.) — runtime artifacts, never committed
+*.log
+nohup.out
+
 # OS / editor
 .DS_Store
 Thumbs.db
