@@ -16,7 +16,7 @@ from src.extractors._base import (
     RateLimitError,
     TransientExtractionError,
 )
-from src.extractors.cpsc import CpscExtractor
+from src.extractors.cpsc import CpscDeepRescanLoader, CpscExtractor
 from src.schemas.cpsc import CpscRecord
 
 # ---------------------------------------------------------------------------
@@ -475,3 +475,72 @@ class TestRecordRun:
         assert record_failed is not None
         assert record_failed["error"] == "db down"
         assert record_failed["error_type"] == "RuntimeError"
+
+
+# ---------------------------------------------------------------------------
+# CpscDeepRescanLoader — full historical seed: fixed floor, no guard, no
+# watermark advance (mirrors FdaDeepRescanLoader / UsdaDeepRescanLoader)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def deep_rescan_loader(monkeypatch: pytest.MonkeyPatch) -> CpscDeepRescanLoader:
+    """CpscDeepRescanLoader with mocked engine and R2 client."""
+    _set_required_env(monkeypatch)
+    mock_engine = MagicMock(spec=sa.Engine)
+    mock_r2 = MagicMock()
+    with (
+        patch("sqlalchemy.create_engine", return_value=mock_engine),
+        patch("src.extractors.cpsc.R2LandingClient", return_value=mock_r2),
+    ):
+        settings = Settings()  # type: ignore[call-arg]
+        return CpscDeepRescanLoader(base_url=_BASE_URL, settings=settings)
+
+
+class TestCpscDeepRescanLoader:
+    def test_extract_bypasses_incremental_guard(
+        self, deep_rescan_loader: CpscDeepRescanLoader
+    ) -> None:
+        """The full corpus (>5,000) is the intended return — the guard that
+        aborts CpscExtractor.extract() must NOT fire on the deep-rescan path."""
+        from src.extractors.cpsc import _MAX_INCREMENTAL_RECORDS
+
+        oversized = [_VALID_RAW] * (_MAX_INCREMENTAL_RECORDS + 1)
+        with patch.object(deep_rescan_loader, "_fetch", return_value=oversized) as mock_fetch:
+            result = deep_rescan_loader.extract()
+        assert len(result) == _MAX_INCREMENTAL_RECORDS + 1
+        mock_fetch.assert_called_once()
+
+    def test_extract_uses_fixed_floor_not_watermark(
+        self, deep_rescan_loader: CpscDeepRescanLoader
+    ) -> None:
+        """Deep-rescan queries the fixed 1970-01-01 floor and never reads the
+        watermark (the floor captures the entire corpus regardless of cursor)."""
+        with respx.mock:
+            route = respx.get(_BASE_URL).mock(return_value=httpx.Response(200, json=[]))
+            with patch.object(deep_rescan_loader, "_get_watermark") as mock_wm:
+                deep_rescan_loader.extract()
+        url = str(route.calls[0].request.url)
+        assert "LastPublishDateStart=1970-01-01" in url
+        assert "format=json" in url
+        mock_wm.assert_not_called()
+
+    def test_load_bronze_does_not_update_watermark(
+        self, deep_rescan_loader: CpscDeepRescanLoader
+    ) -> None:
+        """Deep rescan is additive only — the incremental extractor owns the
+        watermark, so load_bronze must not call _update_watermark."""
+        record = CpscRecord.model_validate(_VALID_RAW)
+        mock_conn = MagicMock()
+        mock_engine: MagicMock = deep_rescan_loader._engine  # type: ignore[assignment]
+        mock_engine.begin.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)
+        with (
+            patch("src.extractors.cpsc.BronzeLoader") as mock_loader_cls,
+            patch.object(deep_rescan_loader, "_update_watermark") as mock_update,
+        ):
+            mock_loader_cls.return_value.load.return_value = 7
+            count = deep_rescan_loader.load_bronze([record], [], _FAKE_R2_PATH)
+        assert count == 7
+        mock_loader_cls.return_value.load.assert_called_once()
+        mock_update.assert_not_called()

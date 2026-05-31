@@ -80,6 +80,10 @@ _LOOKBACK_NO_OP_MESSAGES: dict[str, str] = {
 
 # Per-source notices when deep-rescan ignores --start-date/--end-date.
 _DEEP_RESCAN_NO_DATE_WINDOW_MESSAGES: dict[str, str] = {
+    "cpsc": (
+        "cpsc: --start-date / --end-date are ignored "
+        "(fixed LastPublishDateStart=1970-01-01 floor; full ~9,800-record corpus every run)."
+    ),
     "usda": "usda: --start-date / --end-date are ignored (full-dump every run; see Finding D).",
     "nhtsa": (
         "nhtsa: --start-date / --end-date are ignored "
