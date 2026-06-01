@@ -516,6 +516,7 @@ Cross-cutting work targeted at specific upcoming phases. Each item is gated to a
 | USDA recall ETag re-evaluation | **Phase 7 prerequisite** | Implemented 2026-05-09 — `etag_enabled=True` per Finding P; see section below |
 | USDA establishment ETag enablement | **Phase 7 prerequisite** (gate-paired with USDA recall) | Implemented 2026-05-09 — `etag_enabled=True` per Finding A revision; see section below |
 | `extraction_runs` source-specific column sparsity | **Phase 7 prerequisite** (was gated on USCG forensics; USCG indefinitely deferred) | Pending — deferred. Original blocker (USCG forensics shape) dissolved with USCG indefinitely deferred; no urgency replaced it. Revisit if Phase 7 cron-prep surfaces a real operational cost or if USCG returns. See section below for full reopen condition. |
+| Quarantine-recovery CLI (`recalls recover-rejected`) | **`feature/quarantine-recovery-cli`** — right after Phase 6a.5 (2026-06-01) | Planned — full plan in `project_scope/quarantine-recovery-tooling-plan.md`. FDA one-off (`scripts/fda/recover_rejected_invariant_records.py`) shipped on 6a.5; generalize next. See section below. |
 
 ### ADR 0012 implementation: source-config loader and registry — Wave 2, landed 2026-05-10
 
@@ -688,6 +689,10 @@ When implementing a new source's Pydantic schema:
 - For source-specific invariants (analogous to `check_usda_bilingual_pairing`), keep them in `src/bronze/invariants.py` if they're parameterizable across hypothetical-future similar sources, OR keep them in the source's extractor module if they're fundamentally one-of-a-kind.
 
 If a fourth source's schema reveals a pattern that meaningfully repeats across three or more sources, file a follow-up to revisit this audit and extract at that point. The bar for adding a shared module is "evidence from three sources that the abstraction is real," not "two sources happen to have similar-looking code."
+
+### Quarantine-recovery CLI (`recalls recover-rejected`) — `feature/quarantine-recovery-cli`, after Phase 6a.5
+
+Full plan: `project_scope/quarantine-recovery-tooling-plan.md`. The 2026-06-01 FDA full-corpus seed quarantined 24 product rows (14 recall events) that the census (`scripts/sql/fda/bronze/explore_seed_rejections.sql`) proved were genuine 2007/2012/2013 recalls killed by a source dropped-century typo on `recall_initiation_dt` — a *real record* dropped from bronze over one corrupted field. Because the offending invariant (`check_date_sanity`) is **shared** across all five sources, the same failure mode can hit any of them, so the FDA one-off (`scripts/fda/recover_rejected_invariant_records.py`, shipped on 6a.5) is worth generalizing into a source-agnostic CLI: `recalls recover-rejected <source>` reads the uniform `<source>_rejected` table, reconstructs records (datetime-field coercion derived by Pydantic introspection — verified for FDA/NHTSA/CPSC), and loads them via `BronzeLoader.load` directly (no watermark mutation). **Distinct from — and complementary to — the planned `scripts/re_ingest.py`** (ADR 0014): re-ingest replays R2 raw bytes and *re-runs* `check_invariants()` (so it would re-reject the typo rows); recovery reads the rejected table and *bypasses* the invariant on purpose. Recovery is human-in-the-loop (census-first, narrow predicate, `--dry-run`, non-destructive), and does **not** change the invariant. Sequenced on its own branch right after 6a.5, before/parallel to `feature/silver-field-remap` (non-overlapping files).
 
 ---
 
