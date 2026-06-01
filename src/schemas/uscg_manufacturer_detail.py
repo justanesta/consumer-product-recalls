@@ -78,7 +78,10 @@ class UscgManufacturerDetailRecord(BaseModel):
     verbatim at bronze (ADR 0027) and normalized in staging.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    # populate_by_name=True so quarantine-recovery can model_validate a dumped payload
+    # (field names), not only the extractor's alias-keyed dicts. Non-breaking: ingestion
+    # passes alias keys. See src/bronze/recovery.py.
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
     # --- Identity ---
     source_recall_id: str = Field(validation_alias="mic")

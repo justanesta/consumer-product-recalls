@@ -4,8 +4,15 @@ from datetime import date
 from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Annotated
 
+import sqlalchemy as sa
 import typer
 
+from src.bronze.recovery import (
+    RECOVERY_CONFIG_BY_SOURCE_NAME,
+    reason_contains,
+    recover_quarantined,
+    recoverable_past_date_sanity,
+)
 from src.config.logging import configure_logging
 from src.config.settings import Settings
 from src.config.source_loader import load_source_config
@@ -382,6 +389,98 @@ def deep_rescan(
     else:
         prefix = f"{source} deep-rescan: "
     _print_run_summary(prefix, result)
+
+
+@app.command(name="recover-rejected")
+def recover_rejected(
+    source: Annotated[
+        str, typer.Argument(help="Source whose quarantined records to recover (e.g. fda)")
+    ],
+    landing_path: Annotated[
+        str | None,
+        typer.Option(
+            "--landing-path",
+            help="raw_landing_path to scope to (default: the source's most-recent rejection).",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Reconstruct + report the recovery plan without writing."),
+    ] = False,
+    reason_contains_text: Annotated[
+        str | None,
+        typer.Option(
+            "--reason-contains",
+            help=(
+                "Override the default predicate: recover invariant-stage rejections whose "
+                "failure_reason contains this text. Default scope is the confirmed "
+                "'>70 years in the past' date-sanity class. Census the rejected table first."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Recover quarantined-but-valid bronze records for a source.
+
+    Reads ``<source>_rejected``, reconstructs each record from its stored payload, and
+    re-loads it via ``BronzeLoader`` (no API re-fetch, no watermark mutation, content-hash
+    idempotent). Recovery BYPASSES ``check_invariants`` on purpose — only ever run after a
+    census confirms the rejection class is a false positive (e.g.
+    ``scripts/sql/fda/bronze/explore_seed_rejections.sql``). Supported for the sources that
+    call ``check_date_sanity``; an unsupported source exits 1.
+    """
+    configure_logging()
+
+    if source not in RECOVERY_CONFIG_BY_SOURCE_NAME:
+        supported = ", ".join(sorted(RECOVERY_CONFIG_BY_SOURCE_NAME))
+        typer.echo(
+            f"recover-rejected not implemented for source: {source} (supported: {supported})",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    predicate = (
+        reason_contains(reason_contains_text)
+        if reason_contains_text is not None
+        else recoverable_past_date_sanity
+    )
+
+    settings = Settings()  # type: ignore[call-arg]
+    engine = sa.create_engine(settings.neon_database_url.get_secret_value(), pool_pre_ping=True)
+
+    result = recover_quarantined(
+        engine,
+        source=source,
+        config=RECOVERY_CONFIG_BY_SOURCE_NAME[source],
+        is_recoverable=predicate,
+        landing_path=landing_path,
+        dry_run=dry_run,
+    )
+
+    prefix = f"{source} recover-rejected: "
+    dry = " [dry-run]" if result.dry_run else ""
+    if result.landing_path is None:
+        typer.echo(f"{prefix}no rejections found — nothing to recover.{dry}")
+        return
+    if result.candidates == 0:
+        typer.echo(
+            f"{prefix}0 recoverable rows at {result.landing_path} (predicate matched none).{dry}"
+        )
+        return
+    if result.dry_run:
+        typer.echo(
+            f"{prefix}[dry-run] candidates={result.candidates} at {result.landing_path} "
+            "— no write performed."
+        )
+        return
+    typer.echo(
+        f"{prefix}candidates={result.candidates} inserted={result.inserted} "
+        f"(landing_path={result.landing_path})"
+    )
+    if result.inserted < result.candidates:
+        typer.echo(
+            f"  ({result.candidates - result.inserted} already present — content-hash dedup "
+            "skipped them; re-running is idempotent.)"
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
