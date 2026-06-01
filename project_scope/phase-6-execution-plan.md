@@ -83,6 +83,14 @@ The user's three streams are not a bolt-on — they reshape Phase 6 into a **fou
   - TODO.md #33's 2-3 day local production-simulation (Phase 7).
   - ETag tuning, per-environment YAML overlays (Phase 7).
   - Periodic re-seeding (one-shot now; recurring = Phase 7).
+  - **FDA null-`eventlmd` incremental blind spot (Phase 7 — decision gated on the 6a.5 census).**
+    The daily incremental AND the windowed `deep-rescan-fda.yml` both filter on `eventlmd`, so
+    neither catches a new recall that arrives with null `eventlmd` (api_observations.md Finding P
+    "OPEN production-cadence question"). The 6a.5 post-seed gate (`seed_completeness_gate.sql`
+    queries 5-7) decides whether this is real: if it finds *recent* null-`eventlmd` recalls, add a
+    `recallinitiationdtfrom` watermark leg (that field IS filterable) and/or a periodic
+    `filter:"[]"` full-corpus backstop when wiring the Phase 7 cron. If the census shows only an
+    old archive tail, the `eventlmd` incremental is sound as-is.
   - USDA — already returns the full ~2,000-record corpus on every fetch; no backfill needed.
   - USCG — already at full corpus. The Phase 5d 2026-05-17 historical seed captured the full 1,763-record corpus per Finding J's "Records Found: 01763" — no further backfill needed. Daily incremental + Finding J short-circuit per `_should_short_circuit` handles ongoing freshness.
 
@@ -92,11 +100,11 @@ The user's three streams are not a bolt-on — they reshape Phase 6 into a **fou
 |---|---|---|---|---|
 | **CPSC** | `recalls deep-rescan cpsc --lookback-days 7700 --change-type=historical_seed` | Fresh API extraction (no auth, no Akamai) | ~30 MB | Low |
 | **NHTSA** | `recalls deep-rescan nhtsa --change-type=historical_seed` | Fresh re-download of both PRE_2010 + POST_2010 archives via `NhtsaDeepRescanLoader` (`src/extractors/nhtsa.py:565`). Config's `historical_seed_urls` already lists PRE_2010 (`config/sources/nhtsa.yaml:16`); no code change needed. | ~400-450 MB | Low operationally; dominant on storage |
-| **FDA** | `recalls deep-rescan fda --change-type=historical_seed` w/ multi-year window covering everything iRES offers (per user 2026-05-29: "Pull in everything") | Fresh API extraction | ~1.5-3 GB (revised up from ~500 MB - 1 GB after the 2026-05-29 capture-expansion probe — `codeinformation` max length empirically 205,424 chars/record; even a few % of records near that ceiling drives the historical seed materially larger than the original estimate. Tighten after FDA depth probe.) | Medium (Akamai) |
+| **FDA** | `recalls deep-rescan fda --change-type=historical_seed` with **NO `--start-date/--end-date`** → full-corpus `filter:"[]"` path (`FdaDeepRescanLoader.set_full_corpus`). **NOT** a date window — a window silently drops 197 null-`EVENTLMD` rows (api_observations.md Finding P). **Prereq: migration 0020** (drops NOT NULL on event_lmd/center_cd/product_type_short/firm_legal_nam) must be applied first, else those 197 silently quarantine. ~134,450 records, ~54 pages @ 2,500/page, 5s/page pacing ≈ ~5-6 min. **Mandatory post-seed gate:** `scripts/sql/fda/bronze/seed_completeness_gate.sql` (compare `count(distinct source_recall_id)` to the captured `RESULTCOUNT`; do not trust `status=success`). Implemented per `project_scope/fda-historical-seed-plan.md`. | Fresh API extraction (single bulk POST, paginated) | ~1.5-3 GB (`codeinformation` max 205,424 chars/record) | Medium (Akamai — 5s/page pacing; text/html throttle → wait 30+ min, re-run, dedup-safe) |
 
 **Pre-flight (one-time, completes before any seed runs):**
 
-1. **FDA depth probe** — Bruno request or one-shot API call to find oldest available `eventlmd`. Determines the FDA deep-rescan date window. Per user direction, the target is "everything iRES will give us" — no artificial cap.
+1. **FDA depth probe** — ~~find oldest available `eventlmd` to set a deep-rescan date window~~. **Superseded (2026-05-31, Finding P):** the seed uses the **no-window `filter:"[]"` full-corpus path**, not a date window, so no oldest-`eventlmd` floor is needed (and a sorted top-N would be lexically poisoned anyway — `MM/DD/YYYY` sorts lexically). The completeness probe (`scripts/fda/audit/probe_corpus_completeness.py`) confirmed the corpus is 134,450 and that an `eventlmd` window misses 197. Capture that `RESULTCOUNT` at seed start to gate against.
 2. **R2 inventory check** — `aws s3 ls` against the NHTSA + CPSC + FDA R2 prefixes to size existing payloads. Confirms what's already there. NHTSA POST_2010 confirmed present from prior daily incremental runs; PRE_2010 + CPSC/FDA depth TBD.
 3. **Storage estimate finalized** — tighten the per-source estimates above with the depth probe + R2 inventory data.
 4. **Neon tier upgrade** — pick a tier with 6 months of growth headroom past the combined ~2-3.5 GB estimate (CPSC ~30 MB + NHTSA ~400-450 MB + FDA ~1.5-3 GB; FDA estimate revised up per 2026-05-29 capture-expansion probe — see FDA row above). Single upgrade event, not per-source. User-executed.

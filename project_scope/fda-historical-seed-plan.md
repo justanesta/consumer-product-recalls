@@ -13,6 +13,107 @@
 
 ---
 
+## 0. Post-validation amendments (2026-05-31, run `wxdtuxpmu`)
+
+A 9-agent adversarial validation of this plan against current code (every claim
+re-checked at `file:line`, findings independently re-verified) confirmed the plan
+is **sound and implementable** — all line citations hold, the dedup/hashing design
+is correct, and migration 0020 + the schema nullability are the right shape. It also
+surfaced **two real blockers the plan missed (both in dbt)** plus test-scope
+corrections. These amendments are authoritative where they differ from the sections
+below.
+
+### 0.1 BLOCKER — dbt fails the moment the 197 null rows land (TWO places)
+Making `event_lmd` nullable in bronze just relocates the silent-incompleteness risk
+into dbt unless these land in the same PR:
+
+1. **Staging not_null** — `dbt/models/staging/stg_fda_recalls.yml:19-22` has a
+   `not_null` test on `event_lmd` (confirmed in **source**, not just compiled).
+2. **Silver published_at** — `dbt/models/silver/recall_event.sql:62` maps
+   `event_lmd as published_at` for FDA **with no coalesce** (USDA at :95 *does*
+   coalesce), and `dbt/models/silver/_silver.yml:24-26` puts `not_null` on
+   `published_at`. So the 197 nulls fail the silver build too.
+
+**Fix (this PR), per ADR 0014 permissive-bronze / strict-silver:**
+- **Staging:** keep the `not_null` test but make it a **bounded warn tripwire** via
+  dbt-native `config: {severity: warn, warn_if: ">300", error_if: ">1000"}`. Quiet at
+  the expected ~197 (Finding H un-edited archive set), warns if that set grows
+  materially, errors only on a systemic regression. Document Finding H inline.
+- **Silver:** `coalesce(event_lmd, recall_initiation_dt) as published_at` for the FDA
+  branch (mirrors USDA :95). Keeps silver `published_at` strictly non-null. The
+  post-seed gate (§4.5) must also census null `recall_initiation_dt` on the
+  null-`event_lmd` rows — if any of the 197 also lack a recall date, extend the
+  coalesce (e.g. `posted_internet_dt`) so silver stays non-null. (Earlier
+  "01/01/2003 floor" is lexically-poisoned — do not assume a recall date exists.)
+
+### 0.2 The null-`event_lmd` is EXPECTED, not a novel source anomaly
+Grounding the disposition (this is the answer to "were we anticipating null?"):
+`api_observations.md:148` (Finding H, recorded 2026-04-26) documents that the `*lmd`
+columns "advance **on edits only** … un-edited records have `null`" — observed
+empirically (PRODUCTLMD null for product 219875). What was wrong was an **inference**,
+not the data: `api_observations.md:374` lists `EVENTLMD` among "core identifiers"
+treated as never-null. That held only because every extraction path to date was
+`eventlmdfrom`-windowed (a `>=` filter structurally excludes null-lmd rows), so the
+nulls were *invisible*, never *absent*. `filter:"[]"` removes the window and the
+always-known nulls surface. Hence the warn-tripwire (bounded-expected), not a silent
+removal and not a hard failure.
+
+### 0.3 Per-page retry MUST be scoped to `TransientExtractionError` only (§4.3b)
+Verified hierarchy (`_base.py:24-41`): `RateLimitError` and `TransientExtractionError`
+are **siblings** under `ExtractionError`; the text/html anti-abuse throttle raises the
+**base** `ExtractionError` (`fda.py:369`, deliberately non-retryable). A per-page
+`tenacity` retry scoped to `retry_if_exception_type(TransientExtractionError)`
+therefore (a) retries only 5xx/transport per page, (b) lets `RateLimitError` propagate
+to the existing outer `_TRANSIENT_RETRY(self.extract)` (`_base.py:219`) — preserving
+`test_rate_limit_propagates`, and (c) **does not retry the Akamai throttle** — the
+exact amplification this seed exists to avoid. Use a modest per-page policy
+(≤3 attempts) so it reduces whole-sweep restarts without 5×5 nesting.
+
+### 0.4 CLI: no-dates path needs three edits, not one (§4.4)
+Beyond relaxing the gate: (a) `main.py:354` `assert start_date is not None and
+end_date is not None` must move inside the both-dates branch; (b) the summary prefix
+`main.py:361-362` renders `[None → None]` on the full-corpus path — branch it to
+`fda deep-rescan [full-corpus]: `; (c) the three-way must order **neither**-check
+(→ `set_full_corpus`) before the **exactly-one** check (→ error), since today's single
+`start_date is None or end_date is None` collapses both into the error branch.
+
+### 0.5 §4.6 correction — `''` does NOT map to None for the 3 string fields
+Per ADR 0027 (schema docstring `fda.py:79-81`, locked by
+`test_empty_string_nullable_preserved`), `str | None` fields **preserve `''`
+verbatim**; silver does `nullif(col,'')`. Only `event_lmd` (a `_FdaNullableDate`)
+maps `'' → None` (TIMESTAMPTZ can't hold `''`). New tests must assert
+`center_cd == ''` (not `None`) for the empty-string case. Specific tests:
+**remove/invert** `test_missing_required_field_raises` (test_fda_schema.py:227-230,
+EVENTLMD); **keep** `test_invalid_date_format_raises` (232-235); **replace**
+`test_deep_rescan_fda_missing_dates_exits_with_error` (test_main.py:402-408) with a
+one-date error test + a no-dates→`set_full_corpus()` test. Add a **mixed-batch**
+watermark test (some null, some dated → advances to the dated max). No `_PAGE_SIZE` /
+displaycolumns-count test pins exist; VCR needs no re-recording (default `match_on`
+excludes the body; the FDA signature/auth filter lives in
+`tests/integration/test_fda_live_cassettes.py:74-82`, not conftest).
+
+### 0.6 Open decisions — RESOLVED (user, 2026-05-31)
+- **§5 resumability:** per-page **retry** + 5s pacing + dedup-safe re-run. No persisted
+  offset. (Confirmed.)
+- **§8 productid-sort:** **defer** — keep `recalleventid asc` + within_batch_dedup +
+  the mandatory COUNT(DISTINCT) gate; no pre-seed `productid` probe (avoids a live
+  request against the throttle-sensitive endpoint before the imminent seed).
+- **§8 tie-boundary drop:** accept gate + idempotent re-run; the gate is
+  **mandatory/non-skippable**, and it must census the null-`event_lmd` subset
+  specifically (those rows are irrecoverable by the daily incremental).
+- **§8 197 structural vs transient:** post-seed SQL census only; does not gate the seed.
+
+### 0.7 Cleared false alarms
+- Migration 0019 has **no** syntax error (`ast.parse` + tail clean — a cat-rendering
+  artifact in one agent's scan; it self-flagged as must-verify).
+- All `fda.py` / schema / `0004` line citations are accurate at HEAD.
+- The `assert_fda_eventlmd_correlates_with_content_change` source-assumption test uses
+  `IS NOT DISTINCT FROM` — null-safe, unaffected.
+- (Doc-drift, not blocking) `field_audit_2026_w22.md:316/96` cites stale `fda.py` line
+  numbers (117/115/116/264 vs real 137/135/136/287) — fix opportunistically.
+
+---
+
 ## 1. Context — why this exists
 
 The Phase 6a.5 FDA seed was originally framed as "run `recalls deep-rescan fda` with an
@@ -196,7 +297,9 @@ The real completeness check (run post-seed; `status=success` is masked — audit
 ### 4.6 Tests
 
 - `tests/schemas/test_fda_schema.py`: `event_lmd: None` and `""` now **validate to `None`** (were
-  rejected); same for the 3 str fields; the existing required-field tests for these four are removed.
+  rejected). For the **3 str fields** (center_cd, product_type_short, firm_legal_nam): `None → None`
+  but **`'' → '' verbatim`** per ADR 0027 (NOT `None` — see §0.5; the original draft of this line was
+  wrong). Remove/invert `test_missing_required_field_raises` (EVENTLMD); keep `test_invalid_date_format_raises`.
 - `tests/extractors/test_fda_extractor.py`: `set_full_corpus()` → `extract()` posts `filter:"[]"`,
   `sort=recalleventid asc` (respx/mock `_fetch_page`); `FdaDeepRescanLoader.load_bronze` constructs
   `BronzeLoader(within_batch_dedup=True)`; `_paginate` sleeps when `inter_page_sleep_seconds>0` and
@@ -298,12 +401,16 @@ psql -f scripts/sql/_pipeline/seed_verify.sql                # fda_recalls_bronz
 
 ## 10. Implementation checklist
 
-- [ ] `0020_fda_core_fields_nullable.py` (event_lmd, center_cd, product_type_short, firm_legal_nam)
-- [ ] `schemas/fda.py` — 4 fields nullable + docstring
-- [ ] `fda.py` — guard `max(event_lmd)`; `_paginate` pacing+per-page-retry; `set_full_corpus()`; `within_batch_dedup=True`
-- [ ] `cli/main.py` — `deep-rescan fda` no-dates → full corpus; one-date error
-- [ ] `scripts/sql/fda/bronze/seed_completeness_gate.sql`
-- [ ] tests: schema / extractor / cli
-- [ ] docs: api_observations Finding + field_audit + phase-6-execution-plan FDA row
+> Authoritative order; §0 amendments override the prose sections where they differ.
+
+- [ ] `0020_fda_core_fields_nullable.py` (event_lmd, center_cd, product_type_short, firm_legal_nam); cite ADR 0014 **and** ADR 0027 in the docstring
+- [ ] `schemas/fda.py` — 4 fields nullable + relocate them out from under the "core identifiers — non-nullable" comment (§0.5: 3 str fields stay `''`-verbatim; only event_lmd `''→None`)
+- [ ] `fda.py` — guard `max(event_lmd)`; `_paginate` pacing + per-page retry **scoped to `TransientExtractionError` only** (§0.3); `set_full_corpus()`; `within_batch_dedup=True`
+- [ ] `cli/main.py` — `deep-rescan fda` no-dates → full corpus; one-date error; move the `:354` assert into the both-dates branch; fix the `[None → None]` summary prefix (§0.4)
+- [ ] **dbt staging** — `stg_fda_recalls.yml` `event_lmd` not_null → warn-tripwire (`warn_if: ">300"`, `error_if: ">1000"`) (§0.1)
+- [ ] **dbt silver** — `recall_event.sql:62` FDA `published_at` → `coalesce(event_lmd, recall_initiation_dt[, posted_internet_dt])` (§0.1)
+- [ ] `scripts/sql/fda/bronze/seed_completeness_gate.sql` — incl. null-`event_lmd` subset census + null-`recall_initiation_dt` check on those rows
+- [ ] tests: schema (remove `test_missing_required_field_raises`; keep `test_invalid_date_format_raises`; add None/`''` cases) / extractor (full-corpus, within_batch_dedup, mixed-batch watermark, per-page-retry type-scoping, RateLimitError still propagates, anti-abuse not retried) / cli (replace `test_deep_rescan_fda_missing_dates_exits_with_error`) (§0.5)
+- [ ] docs: api_observations Finding + correct `:374` core-never-null claim + field_audit + phase-6-execution-plan FDA row
 - [ ] gates: ruff / pyright / pytest / alembic heads
-- [ ] (user) `alembic upgrade head` → seed → gate
+- [ ] (user) `alembic upgrade head` → seed → gate → `dbt build` (staging+silver green)

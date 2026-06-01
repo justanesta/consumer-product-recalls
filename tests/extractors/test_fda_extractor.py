@@ -384,6 +384,45 @@ class TestLoadBronze:
 
         mock_update.assert_not_called()
 
+    def test_load_mixed_batch_advances_watermark_to_dated_max(
+        self, extractor: FdaExtractor
+    ) -> None:
+        # Migration 0020 made event_lmd nullable. A mixed batch (some null, some
+        # dated) must advance the watermark to the max of the NON-null values, not
+        # crash on max() over None.
+        null_lmd = FdaRecord.model_validate({**_VALID_RAW, "EVENTLMD": None, "PRODUCTID": "111"})
+        dated = FdaRecord.model_validate(
+            {**_VALID_RAW, "EVENTLMD": "04/24/2026", "PRODUCTID": "222"}
+        )
+        assert null_lmd.event_lmd is None  # guard: nullability is in effect
+
+        mock_conn = MagicMock()
+        with (
+            patch("src.extractors.fda.BronzeLoader") as mock_loader_cls,
+            patch.object(extractor, "_update_watermark") as mock_update,
+        ):
+            mock_loader_cls.return_value.load.return_value = 2
+            extractor._engine.begin.return_value.__enter__ = lambda _: mock_conn  # type: ignore[attr-defined]
+            extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
+            extractor.load_bronze([null_lmd, dated], [], _FAKE_R2_PATH)
+
+        mock_update.assert_called_once_with(mock_conn, date(2026, 4, 24))
+
+    def test_load_all_null_event_lmd_skips_watermark(self, extractor: FdaExtractor) -> None:
+        # All-null event_lmd batch: records exist (so they are inserted) but the
+        # watermark must NOT advance (and must not crash).
+        null_lmd = FdaRecord.model_validate({**_VALID_RAW, "EVENTLMD": None})
+        with (
+            patch("src.extractors.fda.BronzeLoader") as mock_loader_cls,
+            patch.object(extractor, "_update_watermark") as mock_update,
+        ):
+            mock_loader_cls.return_value.load.return_value = 1
+            extractor._engine.begin.return_value.__enter__ = lambda _: MagicMock()  # type: ignore[attr-defined]
+            extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
+            extractor.load_bronze([null_lmd], [], _FAKE_R2_PATH)
+
+        mock_update.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # FdaDeepRescanLoader
@@ -408,6 +447,28 @@ class TestFdaDeepRescanLoader:
         assert kwargs["sort"] == "recalleventid"
         assert kwargs["sortorder"] == "asc"
 
+    def test_set_full_corpus_extract_uses_empty_filter(
+        self, deep_rescan: FdaDeepRescanLoader
+    ) -> None:
+        # Full-corpus mode posts filter:"[]" (no eventlmd window) so null-EVENTLMD
+        # rows are included, sorted recalleventid asc.
+        deep_rescan.set_full_corpus()
+        with patch.object(deep_rescan, "_fetch_page", return_value=[]) as mock_fetch:
+            deep_rescan.extract()
+        kwargs = mock_fetch.call_args.kwargs
+        assert kwargs["filter_str"] == "[]"
+        assert kwargs["sort"] == "recalleventid"
+        assert kwargs["sortorder"] == "asc"
+
+    def test_extract_defaults_to_window_when_not_full_corpus(
+        self, deep_rescan: FdaDeepRescanLoader
+    ) -> None:
+        # Without set_full_corpus, the windowed branch is preserved (not "[]").
+        deep_rescan.set_date_range(date(2026, 1, 1), date(2026, 4, 26))
+        with patch.object(deep_rescan, "_fetch_page", return_value=[]) as mock_fetch:
+            deep_rescan.extract()
+        assert mock_fetch.call_args.kwargs["filter_str"] != "[]"
+
     def test_load_bronze_does_not_call_update_watermark(
         self, deep_rescan: FdaDeepRescanLoader
     ) -> None:
@@ -422,6 +483,95 @@ class TestFdaDeepRescanLoader:
             deep_rescan.load_bronze([r], [], _FAKE_R2_PATH)
 
         mock_conn.execute.assert_not_called()
+
+    def test_load_bronze_enables_within_batch_dedup(self, deep_rescan: FdaDeepRescanLoader) -> None:
+        # within_batch_dedup=True collapses tie-boundary straddle copies (same
+        # PRODUCTID, byte-identical post rid hash-exclusion).
+        r = FdaRecord.model_validate(_VALID_RAW)
+        mock_conn = MagicMock()
+        with patch("src.extractors.fda.BronzeLoader") as mock_loader_cls:
+            mock_loader_cls.return_value.load.return_value = 1
+            deep_rescan._engine.begin.return_value.__enter__ = lambda _: mock_conn  # type: ignore[attr-defined]
+            deep_rescan._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
+            deep_rescan.load_bronze([r], [], _FAKE_R2_PATH)
+
+        assert mock_loader_cls.call_args.kwargs["within_batch_dedup"] is True
+
+    def test_deep_rescan_default_page_sleep_is_five_seconds(
+        self, deep_rescan: FdaDeepRescanLoader
+    ) -> None:
+        # Probe-4 anti-abuse floor; overrides the incremental default of 0.0.
+        assert deep_rescan.inter_page_sleep_seconds == 5.0
+
+    def test_paginate_sleeps_between_pages_when_paced(
+        self, deep_rescan: FdaDeepRescanLoader
+    ) -> None:
+        deep_rescan.inter_page_sleep_seconds = 5.0
+        page1 = [_VALID_RAW] * _PAGE_SIZE
+        page2 = [{**_VALID_RAW, "PRODUCTID": "999"}]  # short page → terminator
+        with (
+            patch.object(deep_rescan, "_fetch_page", side_effect=[page1, page2]),
+            patch("src.extractors.fda.time.sleep") as mock_sleep,
+        ):
+            deep_rescan._paginate("[]")
+        # One sleep between the two pages; none after the terminating short page.
+        mock_sleep.assert_called_once_with(5.0)
+
+    def test_paginate_no_sleep_when_unpaced(self, extractor: FdaExtractor) -> None:
+        # Incremental default (0.0) does not sleep.
+        assert extractor.inter_page_sleep_seconds == 0.0
+        page1 = [_VALID_RAW] * _PAGE_SIZE
+        page2 = [{**_VALID_RAW, "PRODUCTID": "999"}]
+        with (
+            patch.object(extractor, "_fetch_page", side_effect=[page1, page2]),
+            patch("src.extractors.fda.time.sleep") as mock_sleep,
+        ):
+            extractor._paginate("[{}]")
+        mock_sleep.assert_not_called()
+
+    def test_paginate_retries_single_page_on_transient(
+        self, deep_rescan: FdaDeepRescanLoader
+    ) -> None:
+        # A transient on a page is retried in-place (not a whole-sweep restart).
+        page = [{**_VALID_RAW, "PRODUCTID": "777"}]  # short page → single page sweep
+        with patch.object(
+            deep_rescan,
+            "_fetch_page",
+            side_effect=[TransientExtractionError("blip"), page],
+        ) as mock_fetch:
+            result = deep_rescan._paginate("[]")
+        assert result == page
+        assert mock_fetch.call_count == 2
+
+    def test_paginate_does_not_retry_anti_abuse_extraction_error(
+        self, deep_rescan: FdaDeepRescanLoader
+    ) -> None:
+        # The text/html anti-abuse throttle raises ExtractionError — it must NOT be
+        # retried (retrying deepens the Akamai block). One call, then propagate.
+        with (
+            patch.object(
+                deep_rescan,
+                "_fetch_page",
+                side_effect=ExtractionError("anti-abuse throttle detected"),
+            ) as mock_fetch,
+            pytest.raises(ExtractionError, match="anti-abuse"),
+        ):
+            deep_rescan._paginate("[]")
+        assert mock_fetch.call_count == 1
+
+    def test_paginate_does_not_retry_rate_limit(self, deep_rescan: FdaDeepRescanLoader) -> None:
+        # RateLimitError is a sibling of TransientExtractionError — the per-page retry
+        # must let it propagate (to run()'s outer _TRANSIENT_RETRY), not swallow it.
+        with (
+            patch.object(
+                deep_rescan,
+                "_fetch_page",
+                side_effect=RateLimitError(retry_after=10.0),
+            ) as mock_fetch,
+            pytest.raises(RateLimitError),
+        ):
+            deep_rescan._paginate("[]")
+        assert mock_fetch.call_count == 1
 
     def test_statuscode_412_empty_result(self, deep_rescan: FdaDeepRescanLoader) -> None:
         body = {"STATUSCODE": 412, "MESSAGE": "No results found"}

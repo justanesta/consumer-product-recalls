@@ -224,15 +224,51 @@ class TestFdaRecord:
         with pytest.raises(ValidationError):
             FdaRecord.model_validate(row)
 
-    def test_missing_required_field_raises(self) -> None:
+    def test_missing_event_lmd_defaults_to_none(self) -> None:
+        # As of migration 0020 EVENTLMD is nullable (Finding H: un-edited records
+        # have null EVENTLMD; the full-corpus seed surfaces them). Was previously
+        # a required-field ValidationError.
         row = {k: v for k, v in _REQUIRED.items() if k != "EVENTLMD"}
-        with pytest.raises(ValidationError):
-            FdaRecord.model_validate(row)
+        record = FdaRecord.model_validate(row)
+        assert record.event_lmd is None
+
+    def test_null_event_lmd_stays_none(self) -> None:
+        row = {**_REQUIRED, "EVENTLMD": None}
+        record = FdaRecord.model_validate(row)
+        assert record.event_lmd is None
+
+    def test_empty_string_event_lmd_becomes_none(self) -> None:
+        # event_lmd is a date (TIMESTAMPTZ can't hold ''); storage-forced '' → None.
+        row = {**_REQUIRED, "EVENTLMD": ""}
+        record = FdaRecord.model_validate(row)
+        assert record.event_lmd is None
 
     def test_invalid_date_format_raises(self) -> None:
+        # A non-empty, wrongly-formatted date still raises (only None/'' map to None).
         row = {**_REQUIRED, "EVENTLMD": "2026-04-24"}  # wrong format
         with pytest.raises(ValidationError):
             FdaRecord.model_validate(row)
+
+    def test_newly_nullable_core_str_fields_default_none_when_absent(self) -> None:
+        # center_cd / product_type_short / firm_legal_nam became nullable (0020).
+        row = {
+            k: v
+            for k, v in _REQUIRED.items()
+            if k not in ("CENTERCD", "PRODUCTTYPESHORT", "FIRMLEGALNAM")
+        }
+        record = FdaRecord.model_validate(row)
+        assert record.center_cd is None
+        assert record.product_type_short is None
+        assert record.firm_legal_nam is None
+
+    def test_newly_nullable_core_str_fields_preserve_empty_string(self) -> None:
+        # Per ADR 0027 the str fields preserve '' VERBATIM (NOT '' → None); silver
+        # normalizes via nullif. Only the date field maps '' → None.
+        row = {**_REQUIRED, "CENTERCD": "", "PRODUCTTYPESHORT": "", "FIRMLEGALNAM": ""}
+        record = FdaRecord.model_validate(row)
+        assert record.center_cd == ""
+        assert record.product_type_short == ""
+        assert record.firm_legal_nam == ""
 
     def test_model_dump_contains_source_recall_id_and_snake_case_keys(self) -> None:
         record = FdaRecord.model_validate(_FULL_ROW)

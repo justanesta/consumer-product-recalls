@@ -86,6 +86,8 @@ Names are lowercase as in the PDF; bronze captures them via `validation_alias` a
 `_DISPLAY_COLUMNS` in `src/extractors/fda.py` requests 32 fields; `RID` is response-injected (query-position counter, Finding F) for 33 total. Schema: `src/schemas/fda.py`. Staging projection: `dbt/models/staging/stg_fda_recalls.sql`.
 
 > **Phase 6a.5 update (2026-05-31):** the original capture was 21 requested + RID = 22. The 11 §7a SHIP fields were added to the bulk-POST capture (migration `0019`) **before** the historical seed so the one-time ~134k-record FDA pull lands everything silver + Phase 6b need — R2 replay can't recover un-requested columns, so capturing later would force a second Akamai-risky re-pull. Adding `codeinformation` dropped `_PAGE_SIZE` 5000 → 2500 (§6 Decision 5). Silver mapping/naming for the new fields is still deferred to the (b) PR. The bronze-column ↔ API-field table below covers the original 22; the 11 added fields are listed in §7a.
+>
+> **Full-corpus seed strategy (2026-05-31, api_observations.md Finding P + migration 0020):** the historical seed pulls the **no-window `filter:"[]"` full corpus** (not an `eventlmd` date window), because a window silently misses 197 null-`EVENTLMD` un-edited records (Finding H). Migration `0020` drops `NOT NULL` on the four formerly-"core" fields (`event_lmd`, `center_cd`, `product_type_short`, `firm_legal_nam`) so the no-window seed lands those rows instead of silently quarantining them — the "core identifiers never null" assumption (api_observations.md:374) was an inference the windowing masked, now falsified. Design + run procedure: `project_scope/fda-historical-seed-plan.md`.
 
 Bronze column → API field:
 

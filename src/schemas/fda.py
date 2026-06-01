@@ -84,14 +84,27 @@ class FdaRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
-    # Core identifiers — non-nullable; validation failures quarantine the row
+    # Core identifiers — non-nullable; validation failures quarantine the row.
+    # PRODUCTID is the identity key, RECALLEVENTID groups products in an event, and
+    # RID is the API-auto-injected position counter — all three are always present.
     source_recall_id: _FdaStrId = Field(validation_alias="PRODUCTID")
     recall_event_id: _FdaInt = Field(validation_alias="RECALLEVENTID")
     rid: _FdaInt = Field(validation_alias="RID")
-    center_cd: str = Field(validation_alias="CENTERCD")
-    product_type_short: str = Field(validation_alias="PRODUCTTYPESHORT")
-    event_lmd: _FdaDate = Field(validation_alias="EVENTLMD")
-    firm_legal_nam: str = Field(validation_alias="FIRMLEGALNAM")
+
+    # Formerly "core identifiers — non-nullable" (api_observations.md:374), now
+    # nullable: the Phase 6a.5 full-corpus seed (filter:"[]") surfaces ~197 records
+    # whose EVENTLMD is null (Finding H — the *lmd columns advance on edits only, so
+    # un-edited records have null), which the prior eventlmdfrom-windowed extraction
+    # never returned (a server-side >= comparison cannot match a null). The "core
+    # never null" claim was an inference the windowing masked. Making these nullable
+    # stops the no-window seed from silently quarantining those rows (migration 0020,
+    # ADR 0014 permissive bronze). event_lmd uses _FdaNullableDate (storage-forced
+    # '' → None per ADR 0027); the three str fields preserve '' verbatim (silver
+    # normalizes via nullif). See project_scope/fda-historical-seed-plan.md §0.1/§0.2.
+    center_cd: str | None = Field(default=None, validation_alias="CENTERCD")
+    product_type_short: str | None = Field(default=None, validation_alias="PRODUCTTYPESHORT")
+    event_lmd: _FdaNullableDate = Field(default=None, validation_alias="EVENTLMD")
+    firm_legal_nam: str | None = Field(default=None, validation_alias="FIRMLEGALNAM")
 
     # Nullable scalars — null and '' are preserved verbatim per ADR 0027
     # (silver staging normalizes via nullif(col, '')). Storage-forced exceptions:

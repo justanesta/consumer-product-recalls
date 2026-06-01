@@ -399,13 +399,38 @@ def test_deep_rescan_usda_ignores_date_args(monkeypatch: pytest.MonkeyPatch) -> 
     assert "ignored" in result.output
 
 
-def test_deep_rescan_fda_missing_dates_exits_with_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_deep_rescan_fda_no_dates_runs_full_corpus(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No dates → full-corpus historical seed (filter:"[]"); set_full_corpus() is
+    # called and the summary prefix reads [full-corpus], not [None → None].
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+
+    mock_loader = MagicMock()
+    mock_loader.run.return_value = _fake_run_result(
+        fetched=134450, loaded=134450, rejected_validate=0
+    )
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        _patch_deep_rescan("fda", mock_loader),
+    ):
+        result = runner.invoke(app, ["deep-rescan", "fda"])
+
+    assert result.exit_code == 0
+    assert "fda deep-rescan [full-corpus]" in result.output
+    assert "None" not in result.output
+    mock_loader.set_full_corpus.assert_called_once()
+    mock_loader.set_date_range.assert_not_called()
+
+
+def test_deep_rescan_fda_one_date_only_exits_with_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Exactly one date is ambiguous → error (provide both, or neither).
     for k, v in _REQUIRED_ENV.items():
         monkeypatch.setenv(k, v)
     with patch("src.cli.main.configure_logging"):
-        result = runner.invoke(app, ["deep-rescan", "fda"])
+        result = runner.invoke(app, ["deep-rescan", "fda", "--start-date", "2026-01-01"])
     assert result.exit_code == 1
-    assert "requires" in result.output
+    assert "both" in result.output and "neither" in result.output
 
 
 # ---------------------------------------------------------------------------

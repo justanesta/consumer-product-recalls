@@ -325,8 +325,18 @@ def deep_rescan(
 
     # Date-window pre-validation per source.
     if source == "fda":
-        if start_date is None or end_date is None:
-            typer.echo("fda deep-rescan requires --start-date and --end-date", err=True)
+        # Three-way: neither date → full-corpus historical seed (filter:"[]");
+        # both → eventlmd window; exactly one → error. The neither-check MUST come
+        # first — a single `... is None or ... is None` would route the full-corpus
+        # case into the error branch.
+        if start_date is None and end_date is None:
+            pass  # full-corpus seed; set_full_corpus() below
+        elif start_date is None or end_date is None:
+            typer.echo(
+                "fda deep-rescan: provide both --start-date and --end-date for a "
+                "window, or neither for the full-corpus historical seed",
+                err=True,
+            )
             raise typer.Exit(code=1)
     elif start_date is not None or end_date is not None:
         typer.echo(_DEEP_RESCAN_NO_DATE_WINDOW_MESSAGES[source])
@@ -348,18 +358,27 @@ def deep_rescan(
     )
     loader: Extractor = loader_cls(**kwargs)
 
-    # FDA-only: post-construction date-range mutation (the date fields are
+    # FDA-only: post-construction mode mutation (the date / full-corpus fields are
     # PrivateAttrs, so they cannot flow through constructor kwargs).
+    fda_full_corpus = False
     if source == "fda":
-        assert start_date is not None and end_date is not None  # validated above
-        loader.set_date_range(  # type: ignore[attr-defined]
-            start_date=date.fromisoformat(start_date),
-            end_date=date.fromisoformat(end_date),
-        )
+        if start_date is None and end_date is None:
+            loader.set_full_corpus()  # type: ignore[attr-defined]
+            fda_full_corpus = True
+        else:
+            assert start_date is not None and end_date is not None  # validated above
+            loader.set_date_range(  # type: ignore[attr-defined]
+                start_date=date.fromisoformat(start_date),
+                end_date=date.fromisoformat(end_date),
+            )
 
     result = loader.run(change_type=change_type)
     if source == "fda":
-        prefix = f"fda deep-rescan [{start_date} → {end_date}]: "
+        prefix = (
+            "fda deep-rescan [full-corpus]: "
+            if fda_full_corpus
+            else f"fda deep-rescan [{start_date} → {end_date}]: "
+        )
     else:
         prefix = f"{source} deep-rescan: "
     _print_run_summary(prefix, result)

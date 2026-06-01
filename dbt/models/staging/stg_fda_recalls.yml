@@ -17,9 +17,21 @@ models:
         tests:
           - not_null
       - name: event_lmd
-        description: Event-level last modified date (EVENTLMD). Watermark for incremental extraction.
+        description: >
+          Event-level last modified date (EVENTLMD). Watermark for incremental
+          extraction. Nullable as of migration 0020: per Finding H the *lmd columns
+          advance on edits only, so un-edited records have null EVENTLMD. The
+          full-corpus seed (filter:"[]") surfaces ~197 such rows that the prior
+          eventlmd-windowed extraction never returned. Bounded warn-tripwire rather
+          than not_null: quiet at the expected ~197, warns if the un-edited set grows
+          materially, errors only on a systemic regression (project_scope/
+          fda-historical-seed-plan.md §0.1/§0.2, ADR 0014 permissive bronze).
         tests:
-          - not_null
+          - not_null:
+              config:
+                severity: warn
+                warn_if: ">300"
+                error_if: ">1000"
       - name: content_hash
         description: SHA-256 of canonicalized record payload (ADR 0007). Dedup key.
         tests:
