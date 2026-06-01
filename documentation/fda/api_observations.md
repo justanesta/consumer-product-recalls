@@ -371,7 +371,16 @@ Pattern: older records (especially pre-2010) have null values for fields that be
 
 In addition to the previously documented nullables (`RECALLNUM`, `TERMINATIONDT`, `PRODUCTDISTRIBUTEDQUANTITY`, `PRODUCTLMD`, `FIRMLINE2ADR`, `FIRMSURVIVINGNAM`, `FIRMSURVIVINGFEI`, `FIRMSTATEPRVNCNAM`, `PRODUCTDESCRIPTIONSHORT`, `RECALLREASONSHORT`, `CODEINFOSHORT`).
 
-Effectively, **almost every field except the core identifiers (`PRODUCTID`, `RECALLEVENTID`, `EVENTLMD`, `FIRMLEGALNAM`, `CENTERCD`, `PRODUCTTYPESHORT`) and the descriptive long-form fields (`PRODUCTDESCRIPTIONTXT`, `PRODUCTSHORTREASONTXT`) must be treated as nullable in the bronze schema.** This is consistent with FDA having evolved the iRES schema over decades — the schema-evolution policy in ADR 0014 should accommodate this with permissive bronze and stricter silver.
+Effectively, **almost every field except the core identifiers (`PRODUCTID`, `RECALLEVENTID`) and the descriptive long-form fields (`PRODUCTDESCRIPTIONTXT`, `PRODUCTSHORTREASONTXT`) must be treated as nullable in the bronze schema.** This is consistent with FDA having evolved the iRES schema over decades — the schema-evolution policy in ADR 0014 should accommodate this with permissive bronze and stricter silver.
+
+> **Correction (2026-05-31, Finding P):** an earlier version of this paragraph also
+> listed `EVENTLMD`, `FIRMLEGALNAM`, `CENTERCD`, and `PRODUCTTYPESHORT` as never-null
+> "core identifiers." That was an **inference** the `eventlmdfrom`-windowed extraction
+> masked — a server-side `>=` filter structurally excludes null-`EVENTLMD` rows, so the
+> nulls were invisible, never absent. The full-corpus probe (Finding P) found 197
+> null-`EVENTLMD` records, falsifying the claim for all four; they are nullable in
+> bronze as of migration 0020. Only `PRODUCTID` / `RECALLEVENTID` (and `RID`) are
+> genuinely always-present.
 
 ### L. FDA's native field-level history endpoints are sparsely populated in practice
 
@@ -475,6 +484,91 @@ The plan was authored before the empirical investigation that produced this docu
 **Implication for other Phase 5 sources (USDA, NHTSA, USCG):**
 
 Per-source cassette suites should be designed *after* Bruno exploration and an initial empirical extraction, not from a projected matrix. The plan's per-source-shape table (paginated vs flat-file vs HTML) is a good starting heuristic, but the precise scenario count and naming should be informed by what the API actually does at the source's data volume. See the corresponding update to the Phase 5 standing requirement in `project_scope/implementation_plan.md`.
+
+---
+
+### P. Full-corpus probe (2026-05-31): the `eventlmd` window silently misses 197 null-`EVENTLMD` records; the historical seed must use `filter:"[]"`
+
+Surfaced while sizing the Phase 6a.5 FDA historical seed. Two live `rows=1` bulk-POST
+probes (`scripts/fda/audit/probe_corpus_completeness.py`) compared the unfiltered corpus
+against an `eventlmdfrom` window:
+
+| Query | `RESULTCOUNT` |
+|---|---|
+| `filter:"[]"` (whole dataset, Finding E) | **134,450** |
+| `eventlmdfrom:01/01/1900` window | **134,253** |
+| **gap (window silently misses)** | **197** |
+
+**Root cause** is Finding H: the `*lmd` columns advance *on edits only*, so un-edited
+records have null `EVENTLMD`, and a server-side `eventlmdfrom` `>=` comparison cannot
+match a null. The 197 were never *absent* from the corpus — only *invisible* to every
+windowed extraction (incremental and date-windowed deep-rescan) to date. This falsifies
+the "`EVENTLMD` is a never-null core identifier" inference at the top of Finding M-extension
+(see the correction note there).
+
+**Consequences for the seed (implemented; see `project_scope/fda-historical-seed-plan.md`):**
+- The full-corpus historical seed pulls `filter:"[]"` (no `eventlmd` window), so the 197 are
+  included. `FdaDeepRescanLoader.set_full_corpus()` selects this path; `recalls deep-rescan
+  fda` with **no** `--start-date/--end-date` triggers it.
+- Migration 0020 drops `NOT NULL` on `event_lmd`, `center_cd`, `product_type_short`,
+  `firm_legal_nam` (the four falsified "core" fields) so the no-window seed lands those rows
+  instead of *silently quarantining* them (197/134,450 = 0.15% « the 5% rejection threshold,
+  and `records_landed` reports the fetched count, not the inserted count — the failure would
+  read as "success, 134,450" with only 134,253 in bronze).
+- The 197 are **seed-only**: the daily incremental's `eventlmdfrom = watermark` filter can
+  never re-sweep a null-`EVENTLMD` row, and the watermark only advances forward. They enter
+  bronze only via the full-corpus seed (or once FDA edits a record, populating `EVENTLMD`).
+
+**OPEN production-cadence question (Phase 7) — the null-`EVENTLMD` incremental blind spot.**
+The same null-`EVENTLMD` blind spot affects ongoing extraction, not just the one-time seed:
+*if a genuinely new recall can arrive with null `EVENTLMD`*, the daily incremental misses it
+on arrival and only catches it later (when FDA edits it, populating `EVENTLMD`) — or never, if
+never edited. Critically, the scheduled `deep-rescan-fda.yml` backstop does **not** close this
+gap: it passes a `--start-date/--end-date` window (an `eventlmdfrom`/`eventlmdto` filter), so it
+shares the identical blind spot. Only the no-window `filter:"[]"` full-corpus path sees
+null-`EVENTLMD` rows.
+
+Whether this actually bites is **gated on the post-seed census** (`seed_completeness_gate.sql`
+queries 5-7): if the 197 are an old archive tail (initiation years spread across decades, 0
+recent), modern new recalls evidently get `EVENTLMD` at creation (consistent with Finding M:
+the daily window already catches a "small fraction" of genuinely-new records, which requires
+their `EVENTLMD` to be populated) and the incremental is sound. If query 6 finds *recent*
+null-`EVENTLMD` recalls, the leak is real and needs a fix before the Phase 7 cron.
+
+**Fix lever if confirmed:** `recallinitiationdt` is itself a **filterable** field — the iRES
+usage PDF (p.7) lists `recallinitiationdtfrom`/`recallinitiationdtto` among the filterable
+date ranges (alongside `eventlmd`, `centerclassificationdt`, `terminationdt`, `determinationdt`,
+`enforcementreportdt`, `postedinternetdt`). A genuinely-new recall inherently *has* a
+`recallinitiationdt`, so a `recallinitiationdtfrom = watermark` filter would catch new
+null-`EVENTLMD` recalls on the **first** incremental run. The two are **complementary, not
+substitutes**: `eventlmd` catches *edits* to old records (archive migration, Ongoing→Terminated
+— which a fixed-in-the-past `recallinitiationdt` cannot), while `recallinitiationdt` catches
+*new arrivals* regardless of `EVENTLMD`. The API filters one value at a time, so this is two
+calls unioned via content-hash dedup (cheap). A periodic `filter:"[]"` full-corpus rescan is
+the simpler alternative backstop (≈5-6 min, 99.85% dedup no-ops). Decision deferred to Phase 7
+cron design; do NOT change the incremental for the 6a.5 seed. (`createdt` is NOT a fix lever —
+it is neither filterable nor a bulk-POST displaycolumn.)
+- `recalleventid asc` is a stable total order but its tie boundary is **non-deterministic**
+  across requests (a `productid` can straddle two adjacent pages on a re-run). `rid` is
+  hash-excluded, so straddle copies are byte-identical and collapse under
+  `within_batch_dedup=True`; a rare tie-boundary *drop* is caught by the post-seed
+  `COUNT(DISTINCT)` gate (`scripts/sql/fda/bronze/seed_completeness_gate.sql`) and healed by
+  an idempotent re-run.
+- dbt: `event_lmd`'s staging `not_null` test became a bounded warn-tripwire
+  (`warn_if: ">300"`, `error_if: ">1000"`), and silver `published_at` coalesces
+  `event_lmd → recall_initiation_dt` so the 197 don't fail the strict-silver not_null.
+
+**Methodological caveat (do not re-derive a date floor from a sorted top-N):** FDA date
+strings are `MM/DD/YYYY`, which sort **lexically**, not chronologically (`12/31/2015` sorts
+after `01/15/2026`). An earlier "earliest `eventlmd` 01/01/2023 / earliest recall 01/01/2003"
+reading was lexically poisoned and is **unsound**. Characterize the null-`EVENTLMD` rows
+*post-seed* via SQL on `fda_recalls_bronze` (sort-immune; the gate's year histogram), not via
+a sorted API page.
+
+**Page-size note:** the bulk-POST page cap is **2,500** rows (not the 5,000 cited in Finding
+O's table) whenever `codeinformation` is in `displaycolumns` — which it now always is after the
+migration-0019 capture expansion (`_PAGE_SIZE`, `src/extractors/fda.py`). Finding O's
+cassette-trim reasoning is unaffected (its windows still terminate in one page).
 
 ---
 

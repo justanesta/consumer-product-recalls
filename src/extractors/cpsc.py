@@ -118,6 +118,16 @@ _DEFAULT_LOOKBACK_DAYS = 1
 # full-dataset return.
 _MAX_INCREMENTAL_RECORDS = 5_000
 
+# Deep-rescan floor for the full historical seed. CpscDeepRescanLoader queries
+# LastPublishDateStart from this fixed date instead of the watermark, and does
+# NOT apply the _MAX_INCREMENTAL_RECORDS guard above (a full-corpus return is the
+# intended outcome, not the silent-unfiltered-pull failure mode the guard
+# catches). The live API's earliest LastPublishDate is 1975-04-07 (records back
+# to RecallDate 1973-06-08 were bulk-published electronically in 2014-2016), so a
+# 1970 floor captures the entire ~9,800-record corpus in a single call. Verified
+# 2026-05-31 against saferproducts.gov: LastPublishDateStart=1970-01-01 → 9,828 rows.
+_HISTORICAL_SEED_FLOOR = date(1970, 1, 1)
+
 
 class CpscExtractor(RestApiExtractor[CpscRecord]):
     """
@@ -361,3 +371,51 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+
+
+class CpscDeepRescanLoader(CpscExtractor):
+    """
+    Historical / deep-rescan loader for CPSC Recall Retrieval Web Services.
+
+    The CPSC API exposes only ``LastPublishDateStart`` (no end-date param), so the
+    deep-rescan path issues a single unbounded query from a fixed early floor
+    (``_HISTORICAL_SEED_FLOOR`` = 1970-01-01) that returns the entire corpus.
+    Two behaviors differ from ``CpscExtractor``:
+
+    1. **No incremental-size guard.** ``CpscExtractor.extract()`` aborts when a
+       query exceeds ``_MAX_INCREMENTAL_RECORDS`` (5,000) to catch a silently
+       unfiltered routine pull. A full-corpus return (~9,800 records) is the
+       *intended* outcome here, so the guard is deliberately not applied.
+    2. **Never updates source_watermarks.** Deep rescans are additive to the
+       bronze table; the incremental watermark is managed exclusively by
+       ``CpscExtractor`` (matches ``FdaDeepRescanLoader`` / ``UsdaDeepRescanLoader``).
+       The first routine ``recalls extract cpsc`` after a seed will fall back to
+       the default 1-day lookback and content-hash dedup absorbs the overlap.
+
+    Backs ``recalls deep-rescan cpsc`` and the deep-rescan-cpsc.yml workflow.
+    """
+
+    def extract(self) -> list[dict[str, Any]]:
+        """Fetch the full CPSC corpus from the historical-seed floor — no guard."""
+        url = (
+            f"{self.base_url}?format=json&LastPublishDateStart={_HISTORICAL_SEED_FLOOR.isoformat()}"
+        )
+        records = self._fetch(url)
+        logger.info(
+            "cpsc.deep_rescan.extract",
+            last_publish_date_start=_HISTORICAL_SEED_FLOOR.isoformat(),
+            records=len(records),
+        )
+        return records
+
+    def load_bronze(
+        self,
+        records: list[CpscRecord],
+        quarantined: list[QuarantineRecord],
+        raw_landing_path: str,
+    ) -> int:
+        # Does NOT update source_watermarks — the incremental extractor owns the
+        # watermark exclusively (matches FdaDeepRescanLoader / UsdaDeepRescanLoader).
+        loader = BronzeLoader(bronze_table=_cpsc_bronze, rejected_table=_cpsc_rejected)
+        with self._engine.begin() as conn:
+            return loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]

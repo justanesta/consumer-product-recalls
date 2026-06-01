@@ -59,7 +59,12 @@ fda_events as (
         'FDA'                                                            as source,
         recall_event_id::text                                            as source_recall_id,
         recall_initiation_dt                                             as announced_at,
-        event_lmd                                                        as published_at,
+        -- event_lmd is nullable as of migration 0020: ~197 un-edited records have
+        -- null EVENTLMD (Finding H). Coalesce to recall_initiation_dt (mirrors the
+        -- USDA branch) so silver published_at stays non-null per the strict-silver
+        -- contract. The post-seed gate censuses null recall_initiation_dt on the
+        -- null-event_lmd subset; if any exist, extend this coalesce (plan §0.1).
+        coalesce(event_lmd, recall_initiation_dt)                        as published_at,
         coalesce(recall_num, center_cd || '-' || recall_event_id::text)
             || ' — ' || firm_legal_nam                                   as title,
         distribution_area_summary_txt                                    as description,

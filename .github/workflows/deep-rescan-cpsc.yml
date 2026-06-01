@@ -1,12 +1,37 @@
 name: Deep Rescan CPSC Recalls
 
+# CPSC's deep-rescan path differs from the incremental path in two ways:
+#   1. Queries a fixed LastPublishDateStart floor (1970-01-01) instead of the
+#      watermark, and bypasses the _MAX_INCREMENTAL_RECORDS guard — the CPSC API
+#      has no end-date param, so a single unbounded query returns the entire
+#      ~9,800-record corpus (earliest LastPublishDate is 1975-04-07; RecallDate
+#      goes back to 1973). See CpscDeepRescanLoader.
+#   2. Never updates source_watermarks — the incremental extractor owns the
+#      watermark exclusively. Deep rescan is purely additive to bronze;
+#      content-hash dedup absorbs duplicate rows naturally.
+#
+# Used in two modes:
+#   - One-time historical seed: dispatch with --change-type=historical_seed
+#     when first standing up the bronze table.
+#   - Weekly defense-in-depth: dispatch (or Phase 7 weekly cron) with the
+#     default --change-type=routine to detect any back-dated edits CPSC applies.
+#
+# No --start-date / --end-date inputs and no --lookback-days: the deep-rescan
+# floor is fixed in code. No CPSC auth secrets — public source, no key required.
+
 on:
   workflow_dispatch:
     inputs:
-      lookback_days:
-        description: "Days to rescan (default: 90)"
+      change_type:
+        description: "Run label for extraction_runs (default: routine)"
         required: false
-        default: "90"
+        default: routine
+        type: choice
+        options:
+          - routine
+          - historical_seed
+          - schema_rebaseline
+          - hash_helper_rebaseline
 
 jobs:
   deep-rescan:
@@ -32,9 +57,7 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
       - name: Run CPSC deep rescan
-        run: >
-          uv run recalls extract cpsc
-          --lookback-days "${{ github.event.inputs.lookback_days }}"
+        run: uv run recalls deep-rescan cpsc --change-type "${{ github.event.inputs.change_type }}"
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}

@@ -193,6 +193,36 @@ Per [ADR 0014](decisions/0014-schema-evolution-policy.md), when an agency change
 
 ---
 
+## Production (`main`) backfill / cutover
+
+A **controlled manual op** (the kind [ADR 0005](decisions/0005-storage-tier-neon-and-r2.md) sanctions as the only non-CI writer to `main`) for the rare case of seeding the production branch from a local shell — e.g. the Phase 6a.5 historical backfill, or any time `main` must be populated/re-seeded outside the scheduled workflows.
+
+The steady-state invariant is: **local `.env` always points at `dev`; only GitHub Actions secrets point at `main`** (ADR 0005 branch conventions). This procedure temporarily breaks that invariant, so the **revert step is mandatory** — skipping it means a later routine local `recalls extract` silently writes to production.
+
+### What actually targets `main`
+- **Alembic + the extractors (SQLAlchemy)** read `NEON_DATABASE_URL` only — `migrations/env.py` pulls it from `Settings` (falling back to `os.environ`), and `alembic.ini`'s `sqlalchemy.url` is intentionally blank. Flip that one var and `alembic upgrade head` + every `recalls extract|deep-rescan` target `main`. **There is no separate alembic credential.**
+- **dbt + bare `psql`** read the split fields `NEON_HOST` / `NEON_USER` / `NEON_PASSWORD` / `NEON_DBNAME` (from `.envrc`, consumed by `dbt/profiles.yml` and the `PG*` exports). These are **not** needed to seed — only to run verification `psql` / `dbt` against `main`.
+
+### Procedure
+1. **Back up the dev env** so revert is trivial: `cp .env .env.dev.bak` (and note the current `dev` `NEON_DATABASE_URL`).
+2. **Repoint** `.env` `NEON_DATABASE_URL` at the `main` branch DSN (host/creds from the Neon console; keep `?sslmode=require`). If you want verification queries to hit `main` too, also update the split `NEON_*` / `PG*` vars in `.envrc`, then `direnv reload`.
+3. **Branch-pointer sanity check — do not write until confirmed.** The branch is named only by the endpoint host in your connection string (Neon reports identical `database`/role/`inet_server_addr=::1` on every branch). Confirm the host **and** remember the two credentials are separate — `psql` uses `PG*`, but the seed (alembic + `recalls`) uses `NEON_DATABASE_URL`; verify both:
+   ```bash
+   echo "$PGHOST"                                                       # psql / PG* path
+   echo "$NEON_DATABASE_URL" | sed -E 's#://([^:]+):[^@]*@#://\1:****@#'  # alembic / recalls path
+   psql -f scripts/sql/_pipeline/whoami.sql   # branch-STATE fingerprint (fresh main is empty/unmigrated)
+   ```
+4. **Apply migrations:** `alembic upgrade head`, then `alembic current` must show the expected head revision. Watermark-seed migrations run as part of `upgrade head`; a missing `source_watermarks` row silently fails run-record inserts (see *Operator added a new source…* below), so spot-check coverage:
+   ```bash
+   psql -f scripts/sql/_pipeline/seed_verify.sql   # bronze row counts + watermark coverage
+   ```
+5. **Seed** in the documented order (attended/DB-sensitive sources first, long unattended HTML scrapes last; respect the USCG manufacturers → manufacturer-details dependency). For the canonical Phase 6a.5 order and per-source commands see [`project_scope/phase-6-execution-plan.md`](../project_scope/phase-6-execution-plan.md). Every seed run must carry `--change-type=historical_seed` so `recall_event_history` (Phase 6) doesn't synthesize false-edit events (same rule as the re-ingestion procedure above).
+6. **Verify** with `scripts/sql/_pipeline/seed_verify.sql` (bronze counts + migration head + watermark coverage), plus `quarantine_check.sql` (rate < 5%) and `watermark_health.sql` in the same dir — counts within ~10% of projection.
+7. **Revert the local env (mandatory):** `cp .env.dev.bak .env` (restore `.envrc` if changed), `direnv reload`, and re-run the step-3 sanity check to confirm you are back on `dev`.
+8. **Reset `dev` from `main`** (Neon console/API — ADR 0005's sanctioned `main`→`dev` direction). This gives `dev` the freshly-seeded full corpus and discards local experiment cruft, so subsequent local dbt work builds against production-equivalent bronze.
+
+---
+
 ## Re-recording VCR cassettes
 
 Per [ADR 0015](decisions/0015-testing-strategy.md), cassettes are the authoritative archive of historical API responses. Re-record when:

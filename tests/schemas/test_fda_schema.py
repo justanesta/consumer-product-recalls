@@ -38,6 +38,18 @@ _FULL_ROW: dict = {
     "PRODUCTDESCRIPTIONTXT": "Contaminated crackers",
     "PRODUCTSHORTREASONTXT": "Salmonella contamination",
     "PRODUCTDISTRIBUTEDQUANTITY": "50,000 cases",
+    # Phase 6a.5 capture-expansion fields (audit §7a SHIP)
+    "CODEINFORMATION": "Lot 12345; Best by 2027-01",
+    "FIRMCITYNAM": "Lake Havasu",
+    "FIRMCOUNTRYNAM": "United States",
+    "FIRMLINE1ADR": "1891 Industrial Blvd",
+    "FIRMLINE2ADR": None,
+    "FIRMPOSTALCD": "86403",
+    "FIRMSTATECD": "AZ",
+    "FIRMSTATEPRVNCNAM": "Arizona",
+    "FIRMSURVIVINGNAM": "Acme Holdings Corp",
+    "FIRMSURVIVINGFEI": "9876543",
+    "POSTEDINTERNETDT": "05/07/2025",
 }
 
 
@@ -144,6 +156,31 @@ class TestFdaRecord:
         assert record.recall_num == "F-0123-2026"
         assert record.recall_initiation_dt == datetime(2026, 4, 1, tzinfo=UTC)
 
+    def test_capture_expansion_fields(self) -> None:
+        """Phase 6a.5 §7a SHIP fields map via aliases; FEI coerces to int,
+        postedinternetdt to datetime, and the sparse firm_line2_adr stays None."""
+        record = FdaRecord.model_validate(_FULL_ROW)
+        assert record.code_information == "Lot 12345; Best by 2027-01"
+        assert record.firm_city_nam == "Lake Havasu"
+        assert record.firm_country_nam == "United States"
+        assert record.firm_line1_adr == "1891 Industrial Blvd"
+        assert record.firm_line2_adr is None
+        assert record.firm_postal_cd == "86403"
+        assert record.firm_state_cd == "AZ"
+        assert record.firm_state_prvnc_nam == "Arizona"
+        assert record.firm_surviving_nam == "Acme Holdings Corp"
+        assert record.firm_surviving_fei == 9876543
+        assert record.posted_internet_dt == datetime(2025, 5, 7, tzinfo=UTC)
+
+    def test_capture_expansion_fields_default_none_when_absent(self) -> None:
+        """All §7a fields are optional — a row without them validates (the
+        cassettes record 21-field responses, which must still replay cleanly)."""
+        record = FdaRecord.model_validate(_REQUIRED)
+        assert record.code_information is None
+        assert record.firm_city_nam is None
+        assert record.firm_surviving_fei is None
+        assert record.posted_internet_dt is None
+
     def test_productid_as_int_coerced_to_str(self) -> None:
         row = {**_REQUIRED, "PRODUCTID": 219875}
         record = FdaRecord.model_validate(row)
@@ -187,15 +224,51 @@ class TestFdaRecord:
         with pytest.raises(ValidationError):
             FdaRecord.model_validate(row)
 
-    def test_missing_required_field_raises(self) -> None:
+    def test_missing_event_lmd_defaults_to_none(self) -> None:
+        # As of migration 0020 EVENTLMD is nullable (Finding H: un-edited records
+        # have null EVENTLMD; the full-corpus seed surfaces them). Was previously
+        # a required-field ValidationError.
         row = {k: v for k, v in _REQUIRED.items() if k != "EVENTLMD"}
-        with pytest.raises(ValidationError):
-            FdaRecord.model_validate(row)
+        record = FdaRecord.model_validate(row)
+        assert record.event_lmd is None
+
+    def test_null_event_lmd_stays_none(self) -> None:
+        row = {**_REQUIRED, "EVENTLMD": None}
+        record = FdaRecord.model_validate(row)
+        assert record.event_lmd is None
+
+    def test_empty_string_event_lmd_becomes_none(self) -> None:
+        # event_lmd is a date (TIMESTAMPTZ can't hold ''); storage-forced '' → None.
+        row = {**_REQUIRED, "EVENTLMD": ""}
+        record = FdaRecord.model_validate(row)
+        assert record.event_lmd is None
 
     def test_invalid_date_format_raises(self) -> None:
+        # A non-empty, wrongly-formatted date still raises (only None/'' map to None).
         row = {**_REQUIRED, "EVENTLMD": "2026-04-24"}  # wrong format
         with pytest.raises(ValidationError):
             FdaRecord.model_validate(row)
+
+    def test_newly_nullable_core_str_fields_default_none_when_absent(self) -> None:
+        # center_cd / product_type_short / firm_legal_nam became nullable (0020).
+        row = {
+            k: v
+            for k, v in _REQUIRED.items()
+            if k not in ("CENTERCD", "PRODUCTTYPESHORT", "FIRMLEGALNAM")
+        }
+        record = FdaRecord.model_validate(row)
+        assert record.center_cd is None
+        assert record.product_type_short is None
+        assert record.firm_legal_nam is None
+
+    def test_newly_nullable_core_str_fields_preserve_empty_string(self) -> None:
+        # Per ADR 0027 the str fields preserve '' VERBATIM (NOT '' → None); silver
+        # normalizes via nullif. Only the date field maps '' → None.
+        row = {**_REQUIRED, "CENTERCD": "", "PRODUCTTYPESHORT": "", "FIRMLEGALNAM": ""}
+        record = FdaRecord.model_validate(row)
+        assert record.center_cd == ""
+        assert record.product_type_short == ""
+        assert record.firm_legal_nam == ""
 
     def test_model_dump_contains_source_recall_id_and_snake_case_keys(self) -> None:
         record = FdaRecord.model_validate(_FULL_ROW)

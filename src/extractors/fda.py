@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 import sqlalchemy as sa
 import structlog
+import tenacity
 from pydantic import PrivateAttr, ValidationError
 from sqlalchemy.dialects import postgresql
 
@@ -62,6 +63,18 @@ _fda_bronze = sa.Table(
     sa.Column("product_description_txt", sa.Text),
     sa.Column("product_short_reason_txt", sa.Text),
     sa.Column("product_distributed_quantity", sa.Text),
+    # Phase 6a.5 capture expansion (2026-05-31, migration 0019) — audit §7a SHIP fields.
+    sa.Column("code_information", sa.Text),
+    sa.Column("firm_city_nam", sa.Text),
+    sa.Column("firm_country_nam", sa.Text),
+    sa.Column("firm_line1_adr", sa.Text),
+    sa.Column("firm_line2_adr", sa.Text),
+    sa.Column("firm_postal_cd", sa.Text),
+    sa.Column("firm_state_cd", sa.Text),
+    sa.Column("firm_state_prvnc_nam", sa.Text),
+    sa.Column("firm_surviving_nam", sa.Text),
+    sa.Column("firm_surviving_fei", sa.BigInteger),
+    sa.Column("posted_internet_dt", sa.TIMESTAMP(timezone=True)),
 )
 
 _fda_rejected = sa.Table(
@@ -108,18 +121,29 @@ _extraction_runs = sa.Table(
 
 _FDA_SOURCE = "fda"
 _DEFAULT_LOOKBACK_DAYS = 1
-_PAGE_SIZE = 5_000
+# 2500 (not 5000): codeinformation in _DISPLAY_COLUMNS caps the API page at 2500
+# rows (audit Decision 5). Both the `rows` request param and the pagination
+# stop-condition (len(page) < _PAGE_SIZE) key off this, so it must match the API's
+# real per-page cap — otherwise the historical seed silently truncates after page 1.
+_PAGE_SIZE = 2_500
 
 # displaycolumns sent to every bulk POST request. Matches the empirically-validated
 # column set from bruno/fda/incremental_extraction/post_recalls_eventlmd_range.yml.
-# codeinformation is excluded so the 5000-row page limit applies (not 2500).
-# productlmd is excluded — not available in bulk POST displaycolumns (finding K0).
+# The Phase 6a.5 capture expansion (2026-05-31, migration 0019) added the 11 audit
+# §7a SHIP fields — codeinformation, the 8 firm-address fields, firmsurviving{nam,fei},
+# and postedinternetdt — so the one-time historical seed captures everything silver +
+# Phase 6b firm-resolution need (R2 replay can't recover un-requested columns later).
+# Including codeinformation drops the API page cap 5000 → 2500 (see _PAGE_SIZE above).
+# productlmd stays excluded — lookup-endpoint only, not bulk POST (finding K0).
 _DISPLAY_COLUMNS = (
     "recalleventid,productid,producttypeshort,recallnum,phasetxt,centercd,"
     "centerclassificationtypetxt,firmlegalnam,firmfeinum,recallinitiationdt,"
     "centerclassificationdt,terminationdt,enforcementreportdt,determinationdt,"
     "initialfirmnotificationtxt,distributionareasummarytxt,voluntarytypetxt,"
-    "productdescriptiontxt,productshortreasontxt,productdistributedquantity,eventlmd"
+    "productdescriptiontxt,productshortreasontxt,productdistributedquantity,eventlmd,"
+    "codeinformation,firmcitynam,firmcountrynam,firmline1adr,firmline2adr,"
+    "firmpostalcd,firmstatecd,firmstateprvncnam,firmsurvivingnam,firmsurvivingfei,"
+    "postedinternetdt"
 )
 
 # Guard ceiling for the incremental path. Daily delta is ~20-300 records; archive
@@ -140,6 +164,19 @@ _STATUS_SUCCESS = 400  # bulk POST success with records
 _STATUS_EMPTY = 412  # bulk POST empty result — no RESULT key present
 _STATUS_AUTH_DENIED = 401  # auth failure
 
+# Per-page retry for _paginate. Scoped to TransientExtractionError ONLY (5xx /
+# transport): RateLimitError must propagate to run()'s outer _TRANSIENT_RETRY
+# (it is a sibling, not a subclass — _base.py), and the text/html anti-abuse
+# ExtractionError must propagate UNRETRIED (retrying deepens the Akamai throttle —
+# the exact failure the historical seed avoids). 3 attempts bounds in-sweep
+# amplification (audit C11) without the 5×5 nesting a broader scope would cause.
+_PER_PAGE_RETRY = tenacity.Retrying(
+    retry=tenacity.retry_if_exception_type(TransientExtractionError),
+    wait=tenacity.wait_exponential_jitter(initial=1, max=30),
+    stop=tenacity.stop_after_attempt(3),
+    reraise=True,
+)
+
 
 class FdaExtractor(RestApiExtractor[FdaRecord]):
     """
@@ -156,6 +193,12 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
 
     source_name: str = _FDA_SOURCE
     settings: Settings
+
+    # Inter-page pacing for _paginate. 0.0 = no sleep (the incremental default —
+    # a daily delta is 1-2 pages). The historical seed sets this to 5.0 on
+    # FdaDeepRescanLoader (Probe 4 floor) to stay under FDA's anti-abuse throttle
+    # across ~54 pages.
+    inter_page_sleep_seconds: float = 0.0
 
     _engine: sa.Engine = PrivateAttr()
     _r2_client: R2LandingClient = PrivateAttr()
@@ -265,9 +308,14 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
         )
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
-            if records:
-                max_date = max(r.event_lmd for r in records).date()
-                self._update_watermark(conn, max_date)
+            # event_lmd is nullable (migration 0020): un-edited records have null
+            # EVENTLMD (Finding H). Advance the watermark only over the non-null
+            # values; an all-null batch must leave last_cursor untouched (do NOT
+            # "simplify" this back to an unconditional max — null rows are
+            # seed-only and the watermark must never regress).
+            dates = [r.event_lmd for r in records if r.event_lmd is not None]
+            if dates:
+                self._update_watermark(conn, max(dates).date())
         return count
 
     # --- Private helpers ---
@@ -278,11 +326,24 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
         sort: str = "eventlmd",
         sortorder: str = "desc",
     ) -> list[dict[str, Any]]:
-        """Paginate through all pages of a bulk POST query."""
+        """Paginate through all pages of a bulk POST query.
+
+        Each page fetch is retried independently via ``_PER_PAGE_RETRY`` so a
+        transient blip on page N does not restart the whole sweep (audit C11
+        amplification). The retry is scoped to ``TransientExtractionError`` ONLY:
+        ``RateLimitError`` propagates to the outer ``_TRANSIENT_RETRY`` in
+        ``run()``, and the ``text/html`` anti-abuse ``ExtractionError``
+        (``_fetch_page``) propagates unretried — retrying it would deepen the
+        Akamai throttle, the exact failure the historical seed exists to avoid.
+
+        ``inter_page_sleep_seconds`` (>0 only on the deep-rescan seed) paces
+        successive pages to stay under the anti-abuse throttle.
+        """
         all_records: list[dict[str, Any]] = []
         start = 1
         while True:
-            page = self._fetch_page(
+            page = _PER_PAGE_RETRY(
+                self._fetch_page,
                 filter_str=filter_str,
                 start=start,
                 sort=sort,
@@ -292,6 +353,8 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
             if len(page) < _PAGE_SIZE:
                 break
             start += _PAGE_SIZE
+            if self.inter_page_sleep_seconds > 0:
+                time.sleep(self.inter_page_sleep_seconds)
         return all_records
 
     def _fetch_page(
@@ -513,19 +576,33 @@ class FdaDeepRescanLoader(FdaExtractor):
     """
     Historical / deep-rescan loader for FDA iRES records.
 
-    Accepts explicit start_date and end_date; uses a compound eventlmdfrom + eventlmdto
-    filter; paginates without a record-count guard. Sort is recalleventid asc for
-    deterministic page boundaries (resumable if a partial run fails).
+    Two modes:
+    - **Windowed** (set_date_range): compound eventlmdfrom + eventlmdto filter, for a
+      targeted re-pull of a date range. Used by deep-rescan-fda.yml (ADR 0023).
+    - **Full-corpus** (set_full_corpus): the Phase 6a.5 historical seed. Uses
+      filter:"[]" (NO eventlmd window) so the ~197 null-EVENTLMD un-edited records
+      (Finding H) are included rather than silently excluded by a >= comparison.
+      Requires migration 0020 (nullable core fields) so they land instead of
+      quarantining. See project_scope/fda-historical-seed-plan.md.
+
+    Both modes paginate without a record-count guard, sort recalleventid asc (a stable
+    total order — new recalls sort to the tail, no offset shift), and pace pages via
+    inter_page_sleep_seconds (5.0s default here, the Probe-4 anti-abuse floor).
 
     Does NOT update source_watermarks — deep rescans are additive to the bronze table;
     the incremental watermark is managed exclusively by FdaExtractor.
-
-    Used by the deep-rescan-fda.yml GitHub Actions workflow (ADR 0023).
     """
 
-    # Date range set by caller before run()
+    # 5s/page (Probe 4) keeps the ~54-page full-corpus seed under FDA's anti-abuse
+    # throttle. Overrides the incremental default of 0.0.
+    inter_page_sleep_seconds: float = 5.0
+
+    # Date range set by caller before run() (windowed mode)
     _start_date: date = PrivateAttr()
     _end_date: date = PrivateAttr()
+    # Full-corpus mode flag (set by set_full_corpus); when True, extract() ignores
+    # the date range and pulls the whole corpus via filter:"[]".
+    _full_corpus: bool = PrivateAttr(default=False)
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)
@@ -536,8 +613,19 @@ class FdaDeepRescanLoader(FdaExtractor):
         self._start_date = start_date
         self._end_date = end_date
 
+    def set_full_corpus(self) -> None:
+        """Switch to full-corpus mode: extract() pulls the whole corpus (filter:"[]")."""
+        self._full_corpus = True
+
     def extract(self) -> list[dict[str, Any]]:
-        """Fetch all FDA records with EVENTLMD between start_date and end_date (inclusive)."""
+        """Fetch FDA records — the full corpus (full-corpus mode) or an EVENTLMD window."""
+        if self._full_corpus:
+            # filter:"[]" returns the whole dataset including null-EVENTLMD rows that a
+            # date window's >= comparison drops (Finding H). recalleventid asc gives a
+            # stable total order; tie-boundary straddle dups collapse in load_bronze
+            # (within_batch_dedup + rid hash-exclusion).
+            logger.info("fda.deep_rescan.extract", mode="full_corpus", filter="[]")
+            return self._paginate("[]", sort="recalleventid", sortorder="asc")
         start_str = self._start_date.strftime("%m/%d/%Y")
         end_str = self._end_date.strftime("%m/%d/%Y")
         filter_str = f"[{{'eventlmdfrom':'{start_str}'}},{{'eventlmdto':'{end_str}'}}]"
@@ -550,10 +638,18 @@ class FdaDeepRescanLoader(FdaExtractor):
         quarantined: list[QuarantineRecord],
         raw_landing_path: str,
     ) -> int:
+        # within_batch_dedup=True: recalleventid's tie-boundary is non-deterministic
+        # across requests, so the same PRODUCTID can straddle two adjacent pages.
+        # 'rid' (the only differing field) is hash-excluded, so straddle copies are
+        # byte-identical → collapse to one (it does NOT raise — that path fires only on
+        # same identity with *different* content, which a single filter:"[]" snapshot
+        # should never produce; if it does, the loud abort is correct). Distinct
+        # PRODUCTIDs sharing a recalleventid tie are distinct identities and are kept.
         loader = BronzeLoader(
             bronze_table=_fda_bronze,
             rejected_table=_fda_rejected,
             hash_exclude_fields=frozenset({"rid"}),
+            within_batch_dedup=True,
         )
         with self._engine.begin() as conn:
             # Does NOT update source_watermarks — the incremental extractor owns the

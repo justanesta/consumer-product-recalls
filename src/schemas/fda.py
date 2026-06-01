@@ -84,14 +84,27 @@ class FdaRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
-    # Core identifiers — non-nullable; validation failures quarantine the row
+    # Core identifiers — non-nullable; validation failures quarantine the row.
+    # PRODUCTID is the identity key, RECALLEVENTID groups products in an event, and
+    # RID is the API-auto-injected position counter — all three are always present.
     source_recall_id: _FdaStrId = Field(validation_alias="PRODUCTID")
     recall_event_id: _FdaInt = Field(validation_alias="RECALLEVENTID")
     rid: _FdaInt = Field(validation_alias="RID")
-    center_cd: str = Field(validation_alias="CENTERCD")
-    product_type_short: str = Field(validation_alias="PRODUCTTYPESHORT")
-    event_lmd: _FdaDate = Field(validation_alias="EVENTLMD")
-    firm_legal_nam: str = Field(validation_alias="FIRMLEGALNAM")
+
+    # Formerly "core identifiers — non-nullable" (api_observations.md:374), now
+    # nullable: the Phase 6a.5 full-corpus seed (filter:"[]") surfaces ~197 records
+    # whose EVENTLMD is null (Finding H — the *lmd columns advance on edits only, so
+    # un-edited records have null), which the prior eventlmdfrom-windowed extraction
+    # never returned (a server-side >= comparison cannot match a null). The "core
+    # never null" claim was an inference the windowing masked. Making these nullable
+    # stops the no-window seed from silently quarantining those rows (migration 0020,
+    # ADR 0014 permissive bronze). event_lmd uses _FdaNullableDate (storage-forced
+    # '' → None per ADR 0027); the three str fields preserve '' verbatim (silver
+    # normalizes via nullif). See project_scope/fda-historical-seed-plan.md §0.1/§0.2.
+    center_cd: str | None = Field(default=None, validation_alias="CENTERCD")
+    product_type_short: str | None = Field(default=None, validation_alias="PRODUCTTYPESHORT")
+    event_lmd: _FdaNullableDate = Field(default=None, validation_alias="EVENTLMD")
+    firm_legal_nam: str | None = Field(default=None, validation_alias="FIRMLEGALNAM")
 
     # Nullable scalars — null and '' are preserved verbatim per ADR 0027
     # (silver staging normalizes via nullif(col, '')). Storage-forced exceptions:
@@ -130,3 +143,21 @@ class FdaRecord(BaseModel):
     product_distributed_quantity: str | None = Field(
         default=None, validation_alias="PRODUCTDISTRIBUTEDQUANTITY"
     )
+
+    # Phase 6a.5 capture expansion (2026-05-31) — audit §7a SHIP fields. All
+    # nullable: populations range from 0% (firm_line2_adr in the probe window)
+    # through 15% (firm_surviving_*) to 100% (firm_city/country). codeinformation
+    # is lot/serial text up to ~205k chars. firm_surviving_fei is an FEI (numeric,
+    # storage-forced to int like firm_fei_num). All silver mapping/naming is
+    # deferred to the (b) capture-expansion PR; bronze just lands the bytes.
+    code_information: str | None = Field(default=None, validation_alias="CODEINFORMATION")
+    firm_city_nam: str | None = Field(default=None, validation_alias="FIRMCITYNAM")
+    firm_country_nam: str | None = Field(default=None, validation_alias="FIRMCOUNTRYNAM")
+    firm_line1_adr: str | None = Field(default=None, validation_alias="FIRMLINE1ADR")
+    firm_line2_adr: str | None = Field(default=None, validation_alias="FIRMLINE2ADR")
+    firm_postal_cd: str | None = Field(default=None, validation_alias="FIRMPOSTALCD")
+    firm_state_cd: str | None = Field(default=None, validation_alias="FIRMSTATECD")
+    firm_state_prvnc_nam: str | None = Field(default=None, validation_alias="FIRMSTATEPRVNCNAM")
+    firm_surviving_nam: str | None = Field(default=None, validation_alias="FIRMSURVIVINGNAM")
+    firm_surviving_fei: _FdaNullableInt = Field(default=None, validation_alias="FIRMSURVIVINGFEI")
+    posted_internet_dt: _FdaNullableDate = Field(default=None, validation_alias="POSTEDINTERNETDT")

@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.extractors.cpsc import CpscExtractor
+from src.extractors.cpsc import CpscDeepRescanLoader, CpscExtractor
 from src.extractors.fda import FdaDeepRescanLoader, FdaExtractor
 from src.extractors.nhtsa import NhtsaDeepRescanLoader, NhtsaExtractor
 from src.extractors.uscg import UscgDeepRescanLoader, UscgScrapingExtractor
@@ -80,13 +80,15 @@ EXTRACTOR_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
 }
 
 # Source-name → deep-rescan loader class for ``recalls deep-rescan <source>``.
-# Five of seven sources have a deep-rescan path; CPSC and USDA establishments
-# do not (CPSC has no deep-rescan command branch; establishments has no
-# historical archive). USCG's deep-rescan is symmetry-only — same fetches
-# as the incremental path, differs only in not touching freshness; see
+# Seven of eight sources have a deep-rescan path; only USDA establishments does
+# not (no historical archive — it's a current-state directory). CpscDeepRescanLoader
+# uses a fixed LastPublishDateStart floor and bypasses the incremental-size guard
+# (the API has no end-date param). USCG's deep-rescan is symmetry-only — same
+# fetches as the incremental path, differs only in not touching freshness; see
 # UscgDeepRescanLoader docstring. UscgManufacturerDeepRescanLoader follows
 # the same symmetry-only pattern.
 DEEP_RESCAN_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
+    "cpsc": CpscDeepRescanLoader,
     "fda": FdaDeepRescanLoader,
     "usda": UsdaDeepRescanLoader,
     "nhtsa": NhtsaDeepRescanLoader,

@@ -23,7 +23,7 @@ from src.config.source_registry import (
     SourceConfig,
     build_extractor_kwargs,
 )
-from src.extractors.cpsc import CpscExtractor
+from src.extractors.cpsc import CpscDeepRescanLoader, CpscExtractor
 from src.extractors.fda import FdaDeepRescanLoader, FdaExtractor
 from src.extractors.nhtsa import NhtsaDeepRescanLoader, NhtsaExtractor
 from src.extractors.usda import UsdaDeepRescanLoader, UsdaExtractor
@@ -150,16 +150,18 @@ def test_extractor_registry_covers_all_eight_sources() -> None:
     assert EXTRACTOR_BY_SOURCE_NAME["uscg_manufacturer_details"] is UscgManufacturerDetailExtractor
 
 
-def test_deep_rescan_registry_covers_six_sources() -> None:
-    # Six after Phase 5d Step 7 detail lands uscg_manufacturer_details (2026-05-30).
-    # All three USCG sources have deep-rescan loaders; the manufacturer-detail one
-    # is a full ~16.3k-row sweep (Tier-2) vs the incremental listing-delta path.
-    # CPSC and USDA establishments have no deep-rescan path.
+def test_deep_rescan_registry_covers_seven_sources() -> None:
+    # Seven after CpscDeepRescanLoader landed (2026-05-31, Phase 6a.5): the CPSC
+    # full historical seed needs a guard-bypassing fixed-floor pull. All three USCG
+    # sources also have deep-rescan loaders; the manufacturer-detail one is a full
+    # ~16.3k-row sweep (Tier-2) vs the incremental listing-delta path. Only USDA
+    # establishments has no deep-rescan path (current-state directory, no archive).
     from src.extractors.uscg import UscgDeepRescanLoader
     from src.extractors.uscg_manufacturer import UscgManufacturerDeepRescanLoader
     from src.extractors.uscg_manufacturer_detail import UscgManufacturerDetailDeepRescanLoader
 
     assert set(DEEP_RESCAN_BY_SOURCE_NAME.keys()) == {
+        "cpsc",
         "fda",
         "usda",
         "nhtsa",
@@ -167,6 +169,7 @@ def test_deep_rescan_registry_covers_six_sources() -> None:
         "uscg_manufacturers",
         "uscg_manufacturer_details",
     }
+    assert DEEP_RESCAN_BY_SOURCE_NAME["cpsc"] is CpscDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["fda"] is FdaDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["usda"] is UsdaDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["nhtsa"] is NhtsaDeepRescanLoader
@@ -206,9 +209,11 @@ def test_html_scraping_to_extractor_kwargs_returns_full_shape() -> None:
 
 
 def test_extractor_registry_excludes_deep_rescan_only_sources() -> None:
-    """CPSC and USDA establishments don't have a deep-rescan path."""
-    assert "cpsc" not in DEEP_RESCAN_BY_SOURCE_NAME
+    """USDA establishments is the only source without a deep-rescan path
+    (current-state directory, no historical archive). CPSC gained one in
+    Phase 6a.5 via CpscDeepRescanLoader."""
     assert "usda_establishments" not in DEEP_RESCAN_BY_SOURCE_NAME
+    assert "cpsc" in DEEP_RESCAN_BY_SOURCE_NAME
 
 
 # --- build_extractor_kwargs introspection ---
