@@ -1,9 +1,9 @@
 # Quarantine-recovery tooling (`recalls recover-rejected`) — rationale & execution plan
 
 - **Status:** Design proposed 2026-06-01; not yet implemented. Code off this doc.
-- **Branch:** `feature/quarantine-recovery-cli` (NEW — to be cut off `main` immediately
-  after `feature/phase-6a5-historical-backfill` merges; 2026-06-01 user decision). This is
-  cross-cutting infra/tooling, deliberately **off** the 6a.5 backfill branch.
+- **Branch:** `feature/quarantine-recovery-tool` (cut off `main` on 2026-06-01 after
+  `feature/phase-6a5-historical-backfill` merged as PR #44). Cross-cutting infra/tooling,
+  deliberately **off** the 6a.5 backfill branch.
 - **Triggering analysis:** the 2026-06-01 FDA full-corpus seed quarantined 24 product rows
   (14 recall events) that the census (`scripts/sql/fda/bronze/explore_seed_rejections.sql`)
   proved were *genuine* recent recalls killed by a source year-typo (see §1). Recovering
@@ -16,6 +16,82 @@
     cross-source need, not an FDA quirk)
   - ADR 0013 (quarantine routing), ADR 0014 (re-ingestion — the **complementary** mechanism, §5),
     ADR 0007 (content-hash dedup — what makes recovery idempotent)
+
+---
+
+## 0. Post-validation amendments (2026-06-01, validation workflow `wp27oa1gt`)
+
+A 7-agent validation workflow checked every claim and design choice against the code. **Verdict:
+the core thesis is sound and the key empirical claims hold** (rejected-table uniformity, datetime
+introspection, lossless round-trip, watermark isolation), but the implementation approach needs the
+corrections below. **§0 overrides the prose sections where they differ.**
+
+### 0.1 PIVOT — explicit `RecoveryConfig` map, NOT the §4.2 `make_bronze_loader` refactor
+§4.2's instance-method `make_bronze_loader()` is rejected: instantiating an extractor merely to read
+a static loader config triggers `model_post_init` → `sa.create_engine()` + `R2LandingClient()` (heavy,
+env-requiring side effects, `fda.py:207-212`). Worse, **NHTSA cannot be represented by one accessor** —
+its incremental loader (11-tuple identity + `within_batch_dedup` + `allow_null_identity` +
+`hash_exclude={source_recall_id}`, `nhtsa.py:461`) and its deep-rescan loader (bare `('source_recall_id',)`,
+`nhtsa.py:716`) differ fundamentally. **Decision: option (b) becomes plan A.** Define an explicit
+`RECOVERY_CONFIG_BY_SOURCE_NAME` map in `src/bronze/recovery.py`; each entry is a frozen
+`RecoveryConfig(record_model, bronze_table, rejected_table, loader_factory)` whose `loader_factory` is a
+zero-arg callable returning a `BronzeLoader` built with that source's args copied **verbatim** from its
+extractor. The 8-extractor / 16-call-site refactor is **dropped from v1** (revisit only if a second
+consumer emerges). The module-level `_<source>_bronze` / `_<source>_rejected` Table objects import with
+zero instantiation.
+
+### 0.2 SCOPE — 5 date-sanity sources only
+Only **fda, cpsc, usda (recall), nhtsa, uscg (recall)** call `check_date_sanity`. The three non-recall
+sources (`uscg_manufacturers`, `uscg_manufacturer_details`, `usda_establishments`) call only
+`check_null_source_id`, so they cannot produce the date-typo class this tool recovers. The map + tests
+cover exactly those 5; an unlisted source → "not implemented for source" exit-1.
+
+### 0.3 NHTSA RecoveryConfig uses the INCREMENTAL config
+NHTSA recovery uses the incremental args (11-tuple identity, `hash_exclude={source_recall_id}`,
+`within_batch_dedup=True`, `allow_null_identity=True`), NOT the deep-rescan single-column config (a latent
+bug). Encoded explicitly in the map.
+
+### 0.4 Core-function corrections (§4.1)
+- `datetime_field_names()` MUST treat **both** `typing.Union` and `types.UnionType` (Pydantic 2 stores
+  `datetime | None` as `types.UnionType`; a `typing.Union`-only check returns ∅ for every Annotated date
+  field — verified).
+- `recover_quarantined()` gains a `bronze_table` param and reproduces the FDA one-off's three load-bearing
+  behaviors: (a) **seed-sibling lineage** — default `extraction_timestamp` = `min(extraction_timestamp)`
+  from bronze WHERE `raw_landing_path` = the run; (b) **landing_path scoping** (default = the source's
+  most-recent rejection path); (c) predicate gates on `failure_stage == 'invariants'` AND the reason
+  substring (reason-only would also match validate-stage rows).
+
+### 0.5 Schema fix — `populate_by_name=True` on the USCG schemas
+`UscgRecallRecord` (`uscg.py:151`) lacks `populate_by_name=True`, so reconstruct's `model_validate(dump)`
+fails (dump emits field names; only validation aliases are accepted). Add it to `UscgRecallRecord`
+(required — uscg is in scope) and, for consistency, to `UscgManufacturerRecord` /
+`UscgManufacturerDetailRecord`. Non-breaking: production ingestion passes alias keys.
+
+### 0.6 CLI (§4.4)
+Build the engine directly from `Settings()` (no extractor instantiation). Do **not** call
+`_print_run_summary` (it reads `records_fetched/loaded/...` which `RecoveryResult` lacks) — print a bespoke
+`<source> recover-rejected: candidates=N inserted=M` line. Guard unknown / out-of-scope source with exit-1,
+mirroring `deep-rescan`.
+
+### 0.7 Doc corrections
+- Branch is `feature/quarantine-recovery-tool` (not `-cli`); 6a.5 merged as **PR #44** — §9/§10 gating
+  language is already satisfied.
+- `raw_record` is `postgresql.JSONB` only on cpsc/fda; **`sa.JSON` on the other 6** → recovery uses
+  dialect-agnostic JSON access (no JSONB operators). §2.1's "JSONB uniformly" corrected.
+- USDA **bilingual-pairing** rejects (`check_usda_bilingual_pairing`) are a *different* class — explicitly
+  NOT recoverable here (fix is re-extraction); documented so `--reason-contains` isn't misused.
+- §8 risk added: persistent upstream typos **re-quarantine on every future deep-rescan** → the rejected
+  table grows; "idempotent" applies to recovery *re-runs* (bronze content-hash), not rejected-table
+  cleanliness across re-extractions.
+- §4.4's "one `engine.begin()`" and §6's "dry-run prints ids, products, dates, firms" prose are
+  **superseded by §0.6**: `recover_quarantined` reads in `engine.connect()` then inserts in a separate
+  `engine.begin()` (the FDA-one-off split — shorter write-lock hold), and the CLI emits a bespoke
+  `candidates=N inserted=M` summary line, not a per-record table.
+
+### 0.8 Confirmed sound (no change)
+Rejected-table 7-column uniformity ✓; `BronzeLoader.load` has zero `_source_watermarks` references, so
+calling it directly never mutates a watermark for any source ✓; lossless round-trip for all 5 in-scope
+schemas after §0.5 ✓; the ADR 0014 re-ingest distinction (§5) is accurate against the ADR text ✓.
 
 ---
 
@@ -221,16 +297,25 @@ reason this tool exists. Both may share `recovery.py`'s reconstruct primitive at
 ---
 
 ## 10. Implementation checklist
-- [ ] Cut `feature/quarantine-recovery-cli` off `main` after 6a.5 merges.
-- [ ] `src/bronze/recovery.py` — `datetime_field_names`, `coerce_dumped_datetimes`, `reconstruct`,
-      `RecoveryResult`, `recover_quarantined`, default predicates (§4.1).
-- [ ] Per-extractor `make_bronze_loader()` + `RECORD_MODEL/BRONZE_TABLE/REJECTED_TABLE` attrs;
-      `load_bronze` calls the accessor (§4.2) — confirm each source's current loader args.
-- [ ] Recovery dispatch via the ADR 0012 registry (or explicit map fallback) (§4.3).
-- [ ] `recalls recover-rejected <source>` CLI command (`--landing-path`, `--dry-run`,
-      `--reason-contains`) (§4.4).
-- [ ] `tests/bronze/test_recovery.py` + CLI dispatch test; migrate the FDA script's pure-logic
-      tests here (§4.5).
-- [ ] Remove `scripts/fda/recover_rejected_invariant_records.py`; keep the census SQL (§4.6).
-- [ ] Gates: ruff / pyright / pytest; idempotency + per-source round-trip verified (§7).
+
+> Implemented 2026-06-01 per the §0 amendments (which override §4.2/§4.3 — explicit map, not
+> the `make_bronze_loader` refactor). Gates: ruff + ruff format + pyright clean; full pytest
+> **926 passed, 95% coverage**.
+
+- [x] Branch `feature/quarantine-recovery-tool` cut off `main` after 6a.5 (PR #44) merged.
+- [x] `src/bronze/recovery.py` — `datetime_field_names` (types.UnionType-aware),
+      `coerce_dumped_datetimes`, `reconstruct`, `RecoveryConfig`/`RecoveryResult`,
+      `recover_quarantined` (engine-managed read/write split, `bronze_table` lineage),
+      `recoverable_past_date_sanity` + `reason_contains` predicates.
+- [x] ~~Per-extractor `make_bronze_loader()` refactor~~ → **superseded by §0.1**: explicit
+      `RECOVERY_CONFIG_BY_SOURCE_NAME` map (5 sources), loader args copied verbatim with
+      citations; no extractor changes.
+- [x] Dispatch via the explicit map (§0.1); CLI guards unknown/out-of-scope source with exit-1.
+- [x] `recalls recover-rejected <source>` CLI command (`--landing-path`, `--dry-run`,
+      `--reason-contains`) — own engine from `Settings`, bespoke summary.
+- [x] `tests/bronze/test_recovery.py` (33) + CLI dispatch tests (3); FDA one-off's pure-logic
+      tests migrated; `recovery.py` 100% / `cli/main.py` 96%.
+- [x] `populate_by_name=True` added to the three USCG schemas (§0.5).
+- [x] Removed `scripts/fda/recover_rejected_invariant_records.py` + its test; kept the census SQL.
+- [x] Gates: ruff / pyright / pytest green; per-source round-trip + idempotency (mock) verified.
 - [ ] Version bump (`pyproject.toml`) when this lands — your call.

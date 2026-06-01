@@ -12,6 +12,11 @@ if TYPE_CHECKING:
 
     import pytest
 
+from src.bronze.recovery import (
+    RECOVERY_CONFIG_BY_SOURCE_NAME,
+    RecoveryResult,
+    recoverable_past_date_sanity,
+)
 from src.cli.main import app
 
 runner = CliRunner()
@@ -132,6 +137,107 @@ def test_extract_unknown_source_exits_with_error() -> None:
     result = runner.invoke(app, ["extract", "unknown_source"])
     assert result.exit_code == 1
     assert "Unknown source" in result.output
+
+
+def test_recover_rejected_out_of_scope_source_exits_1() -> None:
+    # uscg_manufacturers is a real source but does not call check_date_sanity, so it is
+    # intentionally absent from the recovery map — the guard fires before any DB access.
+    result = runner.invoke(app, ["recover-rejected", "uscg_manufacturers"])
+    assert result.exit_code == 1
+    assert "not implemented" in result.output
+
+
+@contextmanager
+def _patch_recover(
+    recovery_result: RecoveryResult,
+) -> Generator[tuple[MagicMock, MagicMock], None, None]:
+    """Patch the recover-rejected command's deps (Settings/engine/recover_quarantined).
+
+    Yields (mock_recover, mock_engine) so tests can assert dispatch wiring. Settings is
+    patched so no env vars are needed; the engine is a sentinel for call-arg assertions.
+    """
+    mock_engine = MagicMock()
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.cli.main.Settings"),
+        patch("src.cli.main.sa.create_engine", return_value=mock_engine),
+        patch("src.cli.main.recover_quarantined", return_value=recovery_result) as mock_recover,
+    ):
+        yield mock_recover, mock_engine
+
+
+def test_recover_rejected_dispatches_correct_config_and_predicate() -> None:
+    with _patch_recover(RecoveryResult("fda", "fda/x.json.gz", 24, 24)) as (mock_recover, engine):
+        result = runner.invoke(app, ["recover-rejected", "fda"])
+
+    assert result.exit_code == 0
+    assert "candidates=24" in result.output
+    assert "inserted=24" in result.output
+    # Guards the source→config and default-predicate wiring (a broken dispatch that always
+    # picked FDA's config or the wrong predicate would pass a bare assert_called_once()).
+    mock_recover.assert_called_once_with(
+        engine,
+        source="fda",
+        config=RECOVERY_CONFIG_BY_SOURCE_NAME["fda"],
+        is_recoverable=recoverable_past_date_sanity,
+        landing_path=None,
+        dry_run=False,
+    )
+
+
+def test_recover_rejected_dry_run() -> None:
+    with _patch_recover(RecoveryResult("fda", "fda/x.json.gz", 24, 0, dry_run=True)):
+        result = runner.invoke(app, ["recover-rejected", "fda", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "[dry-run]" in result.output
+    assert "candidates=24" in result.output
+
+
+def test_recover_rejected_no_rejections() -> None:
+    with _patch_recover(RecoveryResult("fda", None, 0, 0)):
+        result = runner.invoke(app, ["recover-rejected", "fda"])
+
+    assert result.exit_code == 0
+    assert "no rejections found" in result.output
+
+
+def test_recover_rejected_zero_candidates() -> None:
+    with _patch_recover(RecoveryResult("fda", "fda/x.json.gz", 0, 0)):
+        result = runner.invoke(app, ["recover-rejected", "fda"])
+
+    assert result.exit_code == 0
+    assert "0 recoverable rows" in result.output
+
+
+def test_recover_rejected_partial_dedup_reports_idempotency() -> None:
+    with _patch_recover(RecoveryResult("fda", "fda/x.json.gz", 24, 20)):
+        result = runner.invoke(app, ["recover-rejected", "fda"])
+
+    assert result.exit_code == 0
+    assert "already present" in result.output
+    assert "idempotent" in result.output
+
+
+def test_recover_rejected_reason_contains_and_landing_path_wiring() -> None:
+    with _patch_recover(RecoveryResult("fda", "fda/seed.json.gz", 3, 3)) as (mock_recover, _engine):
+        result = runner.invoke(
+            app,
+            [
+                "recover-rejected",
+                "fda",
+                "--reason-contains",
+                "in the future",
+                "--landing-path",
+                "fda/seed.json.gz",
+            ],
+        )
+
+    assert result.exit_code == 0
+    call = mock_recover.call_args
+    assert call.kwargs["landing_path"] == "fda/seed.json.gz"
+    # --reason-contains routes a reason_contains() closure, NOT the default predicate.
+    assert call.kwargs["is_recoverable"] is not recoverable_past_date_sanity
 
 
 def test_extract_invalid_change_type_exits_with_error() -> None:

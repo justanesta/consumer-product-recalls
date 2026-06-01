@@ -148,7 +148,10 @@ class UscgRecallRecord(BaseModel):
       were empty for both probed samples).
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    # populate_by_name=True so quarantine-recovery can model_validate a dumped payload
+    # (field names), not only the extractor's alias-keyed dicts. Non-breaking: ingestion
+    # passes alias keys. See src/bronze/recovery.py.
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
     # --- Listing-derived fields ---
     # ``source_recall_id`` aliases ``"number"`` from the listing parser's
