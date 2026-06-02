@@ -1,8 +1,9 @@
 # Deep-rescan reliability & workload — plan
 
-- **Status:** Active — graduation (PR #50) + Tier 1 (W2–W4: engine factory, GHA guards, doc fixes;
-  PR #51) merged. Tier 2 (W5: Neon disconnect-retry) is in progress as PR #52 on
-  `fix/deep-rescan-disconnect-retry`; Tiers 3–4 not yet started (each gets its own branch/PR).
+- **Status:** Active — graduation (PR #50) + Tier 1 (PR #51) + Tier 2 (W5; PR #52) merged. Tier 3
+  W7 (FDA cron window) + W8 (ADR 0010 cadence + secret-step reorder) is in progress as PR #53 on
+  `feat/deep-rescan-fda-cron-cadence`; W6 (NHTSA short-circuit + migration — needs a design pass) and
+  Tier 4 (W9, W10) not yet started.
 - **Owns:** the fix ladder for deep-rescan reliability + workload ahead of Phase-7 scheduled GitHub
   Actions, and the PRE_2010 `response_inner_content_sha256` mitigation (#1–#3).
 - **Points at:** `documentation/audit/deep_rescan_reliability_audit.md` for *what we found* (this doc
@@ -40,8 +41,8 @@ reshaped half of them, and those corrections are baked into the workstream descr
 | W4 | **D1** — fix the stale `loader.py` chunk-count comment/docstring (65k/~12 → ~321k/~59) and the `_flat_file.py` 304 claim | 1 | ✅ PR #51 |
 | W5 | **R4** — extend `_TRANSIENT_RETRY`'s predicate with an `is_disconnect()` guard (matches "server closed the connection unexpectedly" / `connection_invalidated`); **not** a blanket `OperationalError` catch (the `_PG_PARAM_SAFETY_LIMIT` overflow must stay non-retried), **not** a second wrapper; keep it on `load_bronze`, never `run()` | 2 | ✅ PR #52 |
 | W6 | **R1+R2** — NHTSA pre-extract short-circuit + `was_short_circuited` flag; gates on **both** inner SHAs (needs Mitigation #3's DB home + manifest backfill), placed in `NhtsaDeepRescanLoader` before download; `change_type` rebaseline bypass + NULL-baseline = proceed | 3 | ⏳ |
-| W7 | **R6** — make `deep-rescan-fda.yml` cron-runnable: a "Resolve start date" step (mirror the existing end-date step) computing a rolling window; never pass the raw `""` input; validate the window vs ADR 0023 back-dating | 3 | ⏳ |
-| W8 | **R8** — amend **ADR 0010** with per-source deep-rescan cadence: NHTSA/FDA weekly (cheap once W6 lands), CPSC weekly, USDA n/a (full snapshot), **USCG detail quarterly** (matches `phase-5d-uscg-manufacturers-detail.md`, not monthly); record the 1/12 rotation as a *future option* needing a range param + offset cursor (neither exists). Reorder secret-validation before `uv sync` (YAML) | 3 | ⏳ |
+| W7 | **R6** — make `deep-rescan-fda.yml` cron-runnable: a "Resolve start date" step (mirror the existing end-date step) computing a rolling window; never pass the raw `""` input; validate the window vs ADR 0023 back-dating | 3 | ✅ PR #53 |
+| W8 | **R8** — amend **ADR 0010** with per-source deep-rescan cadence: NHTSA/FDA weekly (cheap once W6 lands), CPSC weekly, USDA n/a (full snapshot), **USCG detail quarterly** (matches `phase-5d-uscg-manufacturers-detail.md`, not monthly); record the 1/12 rotation as a *future option* needing a range param + offset cursor (neither exists). Reorder secret-validation before `uv sync` (YAML) | 3 | ✅ PR #53 |
 | W9 | **R5** — port the chunked-process pattern into the USCG-detail **deep-rescan** workflow (the incremental cron path already fits and needs nothing); benchmark real GHA page-rate first; `timeout-minutes` guard | 4 (defer) | ⏳ |
 | W10 | **R9** — server-side staging-table anti-join for NHTSA (replace the ~59-chunk loop). **Defer**: depends on W6's short-circuit; must replicate `_identity_text_expr` text-canonical normalization (guardrail B); use SQLAlchemy bulk insert, not a new `psycopg2` COPY dependency; split read/write transactions; regression test vs the IN-query path | 4 (defer) | ⏳ |
 

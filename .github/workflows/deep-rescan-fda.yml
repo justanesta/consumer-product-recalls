@@ -2,18 +2,29 @@ name: Deep Rescan FDA Recalls
 
 # Required by ADR 0023: FDA archive migration re-touches old records,
 # so a weekly rescan is needed to capture content changes in old records.
-# No cron yet — cron turns on in Phase 7.
+#
+# Cron-ready (Phase 7 adds the `schedule:` trigger): with inputs left blank — as a
+# scheduled run passes them ("" not None) — the job resolves a rolling 90-day eventlmd
+# window (ADR 0010 revision 2026-06-02), so it never crashes on an empty --start-date
+# and stays delta-scoped. The `full_corpus` toggle re-pulls everything (incl. the
+# static null-EVENTLMD archive tail) for a one-time re-seed. No `schedule:` yet — Phase 7.
 
 on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: "Window start date (YYYY-MM-DD)"
-        required: true
-      end_date:
-        description: "Window end date (YYYY-MM-DD, default: today)"
+        description: "Window start (YYYY-MM-DD). Blank → rolling 90-day lookback."
         required: false
         default: ""
+      end_date:
+        description: "Window end (YYYY-MM-DD). Blank → today."
+        required: false
+        default: ""
+      full_corpus:
+        description: "Ignore the date window; re-pull the entire corpus (one-time re-seed)."
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}
@@ -25,9 +36,6 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
-      - run: uv python install
-      - run: uv sync --frozen
 
       - name: Validate required secrets
         run: |
@@ -47,20 +55,38 @@ jobs:
           FDA_AUTHORIZATION_USER: ${{ secrets.FDA_AUTHORIZATION_USER }}
           FDA_AUTHORIZATION_KEY: ${{ secrets.FDA_AUTHORIZATION_KEY }}
 
-      - name: Resolve end date
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Resolve date window
         id: dates
         run: |
+          START="${{ github.event.inputs.start_date }}"
           END="${{ github.event.inputs.end_date }}"
+          # Blank inputs (left empty on dispatch, or a Phase-7 schedule trigger, which
+          # passes "" not None) fall back to a rolling 90-day lookback ending today.
+          # 90 days per ADR 0023's archive-migration re-touch window — a monitored
+          # parameter (FDA productid Cell-B check), not a settled constant.
+          if [[ -z "$START" ]]; then
+            START=$(date -u -d '90 days ago' +%Y-%m-%d)
+          fi
           if [[ -z "$END" ]]; then
             END=$(date -u +%Y-%m-%d)
           fi
+          echo "start_date=$START" >> "$GITHUB_OUTPUT"
           echo "end_date=$END" >> "$GITHUB_OUTPUT"
 
       - name: Run FDA deep rescan
-        run: >
-          uv run recalls deep-rescan fda
-          --start-date "${{ github.event.inputs.start_date }}"
-          --end-date "${{ steps.dates.outputs.end_date }}"
+        run: |
+          if [[ "${{ github.event.inputs.full_corpus }}" == "true" ]]; then
+            # No date args → CLI full-corpus path (filter:"[]"), incl. null-EVENTLMD rows.
+            uv run recalls deep-rescan fda
+          else
+            uv run recalls deep-rescan fda \
+              --start-date "${{ steps.dates.outputs.start_date }}" \
+              --end-date "${{ steps.dates.outputs.end_date }}"
+          fi
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}

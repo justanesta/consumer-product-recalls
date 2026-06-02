@@ -1,6 +1,6 @@
 # 0010 — Ingestion cadence and orchestration via GitHub Actions cron
 
-- **Status:** Accepted; partially superseded by [ADR 0023](0023-fda-deep-rescan-required-archive-migration-detected.md); amended 2026-05-01 (CPSC + USDA empirical findings — see "Revision note" at end)
+- **Status:** Accepted; partially superseded by [ADR 0023](0023-fda-deep-rescan-required-archive-migration-detected.md); amended 2026-05-01 (CPSC + USDA empirical findings) and 2026-06-02 (Phase-7 deep-rescan cadence + GitHub-Actions hardening) — see "Revision note" sections at end
 - **Date:** 2026-04-16
 
 ## Context
@@ -100,3 +100,29 @@ The original deep-rescan-usda.yml workflow exists from Phase 5b but its operatio
 - **`implementation_plan.md`** Phase 7 line 500 ("relaxable if empirical verification shows...") — wording corrected by the same realignment that produced this revision.
 - **CPSC historical backfill** is added as a pre-Phase-7 blocker in the implementation plan, formalized by ADR 0028.
 - **USDA daily cadence vs. weekly cadence question** — daily is fine; the bandwidth difference between daily and weekly is small at 1.6 MB/run, and daily preserves a tighter audit trail of the (source_recall_id, langcode) presence set per ADR 0026.
+
+---
+
+## Revision note — 2026-06-02 (Phase-7 deep-rescan cadence + GitHub-Actions hardening)
+
+The Phase-7 deep-rescan reliability/workload audit (`documentation/audit/deep_rescan_reliability_audit.md`; plan `project_scope/deep-rescan-reliability-plan.md`) firmed up the **deep-rescan** cadence and the workflow hardening. This refines — does not supersede — the cadence decision above.
+
+### Per-source deep-rescan cadence (Phase-7 cron targets)
+
+| Source | Deep-rescan cadence | Notes |
+|---|---|---|
+| CPSC | weekly | Primary edit-detection mechanism (2026-05-01 revision); single full-corpus query. |
+| FDA | weekly, **windowed** | Rolling 90-day `eventlmd` window (ADR 0023), not full-corpus: `deep-rescan-fda.yml` resolves a blank start date to `today − 90d` so a cron fire stays delta-scoped. Full-corpus re-seed stays available behind an explicit `full_corpus` dispatch toggle. |
+| NHTSA | weekly | ~21-min full PRE+POST compare today (no corpus-level short-circuit yet). Drops to seconds on no-change weeks once the inner-content-SHA pre-extract gate lands (plan W6). |
+| USDA | n/a | Every run is already a full snapshot (2026-05-01 revision). |
+| USCG manufacturer **details** | **quarterly** | The full ~14k-page detail sweep at the 1s polite throttle runs ~4.5–7.75h — it exceeds the GitHub-hosted 6h per-job cap, so it cannot be a single weekly job, and detail-only drift (a `Date Modified` bump with no listing change) moves slowly. Matches `project_scope/phase-5d-uscg-manufacturers-detail.md`. A **1/12 monthly rotation** is recorded as a *future option*, not adopted: it needs a `--min-id`/`--max-id` range parameter on `deep-rescan` plus a persistent per-shard offset cursor (neither exists today); the simpler interim is the quarterly full sweep or the chunked-process driver of plan W9. |
+
+USCG manufacturer/listing (Tier-1) deep rescans follow the weekly USCG cadence; only the detail (Tier-2) sweep needs the relaxed cadence.
+
+### GitHub-Actions hardening (landed in Tiers 1–2 of the plan)
+
+- All five `deep-rescan-*.yml` carry a `concurrency` group (`cancel-in-progress: false` — a cron and a manual dispatch serialize rather than double-run) and a `timeout-minutes` bound (NHTSA 40 / CPSC 30 / USDA 30 / FDA 60; USCG-detail deliberately unbounded pending an empirical single-run time — plan W9).
+- Engines are built through one `NullPool` + TCP-keepalive factory (`src/config/db.py`), and a Neon mid-transaction connection drop on the bronze load is retried (`_is_disconnect`, `src/extractors/_base.py`). Together these address the Neon connection-drop failure class the audit found (Problem 2).
+- Secret validation runs **before** `uv sync` in every deep-rescan workflow, so a missing secret fails in seconds rather than after dependency install.
+
+`schedule:` triggers remain **off** — Phase 7 turns cron on. These workflows are now cron-*ready*.
