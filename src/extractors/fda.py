@@ -583,7 +583,7 @@ class FdaDeepRescanLoader(FdaExtractor):
       filter:"[]" (NO eventlmd window) so the ~197 null-EVENTLMD un-edited records
       (Finding H) are included rather than silently excluded by a >= comparison.
       Requires migration 0020 (nullable core fields) so they land instead of
-      quarantining. See project_scope/fda-historical-seed-plan.md.
+      quarantining. See project_scope/archive/fda-historical-seed-plan.md.
 
     Both modes paginate without a record-count guard, sort ``productid`` asc (the UNIQUE
     row key — a total order with NO ties, so offset pagination cannot straddle a page

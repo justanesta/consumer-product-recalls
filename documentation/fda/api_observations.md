@@ -506,7 +506,7 @@ windowed extraction (incremental and date-windowed deep-rescan) to date. This fa
 the "`EVENTLMD` is a never-null core identifier" inference at the top of Finding M-extension
 (see the correction note there).
 
-**Consequences for the seed (implemented; see `project_scope/fda-historical-seed-plan.md`):**
+**Consequences for the seed (implemented; see `project_scope/archive/fda-historical-seed-plan.md`):**
 - The full-corpus historical seed pulls `filter:"[]"` (no `eventlmd` window), so the 197 are
   included. `FdaDeepRescanLoader.set_full_corpus()` selects this path; `recalls deep-rescan
   fda` with **no** `--start-date/--end-date` triggers it.
