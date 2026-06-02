@@ -1,7 +1,7 @@
 # Deep-rescan reliability & workload — plan
 
 - **Status:** Active — graduation (PR #50) + Tier 1 (PR #51) + Tier 2 (W5; PR #52) + Tier 3 W7+W8
-  (PR #53) merged. W6 (NHTSA inner-SHA short-circuit + migration 0021 + backfill) is in progress on
+  (PR #53) merged. W6 (NHTSA inner-SHA short-circuit + migration 0021 + backfill) is in progress as PR #54 on
   `feature/deep-rescan-nhtsa-short-circuit`; only Tier 4 (W9, W10) remains, both deferred-pending-measurement.
 - **Owns:** the fix ladder for deep-rescan reliability + workload ahead of Phase-7 scheduled GitHub
   Actions, and the PRE_2010 `response_inner_content_sha256` mitigation (#1–#3).
@@ -39,11 +39,11 @@ reshaped half of them, and those corrections are baked into the workstream descr
 | W3 | **R7-A** — add `timeout-minutes` (NHTSA 40, CPSC/USDA 30, FDA 60; USCG-detail deferred until a real single-run time exists) + `concurrency` (cancel-in-progress: false) to all five deep-rescan workflows (YAML only) | 1 | ✅ PR #51 |
 | W4 | **D1** — fix the stale `loader.py` chunk-count comment/docstring (65k/~12 → ~321k/~59) and the `_flat_file.py` 304 claim | 1 | ✅ PR #51 |
 | W5 | **R4** — extend `_TRANSIENT_RETRY`'s predicate with an `is_disconnect()` guard (matches "server closed the connection unexpectedly" / `connection_invalidated`); **not** a blanket `OperationalError` catch (the `_PG_PARAM_SAFETY_LIMIT` overflow must stay non-retried), **not** a second wrapper; keep it on `load_bronze`, never `run()` | 2 | ✅ PR #52 |
-| W6 | **R1+R2** — NHTSA inner-SHA short-circuit + `was_short_circuited` flag, gated in `NhtsaDeepRescanLoader.extract()` **post-download** (the inner-SHA is the only reliable oracle — the ZIP wrapper/ETag churns daily, Finding J); gates on **both** archives via migration 0021's JSONB by-archive column + R2-manifest backfill (Mitigation #3); `change_type` rebaseline bypass + NULL-baseline = proceed | 3 | ✅ this PR |
+| W6 | **R1+R2** — NHTSA inner-SHA short-circuit + `was_short_circuited` flag, gated in `NhtsaDeepRescanLoader.extract()` **post-download** (the inner-SHA is the only reliable oracle — the ZIP wrapper/ETag churns daily, Finding J); gates on **both** archives via migration 0021's JSONB by-archive column + R2-manifest backfill (Mitigation #3); `change_type` rebaseline bypass + NULL-baseline = proceed | 3 | ✅ PR #54 |
 | W7 | **R6** — make `deep-rescan-fda.yml` cron-runnable: a "Resolve start date" step (mirror the existing end-date step) computing a rolling window; never pass the raw `""` input; validate the window vs ADR 0023 back-dating | 3 | ✅ PR #53 |
 | W8 | **R8** — amend **ADR 0010** with per-source deep-rescan cadence: NHTSA/FDA weekly (cheap once W6 lands), CPSC weekly, USDA n/a (full snapshot), **USCG detail quarterly** (matches `phase-5d-uscg-manufacturers-detail.md`, not monthly); record the 1/12 rotation as a *future option* needing a range param + offset cursor (neither exists). Reorder secret-validation before `uv sync` (YAML) | 3 | ✅ PR #53 |
 | W9 | **R5** — port the chunked-process pattern into the USCG-detail **deep-rescan** workflow (the incremental cron path already fits and needs nothing); benchmark real GHA page-rate first; `timeout-minutes` guard | 4 (defer) | ⏳ |
-| W10 | **R9** — server-side staging-table anti-join for NHTSA (replace the ~59-chunk loop). **Defer**: depends on W6's short-circuit; must replicate `_identity_text_expr` text-canonical normalization (guardrail B); use SQLAlchemy bulk insert, not a new `psycopg2` COPY dependency; split read/write transactions; regression test vs the IN-query path | 4 (defer) | ⏳ |
+| W10 | **R9** — server-side staging-table anti-join for NHTSA (replace the ~59-chunk loop). **Defer (likely won't-do post-W6):** PR #54's short-circuit already eliminates the ~21-min DB-compare on the common no-change run (measured ~21.5 min → ~5s), so this would only speed the *rare* real-change run — revisit only if those become frequent. If pursued: must replicate `_identity_text_expr` text-canonical normalization (guardrail B); use SQLAlchemy bulk insert, not a new `psycopg2` COPY dependency; split read/write transactions; regression test vs the IN-query path | 4 (defer) | ⏳ |
 
 ## PRE_2010 `response_inner_content_sha256` mitigation (#1–#3)
 
