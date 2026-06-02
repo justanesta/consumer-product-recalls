@@ -72,6 +72,11 @@ extraction_runs = sa.Table(
     sa.Column("response_last_modified", sa.Text),
     sa.Column("response_body_sha256", sa.Text),
     sa.Column("response_headers", postgresql.JSONB),
+    # NHTSA deep-rescan writes the POST_2010 inner-file SHA here by design (canonical =
+    # rolling-current archive, matching the incremental path). The PRE_2010 inner SHA is
+    # NOT in this column — it lives only in the R2 deep-rescan manifest, recoverable via
+    # the run's raw_landing_path. A SHA-gate reading this column is therefore PRE_2010-blind;
+    # see documentation/audit/deep_rescan_reliability_audit.md.
     sa.Column("response_inner_content_sha256", sa.Text),
     sa.Column("was_short_circuited", sa.Boolean),
 )
