@@ -140,3 +140,13 @@ def test_render_report_genuine_dup_verdict() -> None:
     report = render_report(diagnose(records, page_size=5), 5)
     assert "GENUINE SOURCE DUPLICATES" in report
     assert "COMPLETE" in report
+
+
+def test_render_report_clean_when_no_duplicates() -> None:
+    # The success case after the productid-sort fix: zero duplicates -> COMPLETE,
+    # not "MIXED/INCONCLUSIVE".
+    records = [_rec(f"U{i}") for i in range(10)]
+    report = render_report(diagnose(records, page_size=5), 5)
+    assert "CLEAN" in report
+    assert "COMPLETE" in report
+    assert "INCONCLUSIVE" not in report

@@ -206,7 +206,13 @@ def render_report(d: Diagnosis, page_size: int) -> str:
             lines.append(f"  boundary at row {row:>7,} (page {boundary_page}): {count}")
         lines.append("")
     lines.append("VERDICT:")
-    if d.straddle_groups > d.in_page_groups and d.straddle_groups > 0:
+    if d.duplicate_groups == 0:
+        lines.append(
+            f"  CLEAN — 0 duplicates, 0 straddle; {d.distinct_productids:,} distinct products, "
+            "each unique in fetch order, so pagination dropped nothing. The corpus is COMPLETE "
+            "(what a unique-key sort like `sort=productid` produces)."
+        )
+    elif d.straddle_groups > d.in_page_groups and d.straddle_groups > 0:
         lines.append(
             f"  TIE-BOUNDARY STRADDLE confirmed — the seed dropped ~{d.straddle_groups} "
             "distinct products (one per straddle dup, since fetched == RESULTCOUNT), so bronze "
