@@ -28,11 +28,16 @@ corpus-level gate that can exit before `BronzeLoader.load()`.
 - **~59 Neon round-trips for NHTSA.** `_fetch_existing_hashes` chunks the existing-hash IN-query by
   `_PG_PARAM_SAFETY_LIMIT // n_cols` = `60_000 // 11` = **5,454 keys/chunk** → **~59 chunks** at ~321k
   rows, each a two-stage SQL (`GROUP BY max(extraction_timestamp)` per identity, then a join back for
-  `content_hash`). This is the dominant share of the 21 min.
+  `content_hash`). This is the dominant share of the 21 min. **Measured 2026-06-02 (W6 acceptance,
+  PR #54): the DB-compare is essentially the *entire* cost** — a full deep-rescan logged `load_bronze`
+  ≈ 21.5 min vs ~13s for download+parse+validate combined (download 4.9s, parse 1.8s, validate 6.7s over
+  322,672 rows). Converts the inference above into a measurement.
 - **`response_inner_content_sha256` is write-only.** It is INSERTed after the load
   (`_augment_response_row`) and **never SELECTed back to gate a run.** NHTSA has no short-circuit on the
   deep-rescan path; the USCG `_should_short_circuit` two-gate pattern is explicitly disabled on the
-  listing deep-rescan subclasses.
+  listing deep-rescan subclasses. **Resolved 2026-06-02 (W6, PR #54):** `NhtsaDeepRescanLoader` now reads
+  the prior run's inner SHAs from `response_inner_content_sha256_by_archive` (migration 0021) and
+  short-circuits a no-change deep-rescan in ~5s — see `project_scope/deep-rescan-reliability-plan.md`.
 - **Whole load in one transaction.** `NhtsaDeepRescanLoader.load_bronze` wraps the entire ~59-chunk
   fetch + single batched insert in one `engine.begin()` — efficient for the insert, but holds one
   connection open for the full multi-minute DB phase.
