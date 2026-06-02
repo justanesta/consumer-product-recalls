@@ -1,8 +1,8 @@
 # Deep-rescan reliability & workload — plan
 
 - **Status:** Active — graduation + the PRE_2010-SHA column annotation are landing on
-  `docs/deep-rescan-reliability-audit`; the Tier 1–4 implementation workstreams are sequenced below and
-  not yet started (each gets its own branch/PR).
+  `docs/deep-rescan-reliability-audit` (PR #50); the Tier 1–4 implementation workstreams are sequenced
+  below and not yet started (each gets its own branch/PR).
 - **Owns:** the fix ladder for deep-rescan reliability + workload ahead of Phase-7 scheduled GitHub
   Actions, and the PRE_2010 `response_inner_content_sha256` mitigation (#1–#3).
 - **Points at:** `documentation/audit/deep_rescan_reliability_audit.md` for *what we found* (this doc
