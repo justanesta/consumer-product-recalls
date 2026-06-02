@@ -7,10 +7,15 @@ from pydantic import BaseModel
 
 from src.bronze.invariants import (
     _MAX_RECALL_AGE_DAYS,
+    PER_RECORD_INVARIANTS_BY_SOURCE_NAME,
+    _date_sanity_invariant,
+    _null_id_invariant,
     check_date_sanity,
     check_null_source_id,
     check_usda_bilingual_pairing,
+    run_per_record_invariants,
 )
+from src.config.source_registry import EXTRACTOR_BY_SOURCE_NAME
 from src.extractors._base import QuarantineRecord
 
 # ---------------------------------------------------------------------------
@@ -264,3 +269,52 @@ def test_check_usda_bilingual_pairing_multiple_orphaned_spanish_records_all_quar
     assert len(quarantined) == 2
     quarantined_ids = {q.source_recall_id for q in quarantined}
     assert quarantined_ids == {"RCL-X", "RCL-Y"}
+
+
+# ---------------------------------------------------------------------------
+# Per-record invariant registry
+# ---------------------------------------------------------------------------
+
+
+class _FakeRec(BaseModel):
+    source_recall_id: str | None = "X1"
+    recall_date: datetime | None = None
+
+
+def test_registry_keys_match_extractor_registry() -> None:
+    assert set(PER_RECORD_INVARIANTS_BY_SOURCE_NAME) == set(EXTRACTOR_BY_SOURCE_NAME)
+
+
+def test_date_sanity_skippers_have_null_id_only() -> None:
+    # The three non-recall sources deliberately run only the null-id check (no
+    # publication timestamp to sanity-check). Encoded explicitly, not omitted.
+    for source in ("usda_establishments", "uscg_manufacturers", "uscg_manufacturer_details"):
+        assert PER_RECORD_INVARIANTS_BY_SOURCE_NAME[source] == (_null_id_invariant,)
+
+
+def test_date_sources_have_two_invariants() -> None:
+    for source in ("cpsc", "fda", "usda", "nhtsa", "uscg"):
+        assert len(PER_RECORD_INVARIANTS_BY_SOURCE_NAME[source]) == 2
+
+
+def test_run_short_circuits_on_first_failure() -> None:
+    rec = _FakeRec(source_recall_id="")  # null-id fails before date check is consulted
+    failure = run_per_record_invariants(
+        rec, (_null_id_invariant, _date_sanity_invariant("recall_date"))
+    )
+    assert failure == "source_recall_id is null or empty"
+
+
+def test_run_returns_none_when_all_pass() -> None:
+    rec = _FakeRec(source_recall_id="X1", recall_date=datetime(2024, 6, 15, tzinfo=UTC))
+    failure = run_per_record_invariants(
+        rec, (_null_id_invariant, _date_sanity_invariant("recall_date"))
+    )
+    assert failure is None
+
+
+def test_date_sanity_invariant_reads_its_bound_field() -> None:
+    rec = _FakeRec(source_recall_id="X1", recall_date=datetime(2099, 1, 1, tzinfo=UTC))
+    failure = _date_sanity_invariant("recall_date")(rec)
+    assert failure is not None
+    assert "recall_date" in failure

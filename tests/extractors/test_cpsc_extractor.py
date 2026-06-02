@@ -539,8 +539,8 @@ class TestCpscDeepRescanLoader:
             patch("src.extractors.cpsc.BronzeLoader") as mock_loader_cls,
             patch.object(deep_rescan_loader, "_update_watermark") as mock_update,
         ):
-            mock_loader_cls.return_value.load.return_value = 7
+            mock_loader_cls.from_contract.return_value.load.return_value = 7
             count = deep_rescan_loader.load_bronze([record], [], _FAKE_R2_PATH)
         assert count == 7
-        mock_loader_cls.return_value.load.assert_called_once()
+        mock_loader_cls.from_contract.return_value.load.assert_called_once()
         mock_update.assert_not_called()

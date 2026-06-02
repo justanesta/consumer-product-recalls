@@ -5,9 +5,11 @@ PrivateAttrs (covered in test_response_capture.py), and (b) `_record_run()`
 reads those PrivateAttrs and includes them in the row inserted into
 `extraction_runs`. These tests cover (b) for all four concrete extractors.
 
-Strategy: monkey-patch `_extraction_runs.insert()` in each extractor module
-so the chain `_extraction_runs.insert().values(**row)` captures the row
-dict instead of producing a real SQL statement. Mock the engine so the
+Strategy: monkey-patch `.insert()` on the shared `extraction_runs` table
+(src/extractors/_tables.py) so the chain `extraction_runs.insert().values(**row)`
+captures the row dict instead of producing a real SQL statement. All extractors now
+share one `_record_run` template (Extractor base) that writes to this one table object,
+so patching it intercepts every extractor. Mock the engine so the
 `with self._engine.begin() as conn: conn.execute(...)` path is a no-op.
 """
 
@@ -23,6 +25,7 @@ from pydantic import SecretStr
 
 from src.config.settings import Settings
 from src.extractors._base import ExtractionResult
+from src.extractors._tables import extraction_runs
 
 # --- Fixtures ---
 
@@ -117,7 +120,7 @@ def test_cpsc_record_run_persists_response_capture_fields(
 ) -> None:
     from src.extractors import cpsc as mod
 
-    captured = _intercept_insert_values(monkeypatch, mod._extraction_runs)
+    captured = _intercept_insert_values(monkeypatch, extraction_runs)
 
     extractor = mod.CpscExtractor(base_url="https://example.test/cpsc", settings=fake_settings)
     _populate_capture_state(extractor)
@@ -139,7 +142,7 @@ def test_fda_record_run_persists_response_capture_fields(
 ) -> None:
     from src.extractors import fda as mod
 
-    captured = _intercept_insert_values(monkeypatch, mod._extraction_runs)
+    captured = _intercept_insert_values(monkeypatch, extraction_runs)
 
     extractor = mod.FdaExtractor(base_url="https://example.test/fda", settings=fake_settings)
     _populate_capture_state(extractor)
@@ -161,7 +164,7 @@ def test_usda_record_run_persists_response_capture_fields(
 ) -> None:
     from src.extractors import usda as mod
 
-    captured = _intercept_insert_values(monkeypatch, mod._extraction_runs)
+    captured = _intercept_insert_values(monkeypatch, extraction_runs)
 
     extractor = mod.UsdaExtractor(base_url="https://example.test/usda", settings=fake_settings)
     _populate_capture_state(extractor)
@@ -183,7 +186,7 @@ def test_usda_establishment_record_run_persists_response_capture_fields(
 ) -> None:
     from src.extractors import usda_establishment as mod
 
-    captured = _intercept_insert_values(monkeypatch, mod._extraction_runs)
+    captured = _intercept_insert_values(monkeypatch, extraction_runs)
 
     extractor = mod.UsdaEstablishmentExtractor(
         base_url="https://example.test/usda-establishments", settings=fake_settings
@@ -214,7 +217,7 @@ def test_record_run_skips_response_fields_when_capture_state_empty(
     Tested on CPSC; the gating logic is identical across all four extractors."""
     from src.extractors import cpsc as mod
 
-    captured = _intercept_insert_values(monkeypatch, mod._extraction_runs)
+    captured = _intercept_insert_values(monkeypatch, extraction_runs)
 
     extractor = mod.CpscExtractor(base_url="https://example.test/cpsc", settings=fake_settings)
     # Deliberately do NOT call _populate_capture_state — captures stay None.

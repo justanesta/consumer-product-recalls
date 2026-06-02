@@ -39,31 +39,24 @@ silver join lands in Phase 5b.2 Step 5.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from typing import Any
 
-import httpx
 import sqlalchemy as sa
 import structlog
-from pydantic import PrivateAttr, ValidationError
+from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
-from src.bronze.invariants import check_null_source_id
-from src.bronze.loader import BronzeLoader
-from src.config.settings import (
-    Settings,  # noqa: TC001 — Pydantic evaluates field annotations at runtime
+from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
+from src.bronze.invariants import (
+    PER_RECORD_INVARIANTS_BY_SOURCE_NAME,
+    run_per_record_invariants,
 )
+from src.bronze.loader import BronzeLoader
 from src.extractors._base import (
-    AuthenticationError,
-    ExtractionError,
-    ExtractionResult,
     QuarantineRecord,
-    RateLimitError,
-    RestApiExtractor,
     TransientExtractionError,
 )
-from src.extractors._fsis_headers import browser_headers
-from src.landing.r2 import R2LandingClient
+from src.extractors._fsis_base import FsisConditionalGetExtractor
 from src.schemas.usda_establishment import UsdaFsisEstablishment
 
 logger = structlog.get_logger()
@@ -112,42 +105,9 @@ _establishments_rejected = sa.Table(
     sa.Column("raw_landing_path", sa.Text),
 )
 
-_extraction_runs = sa.Table(
-    "extraction_runs",
-    _metadata,
-    sa.Column("id", sa.Integer, primary_key=True),
-    sa.Column("source", sa.Text),
-    sa.Column("started_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("finished_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("status", sa.Text),
-    sa.Column("records_extracted", sa.Integer),
-    sa.Column("records_inserted", sa.Integer),
-    sa.Column("records_rejected", sa.Integer),
-    sa.Column("run_id", sa.Text),
-    sa.Column("error_message", sa.Text),
-    sa.Column("raw_landing_path", sa.Text),
-    sa.Column("change_type", sa.Text),
-    sa.Column("response_status_code", sa.Integer),
-    sa.Column("response_etag", sa.Text),
-    sa.Column("response_last_modified", sa.Text),
-    sa.Column("response_body_sha256", sa.Text),
-    sa.Column("response_headers", postgresql.JSONB),
-)
-
-# Mirror of the source_watermarks declaration in src/extractors/usda.py — keep
-# in sync. The conditional-GET path below reads/writes (last_etag, last_cursor)
-# for this source's row; last_cursor is repurposed to store the prior response's
-# Last-Modified header value (no usable date watermark, same rationale as the
-# recall endpoint per Finding D).
-_source_watermarks = sa.Table(
-    "source_watermarks",
-    _metadata,
-    sa.Column("source", sa.Text, primary_key=True),
-    sa.Column("last_cursor", sa.Text),
-    sa.Column("last_etag", sa.Text),
-    sa.Column("last_successful_extract_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("updated_at", sa.TIMESTAMP(timezone=True)),
-)
+# ``_source_watermarks`` (imported above) and ``extraction_runs`` are the shared
+# cross-source operational tables — see src/extractors/_tables.py. (last_cursor is
+# repurposed for this source's prior Last-Modified header value — Finding D.)
 
 _SOURCE = "usda_establishments"
 
@@ -157,7 +117,7 @@ _SOURCE = "usda_establishments"
 _MAX_TOTAL_RECORDS = 20_000
 
 
-class UsdaEstablishmentExtractor(RestApiExtractor[UsdaFsisEstablishment]):
+class UsdaEstablishmentExtractor(FsisConditionalGetExtractor[UsdaFsisEstablishment]):
     """Full-dump extractor for the FSIS Establishment Listing API.
 
     ETag conditional-GET pattern is scaffolded as a 1:1 mirror of
@@ -172,34 +132,10 @@ class UsdaEstablishmentExtractor(RestApiExtractor[UsdaFsisEstablishment]):
     """
 
     source_name: str = _SOURCE
-    settings: Settings
-    # Production default ON since 2026-05-09 — etag_viability.sql produced a
-    # SAFE-TO-ENABLE verdict over 7 transitions including a real-update day
-    # (false_304_count=0; false_200_count=3 from upstream ETag re-stamping
-    # without body changes, absorbed by ADR 0007 content-hash dedup). See
-    # `documentation/usda/establishment_api_observations.md` Finding A
-    # (revision 2026-05-09). Mirrors UsdaExtractor.etag_enabled.
-    etag_enabled: bool = True
-
-    _engine: sa.Engine = PrivateAttr()
-    _r2_client: R2LandingClient = PrivateAttr()
-    _current_landing_path: str = PrivateAttr(default="")
-    # Mirrors UsdaExtractor: captured during extract(), applied during
-    # load_bronze() in the same transaction (ADR 0020). Distinct from the
-    # base-class _captured_response_* state (migration 0010), which is used
-    # for forensic logging on extraction_runs; these drive the watermark
-    # write specifically.
-    _captured_etag: str | None = PrivateAttr(default=None)
-    _captured_last_modified: str | None = PrivateAttr(default=None)
-    # Set when extract() short-circuits on a 304; downstream lifecycle steps no-op.
-    _not_modified: bool = PrivateAttr(default=False)
-
-    def model_post_init(self, __context: Any) -> None:
-        self._engine = sa.create_engine(
-            self.settings.neon_database_url.get_secret_value(),
-            pool_pre_ping=True,
-        )
-        self._r2_client = R2LandingClient(self.settings)
+    # settings, etag_enabled (production default ON since 2026-05-09 per establishment
+    # Finding A — etag_viability.sql green-lit it), the engine/R2 + ETag-capture state,
+    # and model_post_init are inherited from FsisConditionalGetExtractor.
+    # UsdaEstablishments has no deep-rescan loader (every run is a full dump).
 
     # --- Lifecycle methods ---
 
@@ -277,7 +213,9 @@ class UsdaEstablishmentExtractor(RestApiExtractor[UsdaFsisEstablishment]):
         passing: list[UsdaFsisEstablishment] = []
         quarantined: list[QuarantineRecord] = []
         for record in records:
-            failure = check_null_source_id(record.source_recall_id)
+            failure = run_per_record_invariants(
+                record, PER_RECORD_INVARIANTS_BY_SOURCE_NAME[_SOURCE]
+            )
             if failure:
                 quarantined.append(
                     QuarantineRecord(
@@ -305,17 +243,10 @@ class UsdaEstablishmentExtractor(RestApiExtractor[UsdaFsisEstablishment]):
                 self._touch_freshness(conn)
             return 0
 
-        loader = BronzeLoader(
+        loader = BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME[_SOURCE],
             bronze_table=_establishments_bronze,
             rejected_table=_establishments_rejected,
-            # establishment_id is the stable FSIS FK (Finding F) and never
-            # has bilingual siblings or other composite components.
-            identity_fields=("source_recall_id",),
-            # FSIS bumps latest_mpi_active_date on every Mon/Tues directory
-            # republish for ~all 7,945 establishments regardless of whether
-            # any other field changed (Finding G addendum; ADR 0032). Treating
-            # the column as content would version-bump ~7k bronze rows weekly.
-            hash_exclude_fields=frozenset({"latest_mpi_active_date"}),
         )
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
@@ -325,227 +256,3 @@ class UsdaEstablishmentExtractor(RestApiExtractor[UsdaFsisEstablishment]):
                 last_modified=self._captured_last_modified,
             )
         return count
-
-    # --- Private helpers ---
-
-    def _fetch(
-        self,
-        prior_etag: str | None = None,
-        prior_last_modified: str | None = None,
-    ) -> tuple[list[dict[str, Any]], int, str | None, str | None]:
-        """Single GET to the establishments endpoint.
-
-        Mirrors UsdaExtractor._fetch — keep in sync.
-
-        Returns (records, status_code, etag, last_modified).
-        - 200: records is the full payload list, etag/last_modified from response headers.
-        - 304: records is [], headers may be present.
-        Raises TransientExtractionError on 5xx and network errors.
-        Raises RateLimitError on 429.
-        Raises AuthenticationError on 401/403 (unexpected — this API has no auth).
-        """
-        headers: dict[str, str] = {}
-        if self.etag_enabled and prior_etag:
-            headers["If-None-Match"] = prior_etag
-        if self.etag_enabled and prior_last_modified:
-            headers["If-Modified-Since"] = prior_last_modified
-
-        try:
-            with httpx.Client(
-                timeout=self.timeout_seconds,
-                headers=browser_headers(),
-            ) as client:
-                response = client.get(self.base_url, headers=headers)
-        except httpx.TransportError as exc:
-            raise TransientExtractionError(f"USDA establishments network error: {exc}") from exc
-
-        etag = response.headers.get("etag") or response.headers.get("ETag")
-        last_modified = response.headers.get("last-modified") or response.headers.get(
-            "Last-Modified"
-        )
-
-        if response.status_code == 304:
-            self._capture_response(response)
-            return [], 304, etag, last_modified
-        if response.status_code == 200:
-            self._capture_response(response)
-            data = response.json()
-            records = data if isinstance(data, list) else []
-            return records, 200, etag, last_modified
-        if response.status_code == 429:
-            retry_after = float(response.headers.get("Retry-After", 60))
-            self._capture_error_response(response)
-            raise RateLimitError(retry_after=retry_after)
-        if response.status_code in (401, 403):
-            raise AuthenticationError(
-                f"USDA establishments API returned {response.status_code} "
-                "(unexpected — no auth required)"
-            )
-        self._capture_error_response(response)
-        raise TransientExtractionError(f"USDA establishments API returned {response.status_code}")
-
-    def _capture_error_response(self, response: httpx.Response) -> None:
-        try:
-            self._r2_client.land_error_response(
-                source=_SOURCE,
-                request_method=response.request.method,
-                request_url=str(response.request.url),
-                status_code=response.status_code,
-                response_headers=dict(response.headers),
-                response_body=response.text,
-            )
-        except Exception:
-            logger.warning(
-                "usda_establishments.error_capture_failed",
-                status_code=response.status_code,
-            )
-
-    def _read_etag_state(self) -> tuple[str | None, str | None]:
-        """Return (prior_etag, prior_last_modified) from source_watermarks.
-
-        Mirrors UsdaExtractor._read_etag_state — keep in sync. last_cursor is
-        repurposed for the prior last-modified header value (HTTP-date string);
-        no usable date watermark exists for either USDA endpoint.
-        """
-        with self._engine.connect() as conn:
-            row = conn.execute(
-                sa.select(
-                    _source_watermarks.c.last_etag,
-                    _source_watermarks.c.last_cursor,
-                ).where(_source_watermarks.c.source == _SOURCE)
-            ).fetchone()
-        if not row:
-            return None, None
-        return row[0], row[1]
-
-    def _update_watermark_state(
-        self,
-        conn: sa.Connection,
-        *,
-        etag: str | None,
-        last_modified: str | None,
-    ) -> None:
-        """Update last_etag, last_cursor (= last_modified header), last_successful_extract_at.
-
-        Mirrors UsdaExtractor._update_watermark_state — keep in sync.
-        """
-        values: dict[str, Any] = {
-            "updated_at": datetime.now(UTC),
-            "last_successful_extract_at": datetime.now(UTC),
-        }
-        if etag is not None:
-            values["last_etag"] = etag
-        if last_modified is not None:
-            values["last_cursor"] = last_modified
-        conn.execute(
-            sa.update(_source_watermarks)
-            .where(_source_watermarks.c.source == _SOURCE)
-            .values(**values)
-        )
-
-    def _touch_freshness(self, conn: sa.Connection) -> None:
-        """Bump last_successful_extract_at on a 304 path without modifying etag/cursor.
-
-        Mirrors UsdaExtractor._touch_freshness — keep in sync.
-        """
-        conn.execute(
-            sa.update(_source_watermarks)
-            .where(_source_watermarks.c.source == _SOURCE)
-            .values(
-                last_successful_extract_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
-            )
-        )
-
-    def _guard_etag_contradiction(
-        self,
-        prior_last_modified: str | None,
-        current_last_modified: str | None,
-    ) -> None:
-        """Fail the run if a 304 is paired with an advanced last-modified header.
-
-        Mirrors UsdaExtractor._guard_etag_contradiction — keep in sync. That
-        combination indicates the server (or CDN cache layer) is returning a
-        stale-positive 304 — the etag matched but the underlying dataset has
-        actually changed. Retrying would not help; the watermark needs manual
-        repair (null out source_watermarks.last_etag and re-run).
-        """
-        if not (prior_last_modified and current_last_modified):
-            return
-        if prior_last_modified == current_last_modified:
-            return
-        # Headers differ — could be a clock-skew artifact. Compare parsed
-        # datetimes to be more tolerant; if parsing fails, treat the
-        # inequality as suspicious and raise.
-        try:
-            prior_dt = datetime.strptime(prior_last_modified, "%a, %d %b %Y %H:%M:%S GMT").replace(
-                tzinfo=UTC
-            )
-            current_dt = datetime.strptime(
-                current_last_modified, "%a, %d %b %Y %H:%M:%S GMT"
-            ).replace(tzinfo=UTC)
-        except ValueError:
-            raise ExtractionError(
-                "USDA establishments contradiction guard: 304 returned with advanced "
-                f"last-modified header (prior={prior_last_modified!r}, "
-                f"current={current_last_modified!r}). Could not parse dates; treating "
-                "as a stale-positive ETag. Manually NULL source_watermarks.last_etag "
-                "for usda_establishments and re-run."
-            ) from None
-        if current_dt > prior_dt:
-            raise ExtractionError(
-                "USDA establishments contradiction guard: 304 Not Modified returned but "
-                f"last-modified header advanced from {prior_last_modified!r} to "
-                f"{current_last_modified!r}. This is a server-side stale-positive ETag — "
-                "the cached etag matched but the underlying dataset has changed. Manually "
-                "NULL source_watermarks.last_etag for usda_establishments and re-run to "
-                "force a full payload fetch."
-            )
-
-    def _record_run(
-        self,
-        run_id: str,
-        started_at: datetime,
-        status: str,
-        result: ExtractionResult | None = None,
-        error_message: str | None = None,
-        change_type: str = "routine",
-    ) -> None:
-        row: dict[str, Any] = {
-            "source": _SOURCE,
-            "started_at": started_at,
-            "finished_at": datetime.now(UTC),
-            "status": status,
-            "run_id": run_id,
-            "error_message": error_message,
-            "change_type": change_type,
-        }
-        if result is not None:
-            row["records_extracted"] = result.records_fetched
-            row["records_inserted"] = result.records_loaded
-            row["records_rejected"] = (
-                result.records_rejected_validate + result.records_rejected_invariants
-            )
-            row["raw_landing_path"] = result.raw_landing_path
-        if self._captured_response_status_code is not None:
-            row["response_status_code"] = self._captured_response_status_code
-            row["response_etag"] = self._captured_response_etag
-            row["response_last_modified"] = self._captured_response_last_modified
-            row["response_body_sha256"] = self._captured_response_body_sha256
-            row["response_headers"] = self._captured_response_headers
-        try:
-            with self._engine.begin() as conn:
-                conn.execute(_extraction_runs.insert().values(**row))
-        except Exception as exc:
-            # Run-recording is best-effort: the bronze write already committed,
-            # so a failure here doesn't lose data. Include the exception type
-            # and message so a constraint violation (e.g., missing FK row in
-            # source_watermarks for a new source) is diagnosable from logs
-            # rather than requiring code-side instrumentation to reproduce.
-            logger.warning(
-                "extraction_run.record_failed",
-                run_id=run_id,
-                status=status,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )

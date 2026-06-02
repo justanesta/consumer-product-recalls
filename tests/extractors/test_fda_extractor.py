@@ -365,7 +365,7 @@ class TestLoadBronze:
             patch("src.extractors.fda.BronzeLoader") as mock_loader_cls,
             patch.object(extractor, "_update_watermark") as mock_update,
         ):
-            mock_loader_cls.return_value.load.return_value = 2
+            mock_loader_cls.from_contract.return_value.load.return_value = 2
             extractor._engine.begin.return_value.__enter__ = lambda _: mock_conn  # type: ignore[attr-defined]
             extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
             extractor.load_bronze([r1, r2], [], _FAKE_R2_PATH)
@@ -377,7 +377,7 @@ class TestLoadBronze:
             patch("src.extractors.fda.BronzeLoader") as mock_loader_cls,
             patch.object(extractor, "_update_watermark") as mock_update,
         ):
-            mock_loader_cls.return_value.load.return_value = 0
+            mock_loader_cls.from_contract.return_value.load.return_value = 0
             extractor._engine.begin.return_value.__enter__ = lambda _: MagicMock()  # type: ignore[attr-defined]
             extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
             extractor.load_bronze([], [], _FAKE_R2_PATH)
@@ -401,7 +401,7 @@ class TestLoadBronze:
             patch("src.extractors.fda.BronzeLoader") as mock_loader_cls,
             patch.object(extractor, "_update_watermark") as mock_update,
         ):
-            mock_loader_cls.return_value.load.return_value = 2
+            mock_loader_cls.from_contract.return_value.load.return_value = 2
             extractor._engine.begin.return_value.__enter__ = lambda _: mock_conn  # type: ignore[attr-defined]
             extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
             extractor.load_bronze([null_lmd, dated], [], _FAKE_R2_PATH)
@@ -416,7 +416,7 @@ class TestLoadBronze:
             patch("src.extractors.fda.BronzeLoader") as mock_loader_cls,
             patch.object(extractor, "_update_watermark") as mock_update,
         ):
-            mock_loader_cls.return_value.load.return_value = 1
+            mock_loader_cls.from_contract.return_value.load.return_value = 1
             extractor._engine.begin.return_value.__enter__ = lambda _: MagicMock()  # type: ignore[attr-defined]
             extractor._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
             extractor.load_bronze([null_lmd], [], _FAKE_R2_PATH)
@@ -479,7 +479,7 @@ class TestFdaDeepRescanLoader:
         r = FdaRecord.model_validate(_VALID_RAW)
         mock_conn = MagicMock()
         with patch("src.extractors.fda.BronzeLoader") as mock_loader_cls:
-            mock_loader_cls.return_value.load.return_value = 1
+            mock_loader_cls.from_contract.return_value.load.return_value = 1
             deep_rescan._engine.begin.return_value.__enter__ = lambda _: mock_conn  # type: ignore[attr-defined]
             deep_rescan._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
             deep_rescan.load_bronze([r], [], _FAKE_R2_PATH)
@@ -492,12 +492,12 @@ class TestFdaDeepRescanLoader:
         r = FdaRecord.model_validate(_VALID_RAW)
         mock_conn = MagicMock()
         with patch("src.extractors.fda.BronzeLoader") as mock_loader_cls:
-            mock_loader_cls.return_value.load.return_value = 1
+            mock_loader_cls.from_contract.return_value.load.return_value = 1
             deep_rescan._engine.begin.return_value.__enter__ = lambda _: mock_conn  # type: ignore[attr-defined]
             deep_rescan._engine.begin.return_value.__exit__ = MagicMock(return_value=False)  # type: ignore[attr-defined]
             deep_rescan.load_bronze([r], [], _FAKE_R2_PATH)
 
-        assert mock_loader_cls.call_args.kwargs["within_batch_dedup"] is True
+        assert mock_loader_cls.from_contract.call_args.kwargs["within_batch_dedup"] is True
 
     def test_deep_rescan_default_page_sleep_is_five_seconds(
         self, deep_rescan: FdaDeepRescanLoader

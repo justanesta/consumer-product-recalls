@@ -111,7 +111,7 @@ class CpscRecord(BaseModel):
     'old-name missing' side of field renames.
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+    model_config = _SUB  # same ConfigDict as the sub-models (defined at module top)
 
     # Required scalars — any rename surfaces as a validation error
     source_recall_id: str = Field(validation_alias="RecallNumber")

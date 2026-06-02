@@ -1,7 +1,7 @@
 # 0030 — NHTSA bronze identity: composite tuple + within-batch dedup (RECORD_ID regen-unstable; TSV ships byte-duplicate rows)
 
-- **Status:** Accepted (amended 2026-05-08 after TSV-level analysis + implementation)
-- **Date:** 2026-05-07; amendments 2026-05-08
+- **Status:** Accepted (amended 2026-05-08 after TSV-level analysis + implementation; amended 2026-06-01 — dedup-contract SSOT + deep-rescan bug fix, see "Amendment (2026-06-01)")
+- **Date:** 2026-05-07; amendments 2026-05-08, 2026-06-01
 - **Supersedes:** —
 - **Superseded by:** —
 - **Clarifies:** ADR 0007 (extends `hash_exclude_fields` use beyond FDA's RID position counter); ADR 0012 (concrete `identity_fields` choice for NHTSA); ADR 0014 (RECORD_ID is not a per-row natural key despite RCL.txt's "uniquely identifies the record" wording).
@@ -230,3 +230,13 @@ Phase 5c Step 2's "Post-bronze identity-and-dedup revision" subsection in `proje
 `hash_exclude_fields` is now in active use beyond FDA's narrow RID-counter case. Future extractors may need similar treatment for any field that participates in the row's wire representation but does not carry information — for example, source-side row counters, page-position artifacts, or per-export timestamps.
 
 This ADR's existence is itself an argument for the per-source-Step-3 "first-extraction findings" doc as a non-optional deliverable: this finding would have been catastrophic if first surfaced in Phase 7 production cron rather than dev investigation.
+
+## Amendment (2026-06-01) — dedup-contract single source of truth; deep-rescan bug fixed
+
+The decision above (11-tuple identity, `hash_exclude_fields={source_recall_id}`, within-batch dedup, `allow_null_identity=True`) **stands unchanged**. This amendment records the *enforcement mechanism* added during the `src/` soundness consolidation (`project_scope/archive/src-consolidation-plan.md`; findings in `documentation/audit/src_soundness_audit.md`) and the latent bug it eliminated.
+
+**The bug.** Each source's `BronzeLoader` dedup config was hand-copied in three places: the incremental `load_bronze`, the deep-rescan `load_bronze`, and `recovery.py`'s `RECOVERY_CONFIG_BY_SOURCE_NAME`. For NHTSA those copies had drifted — `NhtsaDeepRescanLoader.load_bronze` keyed on `identity_fields=("source_recall_id",)` and hashed the regen-unstable `RECORD_ID`, while the incremental path used this ADR's 11-tuple and excluded `RECORD_ID` from the hash. Both write `nhtsa_recalls_bronze`, so the deep-rescan path (reachable via the weekly `deep-rescan-nhtsa.yml` cron and `recalls deep-rescan nhtsa --change-type=historical_seed`) disagreed with the incremental path on both the identity bucket and the content hash — re-inserting the corpus as phantom rows on every NHTSA file regen.
+
+**The fix.** Each source now has exactly one `DedupContract` (`src/bronze/dedup_contracts.py`) carrying the oracle (`identity_fields` + `hash_exclude_fields`) plus incremental-mode defaults for the operational flags. The incremental path, deep-rescan path, and recovery all construct their loader via `BronzeLoader.from_contract(...)`, so they physically cannot disagree on the oracle. Mode-varying flags (`within_batch_dedup`, `allow_null_identity`) remain per-call overrides defaulted from the contract — e.g. FDA's deep-rescan still passes `within_batch_dedup=True`. The contract lives in typed Python, never the operator-facing YAML: a dedup-oracle change must be a reviewed code edit, not a config tweak (an errant YAML edit to `identity_fields` would silently corrupt bronze dedup). A unit regression guard (`tests/bronze/test_dedup_contracts.py`) asserts a `RECORD_ID`-churned NHTSA row produces an identical identity tuple **and** identical content hash, so the divergence cannot recur.
+
+**Data impact.** The buggy deep-rescan had already seeded the `main` branch's (empty-beforehand) `nhtsa_recalls_bronze`, so those rows carry `RECORD_ID`-polluted hashes; the truncate-and-reseed remediation is tracked in the plan doc.

@@ -18,11 +18,11 @@ class Settings(BaseSettings):
     r2_bucket_name: str
     dbt_project_dir: str = "dbt"
     dbt_profiles_dir: str = "dbt"
-    # Phase 5a: FDA iRES credentials — not required until FDA extractor is implemented
+    # FDA iRES credentials — optional; only the FDA extractor reads them.
     fda_authorization_user: SecretStr | None = None
     fda_authorization_key: SecretStr | None = None
 
 
-# No module-level Settings() instance here.
-# R2 secrets are not in .env until Phase 1 quality gates are met.
-# Add `settings = Settings()` singleton in Phase 2 once all secrets are provisioned.
+# No module-level Settings() instance: each CLI command constructs Settings() at call time
+# so env vars are read lazily (construction at import time would require all secrets to be
+# present just to import the module).

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
     from sqlalchemy import Connection, Table
 
+    from src.bronze.dedup_contracts import DedupContract
     from src.extractors._base import QuarantineRecord
 
 logger = structlog.get_logger()
@@ -114,6 +115,43 @@ class BronzeLoader:
         self._identity_fields = identity_fields
         self._within_batch_dedup = within_batch_dedup
         self._allow_null_identity = allow_null_identity
+
+    @classmethod
+    def from_contract(
+        cls,
+        contract: DedupContract,
+        *,
+        bronze_table: Table,
+        rejected_table: Table,
+        within_batch_dedup: bool | None = None,
+        allow_null_identity: bool | None = None,
+    ) -> BronzeLoader:
+        """Build a loader from a source's :class:`DedupContract` (the dedup-oracle SSOT).
+
+        The oracle (``identity_fields`` + ``hash_exclude_fields``) comes straight from the
+        contract — that is what must be identical across a source's incremental,
+        deep-rescan, and recovery paths. The operational flags default to the contract's
+        incremental values; pass an explicit ``within_batch_dedup`` / ``allow_null_identity``
+        to override per mode (e.g. FDA's deep-rescan passes ``within_batch_dedup=True``).
+        ``bronze_table`` / ``rejected_table`` stay call-site args — they are per-source
+        table objects, not part of the semantic oracle.
+        """
+        return cls(
+            bronze_table=bronze_table,
+            rejected_table=rejected_table,
+            hash_exclude_fields=contract.hash_exclude_fields,
+            identity_fields=contract.identity_fields,
+            within_batch_dedup=(
+                contract.default_within_batch_dedup
+                if within_batch_dedup is None
+                else within_batch_dedup
+            ),
+            allow_null_identity=(
+                contract.default_allow_null_identity
+                if allow_null_identity is None
+                else allow_null_identity
+            ),
+        )
 
     def _identity_columns(self) -> list[Any]:
         """Return SQLAlchemy column objects for each identity field on the bronze table."""

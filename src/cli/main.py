@@ -266,7 +266,11 @@ def extract(
         if source in _LOOKBACK_DAYS_SOURCES:
             extractor.override_watermark_lookback(lookback_days)  # type: ignore[attr-defined]
         else:
-            typer.echo(_LOOKBACK_NO_OP_MESSAGES[source])
+            typer.echo(
+                _LOOKBACK_NO_OP_MESSAGES.get(
+                    source, f"{source}: --lookback-days has no effect for this source."
+                )
+            )
 
     # --change-type=etag_audit: post-construction mutation. Only reachable for
     # USDA recall + USDA establishments (gated by _validate_etag_audit_source).
@@ -346,7 +350,11 @@ def deep_rescan(
             )
             raise typer.Exit(code=1)
     elif start_date is not None or end_date is not None:
-        typer.echo(_DEEP_RESCAN_NO_DATE_WINDOW_MESSAGES[source])
+        typer.echo(
+            _DEEP_RESCAN_NO_DATE_WINDOW_MESSAGES.get(
+                source, f"{source}: --start-date/--end-date have no effect for this source."
+            )
+        )
 
     config = load_source_config(source)
     settings = Settings()  # type: ignore[call-arg]

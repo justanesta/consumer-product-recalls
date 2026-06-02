@@ -79,7 +79,7 @@ def extractor(monkeypatch: pytest.MonkeyPatch) -> UsdaEstablishmentExtractor:
     mock_r2.land.return_value = _FAKE_R2_PATH
     with (
         patch("sqlalchemy.create_engine", return_value=mock_engine),
-        patch("src.extractors.usda_establishment.R2LandingClient", return_value=mock_r2),
+        patch("src.extractors._fsis_base.R2LandingClient", return_value=mock_r2),
     ):
         settings = Settings()  # type: ignore[call-arg]
         return UsdaEstablishmentExtractor(base_url=_BASE_URL, settings=settings)

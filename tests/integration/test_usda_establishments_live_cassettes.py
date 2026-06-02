@@ -115,7 +115,7 @@ def vcr_extractor(monkeypatch: pytest.MonkeyPatch) -> UsdaEstablishmentExtractor
     mock_r2.land.return_value = _FAKE_R2_PATH
     with (
         patch("sqlalchemy.create_engine", return_value=mock_engine),
-        patch("src.extractors.usda_establishment.R2LandingClient", return_value=mock_r2),
+        patch("src.extractors._fsis_base.R2LandingClient", return_value=mock_r2),
     ):
         settings = Settings()  # type: ignore[call-arg]
         return UsdaEstablishmentExtractor(base_url=_BASE_URL, settings=settings)
@@ -136,7 +136,7 @@ def _run(
         patch.object(extractor, "_read_etag_state", return_value=(prior_etag, prior_last_modified)),
         patch("src.extractors.usda_establishment.BronzeLoader") as mock_loader_cls,
     ):
-        mock_loader_cls.return_value.load.return_value = 0
+        mock_loader_cls.from_contract.return_value.load.return_value = 0
         mock_engine: MagicMock = extractor._engine  # type: ignore[assignment]
         mock_engine.begin.return_value.__enter__ = lambda _: MagicMock()
         mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)

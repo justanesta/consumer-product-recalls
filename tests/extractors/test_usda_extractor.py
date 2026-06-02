@@ -17,6 +17,7 @@ from src.extractors._base import (
     RateLimitError,
     TransientExtractionError,
 )
+from src.extractors._fsis_base import _parse_http_date
 from src.extractors._fsis_headers import (
     _FALLBACK_FIREFOX_UA,
     _load_user_agent,
@@ -27,7 +28,6 @@ from src.extractors._fsis_headers import (
 from src.extractors.usda import (
     UsdaDeepRescanLoader,
     UsdaExtractor,
-    _parse_http_date,
 )
 from src.schemas.usda import UsdaFsisRecord
 
@@ -97,7 +97,7 @@ def extractor(monkeypatch: pytest.MonkeyPatch) -> UsdaExtractor:
     mock_r2.land.return_value = _FAKE_R2_PATH
     with (
         patch("sqlalchemy.create_engine", return_value=mock_engine),
-        patch("src.extractors.usda.R2LandingClient", return_value=mock_r2),
+        patch("src.extractors._fsis_base.R2LandingClient", return_value=mock_r2),
     ):
         settings = Settings()  # type: ignore[call-arg]
         return UsdaExtractor(base_url=_BASE_URL, settings=settings, etag_enabled=True)
@@ -112,7 +112,7 @@ def deep_rescan(monkeypatch: pytest.MonkeyPatch) -> UsdaDeepRescanLoader:
     mock_r2.land.return_value = _FAKE_R2_PATH
     with (
         patch("sqlalchemy.create_engine", return_value=mock_engine),
-        patch("src.extractors.usda.R2LandingClient", return_value=mock_r2),
+        patch("src.extractors._fsis_base.R2LandingClient", return_value=mock_r2),
     ):
         settings = Settings()  # type: ignore[call-arg]
         return UsdaDeepRescanLoader(base_url=_BASE_URL, settings=settings)
@@ -417,7 +417,8 @@ class TestLoadBronze:
 
         mock_loader = MagicMock()
         mock_loader.load.return_value = 1
-        with patch("src.extractors.usda.BronzeLoader", return_value=mock_loader):
+        with patch("src.extractors.usda.BronzeLoader") as mock_loader_cls:
+            mock_loader_cls.from_contract.return_value = mock_loader
             count = extractor.load_bronze([record], [], _FAKE_R2_PATH)
 
         assert count == 1
@@ -441,7 +442,7 @@ class TestEtagDefaults:
             monkeypatch.setenv(k, v)
         with (
             patch("sqlalchemy.create_engine"),
-            patch("src.extractors.usda.R2LandingClient"),
+            patch("src.extractors._fsis_base.R2LandingClient"),
         ):
             settings = Settings()  # type: ignore[call-arg]
             extractor = UsdaExtractor(base_url=_BASE_URL, settings=settings)
@@ -460,7 +461,8 @@ class TestUsdaDeepRescanLoader:
 
         mock_loader = MagicMock()
         mock_loader.load.return_value = 1
-        with patch("src.extractors.usda.BronzeLoader", return_value=mock_loader):
+        with patch("src.extractors.usda.BronzeLoader") as mock_loader_cls:
+            mock_loader_cls.from_contract.return_value = mock_loader
             deep_rescan.load_bronze([record], [], _FAKE_R2_PATH)
 
         # The deep-rescan path issues no UPDATE statements on source_watermarks —

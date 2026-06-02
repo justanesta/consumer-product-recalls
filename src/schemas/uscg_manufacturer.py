@@ -29,9 +29,9 @@ mirrors CPSC ``RecallNumber``, NHTSA ``record_id``, USDA ``field_recall_number``
 USDA establishments ``establishment_id``, USCG recalls ``number``);
 ``company_name`` absorbs ``"company"`` to align with ``firm.sql`` terminology.
 
-No ``populate_by_name=True`` — the schema is only ever constructed from
-extractor dicts keyed by the validation aliases, never by Python field name.
-Tests use the same alias-keyed shape.
+``populate_by_name=True`` is set (see ``model_config``) so quarantine-recovery can
+``model_validate`` a field-name-keyed dumped payload; ingestion still passes the
+extractor's alias-keyed dicts (Pydantic v2 prefers the validation alias).
 
 Nullability per Step 1 observations:
 - ``source_recall_id``: required (MIC is the regulatory natural key; every

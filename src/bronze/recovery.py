@@ -15,15 +15,15 @@ a source-parameterized core driven by ``recalls recover-rejected <source>``.
 
 Design (validated 2026-06-01, workflow ``wp27oa1gt`` — see the plan §0):
 - **Explicit ``RECOVERY_CONFIG_BY_SOURCE_NAME`` map, NOT a ``make_bronze_loader`` refactor.**
-  Reading a loader config off an extractor would require instantiating it, which fires
+  Reading a loader config off an *extractor* would require instantiating it, which fires
   ``model_post_init`` (``create_engine`` + ``R2LandingClient`` — heavy, env-requiring side
-  effects). And NHTSA cannot be represented by one accessor (its incremental and deep-rescan
-  loaders differ fundamentally). So each source's ``BronzeLoader`` args are copied **verbatim**
-  here, keyed by source name. The module-level ``_<source>_bronze`` / ``_<source>_rejected``
-  Table objects import with zero instantiation.
-  NOTE: this duplicates each extractor's loader args (the accepted MVP trade-off). If a
-  source's identity/hash config changes, update the matching entry here. Citations point at
-  the canonical site so the two stay in sync by inspection.
+  effects). So each entry pairs the source's record model + Table objects (all importable with
+  zero instantiation) with a loader built from the source's **dedup contract**
+  (``src/bronze/dedup_contracts.py``) — the SAME contract the incremental and deep-rescan
+  ``load_bronze`` paths consume, so recovery can no longer drift from them (this is what
+  eliminated the former NHTSA deep-rescan latent bug). Recovery mirrors the *incremental* mode,
+  which is exactly the contract's defaults (NHTSA's contract carries ``within_batch_dedup`` +
+  ``allow_null_identity`` as those defaults), so no per-mode flag overrides are needed here.
 - **Scope: the 5 sources that call ``check_date_sanity``** (fda, cpsc, usda recall, nhtsa,
   uscg recall). The three non-recall sources (uscg manufacturers/details, usda establishments)
   only call ``check_null_source_id`` and cannot produce the date-typo class — they are out of
@@ -45,6 +45,7 @@ from typing import Any
 
 import sqlalchemy as sa
 
+from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
 from src.bronze.loader import BronzeLoader
 
 # Module-level Table objects + record models — all importable without instantiating an
@@ -182,76 +183,58 @@ class RecoveryResult:
     dry_run: bool = False
 
 
-# Loader args MUST match each source's INCREMENTAL load_bronze exactly (that is the canonical
-# dedup contract; content_hash depends on hash_exclude_fields). NHTSA uses its incremental
-# 11-tuple config, NOT the deep-rescan single-column loader (the latter is a latent bug).
+# Each loader is built from the source's dedup contract — the single source of truth
+# (src/bronze/dedup_contracts.py) that the incremental + deep-rescan load_bronze paths also
+# consume. Recovery mirrors incremental mode = the contract's defaults, so no flag overrides.
 RECOVERY_CONFIG_BY_SOURCE_NAME: dict[str, RecoveryConfig] = {
     "fda": RecoveryConfig(
         record_model=FdaRecord,
         bronze_table=_fda_bronze,
         rejected_table=_fda_rejected,
-        # fda.py:304-308 — RID excluded (query-position counter, finding F).
-        loader=BronzeLoader(
+        loader=BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME["fda"],
             bronze_table=_fda_bronze,
             rejected_table=_fda_rejected,
-            hash_exclude_fields=frozenset({"rid"}),
         ),
     ),
     "cpsc": RecoveryConfig(
         record_model=CpscRecord,
         bronze_table=_cpsc_bronze,
         rejected_table=_cpsc_rejected,
-        # cpsc.py:244 — defaults only.
-        loader=BronzeLoader(bronze_table=_cpsc_bronze, rejected_table=_cpsc_rejected),
+        loader=BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME["cpsc"],
+            bronze_table=_cpsc_bronze,
+            rejected_table=_cpsc_rejected,
+        ),
     ),
     "nhtsa": RecoveryConfig(
         record_model=NhtsaRecord,
         bronze_table=_nhtsa_bronze,
         rejected_table=_nhtsa_rejected,
-        # nhtsa.py:461-479 — 11-tuple identity; RECORD_ID (source_recall_id) excluded from
-        # the hash (regen-unstable, finding K); within-batch dedup + null identity per ADR 0030.
-        loader=BronzeLoader(
+        loader=BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME["nhtsa"],
             bronze_table=_nhtsa_bronze,
             rejected_table=_nhtsa_rejected,
-            identity_fields=(
-                "campno",
-                "maketxt",
-                "modeltxt",
-                "yeartxt",
-                "compname",
-                "rcl_cmpt_id",
-                "mfr_comp_ptno",
-                "mfr_comp_desc",
-                "mfr_comp_name",
-                "endman",
-                "bgman",
-            ),
-            hash_exclude_fields=frozenset({"source_recall_id"}),
-            within_batch_dedup=True,
-            allow_null_identity=True,
         ),
     ),
     "usda": RecoveryConfig(
         record_model=UsdaFsisRecord,
         bronze_table=_usda_bronze,
         rejected_table=_usda_rejected,
-        # usda.py:309-319 — bilingual composite identity; press-release bodies excluded.
-        loader=BronzeLoader(
+        loader=BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME["usda"],
             bronze_table=_usda_bronze,
             rejected_table=_usda_rejected,
-            identity_fields=("source_recall_id", "langcode"),
-            hash_exclude_fields=frozenset({"en_press_release", "press_release"}),
         ),
     ),
     "uscg": RecoveryConfig(
         record_model=UscgRecallRecord,
         bronze_table=_uscg_bronze,
         rejected_table=_uscg_rejected,
-        # uscg.py:466-471 — detail URL excluded (volatile, not record content).
-        loader=BronzeLoader(
+        loader=BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME["uscg"],
             bronze_table=_uscg_bronze,
             rejected_table=_uscg_rejected,
-            hash_exclude_fields=frozenset({"details_url"}),
         ),
     ),
 }
