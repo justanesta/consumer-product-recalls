@@ -24,8 +24,9 @@ logger = structlog.get_logger()
 # is 65,535 parameters per query. The composite ``tuple_(*cols).in_(...)``
 # clause in ``_fetch_existing_hashes`` contributes
 # ``len(identity_fields) × len(identity_keys)`` parameters; for NHTSA's
-# 11-tuple at 65k records that's ~723k, observed empirically as the size-
-# related ``OperationalError`` that surfaced after the type-binding fix.
+# 11-tuple that's ~723k at the ~65k-row corpus where the size-related
+# ``OperationalError`` was first observed after the type-binding fix (the
+# corpus is now ~321k → ~3.5M unchunked).
 # Chunking the lookup at ~5k keys per query stays under the protocol
 # ceiling and reduces planner memory pressure on small-compute Neon
 # branches. Results merge losslessly because dedup is per-row, not
@@ -259,8 +260,8 @@ class BronzeLoader:
         ``_PG_PARAM_SAFETY_LIMIT`` total bind parameters per query. Per-chunk
         queries run identical SQL with smaller IN clauses; results merge
         losslessly into a single dict. For small batches (e.g. CPSC's typical
-        ~10-row daily delta) this runs as one chunk; for NHTSA's 65k-row
-        deep-rescan path, it runs ~12 chunks of ~5,400 keys each.
+        ~10-row daily delta) this runs as one chunk; for NHTSA's ~321k-row
+        deep-rescan path, it runs ~59 chunks of ~5,400 keys each.
         """
         if not identity_keys:
             return {}

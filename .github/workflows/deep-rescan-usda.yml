@@ -14,9 +14,14 @@ name: Deep Rescan USDA FSIS Recalls
 on:
   workflow_dispatch: {}
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   deep-rescan:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0

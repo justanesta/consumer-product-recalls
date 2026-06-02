@@ -1,8 +1,8 @@
 # Deep-rescan reliability & workload — plan
 
-- **Status:** Active — graduation + the PRE_2010-SHA column annotation are landing on
-  `docs/deep-rescan-reliability-audit` (PR #50); the Tier 1–4 implementation workstreams are sequenced
-  below and not yet started (each gets its own branch/PR).
+- **Status:** Active — graduation + the PRE_2010-SHA column annotation landed via PR #50 (merged
+  2026-06-02). Tier 1 (W2–W4: engine factory, GHA guards, doc fixes) is in progress on
+  `refactor/deep-rescan-tier1-reliability`; Tiers 2–4 not yet started (each gets its own branch/PR).
 - **Owns:** the fix ladder for deep-rescan reliability + workload ahead of Phase-7 scheduled GitHub
   Actions, and the PRE_2010 `response_inner_content_sha256` mitigation (#1–#3).
 - **Points at:** `documentation/audit/deep_rescan_reliability_audit.md` for *what we found* (this doc
@@ -33,11 +33,11 @@ reshaped half of them, and those corrections are baked into the workstream descr
 
 | # | Workstream | Tier | Status |
 |---|---|---|---|
-| W0 | Audit graduation: this plan + `documentation/audit/deep_rescan_reliability_audit.md` + TODO #55 pointer + master-plan index row | — | ✅ this PR |
-| W1 | **Mitigation #1** — annotate `extraction_runs.response_inner_content_sha256` as POST_2010-only-by-design (PRE_2010 SHA in the R2 manifest) at `_tables.py` + `NhtsaExtractor._augment_response_row` (comment-only) | — | ✅ this PR |
-| W2 | **R3** — centralized engine factory → `NullPool` (single-threaded batch jobs; mirrors the surviving subprocess pattern) for all extractors + CLI + recovery; **carve out `uscg_manufacturer_details`** (its blocker is the 6h cap, not connections); add a guard test that every engine uses the factory | 1 | ⏳ |
-| W3 | **R7-A** — add `timeout-minutes` (NHTSA 40, CPSC/USDA 30, FDA 60; USCG-detail deferred until a real single-run time exists) + `concurrency` (cancel-in-progress: false) to all five deep-rescan workflows (YAML only) | 1 | ⏳ |
-| W4 | **D1** — fix the stale `loader.py` chunk-count comment/docstring (65k/~12 → ~321k/~59) and the `_flat_file.py` 304 claim | 1 | ⏳ |
+| W0 | Audit graduation: this plan + `documentation/audit/deep_rescan_reliability_audit.md` + TODO #55 pointer + master-plan index row | — | ✅ PR #50 |
+| W1 | **Mitigation #1** — annotate `extraction_runs.response_inner_content_sha256` as POST_2010-only-by-design (PRE_2010 SHA in the R2 manifest) at `_tables.py` + `NhtsaExtractor._augment_response_row` (comment-only) | — | ✅ PR #50 |
+| W2 | **R3** — centralized engine factory → `NullPool` (single-threaded batch jobs; mirrors the surviving subprocess pattern) for all extractors + CLI + recovery; **carve out `uscg_manufacturer_details`** (its blocker is the 6h cap, not connections); add a guard test that every engine uses the factory | 1 | ✅ this PR |
+| W3 | **R7-A** — add `timeout-minutes` (NHTSA 40, CPSC/USDA 30, FDA 60; USCG-detail deferred until a real single-run time exists) + `concurrency` (cancel-in-progress: false) to all five deep-rescan workflows (YAML only) | 1 | ✅ this PR |
+| W4 | **D1** — fix the stale `loader.py` chunk-count comment/docstring (65k/~12 → ~321k/~59) and the `_flat_file.py` 304 claim | 1 | ✅ this PR |
 | W5 | **R4** — extend `_TRANSIENT_RETRY`'s predicate with an `is_disconnect()` guard (matches "server closed the connection unexpectedly" / `connection_invalidated`); **not** a blanket `OperationalError` catch (the `_PG_PARAM_SAFETY_LIMIT` overflow must stay non-retried), **not** a second wrapper; keep it on `load_bronze`, never `run()` | 2 | ⏳ |
 | W6 | **R1+R2** — NHTSA pre-extract short-circuit + `was_short_circuited` flag; gates on **both** inner SHAs (needs Mitigation #3's DB home + manifest backfill), placed in `NhtsaDeepRescanLoader` before download; `change_type` rebaseline bypass + NULL-baseline = proceed | 3 | ⏳ |
 | W7 | **R6** — make `deep-rescan-fda.yml` cron-runnable: a "Resolve start date" step (mirror the existing end-date step) computing a rolling window; never pass the raw `""` input; validate the window vs ADR 0023 back-dating | 3 | ⏳ |
@@ -66,7 +66,7 @@ The mitigations:
 
 ## Suggested PR sequence
 
-W0–W1 (this docs PR) → **Tier 1** (W2 + W3 + W4 as one reliability/hygiene PR — no dedup/commit-semantics
+W0–W1 (PR #50) → **Tier 1** (W2 + W3 + W4 as one reliability/hygiene PR — no dedup/commit-semantics
 risk) → **Tier 2** (W5) → **Tier 3** (W6 + W7 as the NHTSA short-circuit PR incl. W6's migration; W8's
 ADR amendment can ride with any) → **Tier 4** (W9, W10) only if Phase-7 measurements justify them.
 Cross-branch ordering, if it grows, belongs in `branch_sequencing_strategy.md`, not here.

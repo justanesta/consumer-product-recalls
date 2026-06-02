@@ -4,7 +4,6 @@ from datetime import date
 from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Annotated
 
-import sqlalchemy as sa
 import typer
 
 from src.bronze.recovery import (
@@ -13,6 +12,7 @@ from src.bronze.recovery import (
     recover_quarantined,
     recoverable_past_date_sanity,
 )
+from src.config.db import make_engine
 from src.config.logging import configure_logging
 from src.config.settings import Settings
 from src.config.source_loader import load_source_config
@@ -453,7 +453,7 @@ def recover_rejected(
     )
 
     settings = Settings()  # type: ignore[call-arg]
-    engine = sa.create_engine(settings.neon_database_url.get_secret_value(), pool_pre_ping=True)
+    engine = make_engine(settings.neon_database_url.get_secret_value())
 
     result = recover_quarantined(
         engine,
