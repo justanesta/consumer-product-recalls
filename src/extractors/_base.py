@@ -11,6 +11,7 @@ import structlog
 import structlog.contextvars
 import tenacity
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from sqlalchemy.exc import OperationalError
 
 from src.extractors._tables import extraction_runs
 
@@ -92,8 +93,45 @@ class ExtractionResult:
 # --- Module-level retry policies (per ADR 0013) ---
 # Per-source calibration is noted in ADR 0013 as a future concern; these are the v1 defaults.
 
+
+def _is_disconnect(exc: BaseException) -> bool:
+    """True iff ``exc`` is a SQLAlchemy ``OperationalError`` caused by a dropped
+    connection (Neon reaps idle connections and can cold-start), as opposed to a
+    query-level ``OperationalError`` such as the bind-parameter overflow guarded
+    against in ``bronze/loader.py`` — those are deterministic and must NOT be retried.
+
+    SQLAlchemy flags a recognized disconnect with ``connection_invalidated``; we also
+    string-match the libpq signatures observed in the USCG-detail seed
+    (``logs/seed_uscg_detail_chunk.log``) as a fallback. See
+    ``documentation/audit/deep_rescan_reliability_audit.md`` (Problem 2).
+    """
+    if not isinstance(exc, OperationalError):
+        return False
+    if getattr(exc, "connection_invalidated", False):
+        return True
+    text = str(getattr(exc, "orig", None) or exc)
+    return any(
+        signature in text
+        for signature in (
+            "server closed the connection unexpectedly",
+            "SSL connection has been closed unexpectedly",
+            "connection already closed",
+            "terminating connection due to",
+        )
+    )
+
+
 _TRANSIENT_RETRY = tenacity.Retrying(
-    retry=tenacity.retry_if_exception_type((TransientExtractionError, RateLimitError)),
+    # Transient HTTP/transport errors, rate limits, AND Neon connection drops.
+    # NullPool (src/config/db.py) covers idle/between-op drops; this covers a drop
+    # *during* a load transaction — the run's records are still in memory and the
+    # load is idempotent under the content-hash contract, so a retry reconverges.
+    # A non-disconnect OperationalError (e.g. the param-count overflow in
+    # bronze/loader.py) is deterministic and deliberately NOT retried.
+    retry=(
+        tenacity.retry_if_exception_type((TransientExtractionError, RateLimitError))
+        | tenacity.retry_if_exception(_is_disconnect)
+    ),
     wait=tenacity.wait_exponential_jitter(initial=1, max=60),
     stop=tenacity.stop_after_attempt(5),
     reraise=True,

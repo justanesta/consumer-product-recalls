@@ -5,8 +5,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
+from sqlalchemy.exc import OperationalError
 
 from src.extractors._base import (
+    _TRANSIENT_RETRY,
     AuthenticationError,
     ExtractionAbortedError,
     ExtractionResult,
@@ -14,10 +16,70 @@ from src.extractors._base import (
     QuarantineRecord,
     RateLimitError,
     TransientExtractionError,
+    _is_disconnect,
 )
 
 # Pass-through side_effect: makes patched Retrying objects call fn(*args) directly.
 _PASSTHROUGH = lambda fn, *a, **kw: fn(*a, **kw)  # noqa: E731
+
+
+def _op_error(message: str) -> OperationalError:
+    """Build a SQLAlchemy OperationalError wrapping a DBAPI error with ``message``."""
+    return OperationalError("SELECT 1", None, Exception(message))
+
+
+# ---------------------------------------------------------------------------
+# Neon disconnect detection (_is_disconnect) + _TRANSIENT_RETRY wiring (W5)
+# ---------------------------------------------------------------------------
+
+
+def test_is_disconnect_true_on_libpq_server_closed_signature() -> None:
+    exc = _op_error("server closed the connection unexpectedly\n\tThis probably means...")
+    assert _is_disconnect(exc) is True
+
+
+def test_is_disconnect_true_when_connection_invalidated_flag_set() -> None:
+    exc = _op_error("a message the string-match alone would miss")
+    exc.connection_invalidated = True
+    assert _is_disconnect(exc) is True
+
+
+def test_is_disconnect_false_on_param_overflow_operationalerror() -> None:
+    # The bind-parameter overflow guarded against in bronze/loader.py is a
+    # deterministic query error — it must NOT be treated as a disconnect.
+    exc = _op_error("the number of query arguments cannot exceed 65535")
+    assert _is_disconnect(exc) is False
+
+
+def test_is_disconnect_false_on_non_operationalerror() -> None:
+    assert _is_disconnect(TransientExtractionError("network")) is False
+    assert _is_disconnect(ValueError("nope")) is False
+
+
+def test_transient_retry_retries_connection_disconnect() -> None:
+    calls = {"n": 0}
+
+    def flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _op_error("server closed the connection unexpectedly")
+        return "ok"
+
+    assert _TRANSIENT_RETRY(flaky) == "ok"
+    assert calls["n"] == 2
+
+
+def test_transient_retry_does_not_retry_non_disconnect_operationalerror() -> None:
+    calls = {"n": 0}
+
+    def boom() -> str:
+        calls["n"] += 1
+        raise _op_error("the number of query arguments cannot exceed 65535")
+
+    with pytest.raises(OperationalError):
+        _TRANSIENT_RETRY(boom)
+    assert calls["n"] == 1
+
 
 # ---------------------------------------------------------------------------
 # Exception hierarchy
