@@ -417,7 +417,8 @@ class TestLoadBronze:
 
         mock_loader = MagicMock()
         mock_loader.load.return_value = 1
-        with patch("src.extractors.usda.BronzeLoader", return_value=mock_loader):
+        with patch("src.extractors.usda.BronzeLoader") as mock_loader_cls:
+            mock_loader_cls.from_contract.return_value = mock_loader
             count = extractor.load_bronze([record], [], _FAKE_R2_PATH)
 
         assert count == 1
@@ -460,7 +461,8 @@ class TestUsdaDeepRescanLoader:
 
         mock_loader = MagicMock()
         mock_loader.load.return_value = 1
-        with patch("src.extractors.usda.BronzeLoader", return_value=mock_loader):
+        with patch("src.extractors.usda.BronzeLoader") as mock_loader_cls:
+            mock_loader_cls.from_contract.return_value = mock_loader
             deep_rescan.load_bronze([record], [], _FAKE_R2_PATH)
 
         # The deep-rescan path issues no UPDATE statements on source_watermarks —

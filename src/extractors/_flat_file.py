@@ -39,7 +39,6 @@ on top of these helpers.
 from __future__ import annotations
 
 import hashlib
-import io
 import tempfile
 import zipfile
 from pathlib import Path
@@ -90,16 +89,10 @@ class FlatFileExtractor[T: BaseModel](Extractor[T]):
     file_url: str
     timeout_seconds: float = 120.0
 
-    # Forensic state for extraction_runs (universal columns from migrations
-    # 0010 + 0011). Mirror of RestApiExtractor's _captured_response_*
-    # PrivateAttrs plus the new inner-content hash. Concrete extractors'
-    # _record_run() reads these when persisting.
-    _captured_response_status_code: int | None = PrivateAttr(default=None)
-    _captured_response_etag: str | None = PrivateAttr(default=None)
-    _captured_response_last_modified: str | None = PrivateAttr(default=None)
-    _captured_response_body_sha256: str | None = PrivateAttr(default=None)
+    # The five universal _captured_response_* PrivateAttrs are inherited from Extractor.
+    # Flat-file sources additionally capture the inner-content hash (migration 0011) for
+    # the ZIP-wrapper/inner-file split; surfaced into the row via _augment_response_row.
     _captured_response_inner_content_sha256: str | None = PrivateAttr(default=None)
-    _captured_response_headers: dict[str, str] | None = PrivateAttr(default=None)
 
     # --- HTTP download ---
 
@@ -236,11 +229,3 @@ class FlatFileExtractor[T: BaseModel](Extractor[T]):
         if inner_bytes is not None:
             self._captured_response_inner_content_sha256 = hashlib.sha256(inner_bytes).hexdigest()
         self._captured_response_headers = dict(response.headers)
-
-
-# A small adapter for callers that want a file-like view of the inner
-# content (e.g. csv.reader). Not used by NHTSA's tab-delimited iterator
-# above but kept here for future flat-file sources whose inner format
-# benefits from streaming-style access.
-def inner_content_stream(content: bytes) -> io.BytesIO:
-    return io.BytesIO(content)

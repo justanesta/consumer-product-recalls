@@ -8,12 +8,12 @@ import httpx
 import sqlalchemy as sa
 import structlog
 from pydantic import PrivateAttr, ValidationError
-from sqlalchemy.dialects import postgresql
 
+from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
 from src.bronze.invariants import (
-    check_date_sanity,
-    check_null_source_id,
+    PER_RECORD_INVARIANTS_BY_SOURCE_NAME,
     check_usda_bilingual_pairing,
+    run_per_record_invariants,
 )
 from src.bronze.loader import BronzeLoader
 from src.config.settings import (
@@ -22,13 +22,13 @@ from src.config.settings import (
 from src.extractors._base import (
     AuthenticationError,
     ExtractionError,
-    ExtractionResult,
     QuarantineRecord,
     RateLimitError,
     RestApiExtractor,
     TransientExtractionError,
 )
 from src.extractors._fsis_headers import browser_headers
+from src.extractors._tables import source_watermarks as _source_watermarks
 from src.landing.r2 import R2LandingClient
 from src.schemas.usda import UsdaFsisRecord
 
@@ -87,37 +87,8 @@ _usda_rejected = sa.Table(
     sa.Column("raw_landing_path", sa.Text),
 )
 
-_source_watermarks = sa.Table(
-    "source_watermarks",
-    _metadata,
-    sa.Column("source", sa.Text, primary_key=True),
-    sa.Column("last_cursor", sa.Text),
-    sa.Column("last_etag", sa.Text),
-    sa.Column("last_successful_extract_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("updated_at", sa.TIMESTAMP(timezone=True)),
-)
-
-_extraction_runs = sa.Table(
-    "extraction_runs",
-    _metadata,
-    sa.Column("id", sa.Integer, primary_key=True),
-    sa.Column("source", sa.Text),
-    sa.Column("started_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("finished_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("status", sa.Text),
-    sa.Column("records_extracted", sa.Integer),
-    sa.Column("records_inserted", sa.Integer),
-    sa.Column("records_rejected", sa.Integer),
-    sa.Column("run_id", sa.Text),
-    sa.Column("error_message", sa.Text),
-    sa.Column("raw_landing_path", sa.Text),
-    sa.Column("change_type", sa.Text),
-    sa.Column("response_status_code", sa.Integer),
-    sa.Column("response_etag", sa.Text),
-    sa.Column("response_last_modified", sa.Text),
-    sa.Column("response_body_sha256", sa.Text),
-    sa.Column("response_headers", postgresql.JSONB),
-)
+# ``_source_watermarks`` (imported above) and ``extraction_runs`` are the shared
+# cross-source operational tables — see src/extractors/_tables.py.
 
 _USDA_SOURCE = "usda"
 
@@ -127,17 +98,8 @@ _USDA_SOURCE = "usda"
 # upstream change ballooning the dataset). Not applied on the deep-rescan path.
 _MAX_INCREMENTAL_RECORDS = 5_000
 
-# Hash exclusions: en_press_release is 100% empty (Finding C — dead field) and
-# press_release is 99.9% empty. If FSIS ever populates these, we don't want their
-# transition to drive a full bronze rewrite of every existing record.
-_HASH_EXCLUDE = frozenset({"en_press_release", "press_release"})
-
 # Akamai Bot Manager workaround lives in src/extractors/_fsis_headers.py
 # (shared with the Establishment extractor; both APIs sit on www.fsis.usda.gov).
-
-
-class UsdaFsisExtractionResult(ExtractionResult):
-    """Marker for type-narrowing only; behavior identical to ExtractionResult."""
 
 
 class UsdaExtractor(RestApiExtractor[UsdaFsisRecord]):
@@ -265,8 +227,8 @@ class UsdaExtractor(RestApiExtractor[UsdaFsisRecord]):
         post_basic: list[UsdaFsisRecord] = []
         quarantined: list[QuarantineRecord] = []
         for record in records:
-            failure = check_null_source_id(record.source_recall_id) or check_date_sanity(
-                record.recall_date, "recall_date"
+            failure = run_per_record_invariants(
+                record, PER_RECORD_INVARIANTS_BY_SOURCE_NAME[_USDA_SOURCE]
             )
             if failure:
                 quarantined.append(
@@ -306,17 +268,10 @@ class UsdaExtractor(RestApiExtractor[UsdaFsisRecord]):
                 self._touch_freshness(conn)
             return 0
 
-        loader = BronzeLoader(
+        loader = BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME[_USDA_SOURCE],
             bronze_table=_usda_bronze,
             rejected_table=_usda_rejected,
-            hash_exclude_fields=_HASH_EXCLUDE,
-            # USDA's natural identity is (source_recall_id, langcode) — bilingual
-            # English+Spanish siblings share `field_recall_number` (= source_recall_id)
-            # but are distinct logical records (Finding F). Without the composite
-            # identity, the loader's dedup query collapses sibling rows
-            # non-deterministically and treats one of each pair as "changed" on every
-            # re-run, causing bronze to grow by ~789 rows per idempotent re-run.
-            identity_fields=("source_recall_id", "langcode"),
         )
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
@@ -491,54 +446,6 @@ class UsdaExtractor(RestApiExtractor[UsdaFsisRecord]):
             )
         )
 
-    def _record_run(
-        self,
-        run_id: str,
-        started_at: datetime,
-        status: str,
-        result: ExtractionResult | None = None,
-        error_message: str | None = None,
-        change_type: str = "routine",
-    ) -> None:
-        row: dict[str, Any] = {
-            "source": _USDA_SOURCE,
-            "started_at": started_at,
-            "finished_at": datetime.now(UTC),
-            "status": status,
-            "run_id": run_id,
-            "error_message": error_message,
-            "change_type": change_type,
-        }
-        if result is not None:
-            row["records_extracted"] = result.records_fetched
-            row["records_inserted"] = result.records_loaded
-            row["records_rejected"] = (
-                result.records_rejected_validate + result.records_rejected_invariants
-            )
-            row["raw_landing_path"] = result.raw_landing_path
-        if self._captured_response_status_code is not None:
-            row["response_status_code"] = self._captured_response_status_code
-            row["response_etag"] = self._captured_response_etag
-            row["response_last_modified"] = self._captured_response_last_modified
-            row["response_body_sha256"] = self._captured_response_body_sha256
-            row["response_headers"] = self._captured_response_headers
-        try:
-            with self._engine.begin() as conn:
-                conn.execute(_extraction_runs.insert().values(**row))
-        except Exception as exc:
-            # Run-recording is best-effort: the bronze write already committed,
-            # so a failure here doesn't lose data. Include the exception type
-            # and message so a constraint violation (e.g., missing FK row in
-            # source_watermarks for a new source) is diagnosable from logs
-            # rather than requiring code-side instrumentation to reproduce.
-            logger.warning(
-                "extraction_run.record_failed",
-                run_id=run_id,
-                status=status,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-
 
 def _parse_http_date(s: str) -> datetime:
     """Parse an RFC 7231 IMF-fixdate header value (e.g. 'Wed, 29 Apr 2026 14:29:36 GMT')."""
@@ -574,17 +481,10 @@ class UsdaDeepRescanLoader(UsdaExtractor):
         raw_landing_path: str,
     ) -> int:
         # Does NOT touch source_watermarks — the incremental extractor owns it.
-        loader = BronzeLoader(
+        loader = BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME[_USDA_SOURCE],
             bronze_table=_usda_bronze,
             rejected_table=_usda_rejected,
-            hash_exclude_fields=_HASH_EXCLUDE,
-            # USDA's natural identity is (source_recall_id, langcode) — bilingual
-            # English+Spanish siblings share `field_recall_number` (= source_recall_id)
-            # but are distinct logical records (Finding F). Without the composite
-            # identity, the loader's dedup query collapses sibling rows
-            # non-deterministically and treats one of each pair as "changed" on every
-            # re-run, causing bronze to grow by ~789 rows per idempotent re-run.
-            identity_fields=("source_recall_id", "langcode"),
         )
         with self._engine.begin() as conn:
             return loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]

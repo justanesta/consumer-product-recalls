@@ -85,7 +85,7 @@ def _run(extractor: CpscExtractor, watermark: date) -> Any:
         patch("src.extractors.cpsc.BronzeLoader") as mock_loader_cls,
         patch.object(extractor, "_update_watermark"),
     ):
-        mock_loader_cls.return_value.load.return_value = 0
+        mock_loader_cls.from_contract.return_value.load.return_value = 0
         mock_engine: MagicMock = extractor._engine  # type: ignore[assignment]
         mock_engine.begin.return_value.__enter__ = lambda _: MagicMock()
         mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)

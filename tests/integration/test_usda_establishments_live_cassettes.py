@@ -136,7 +136,7 @@ def _run(
         patch.object(extractor, "_read_etag_state", return_value=(prior_etag, prior_last_modified)),
         patch("src.extractors.usda_establishment.BronzeLoader") as mock_loader_cls,
     ):
-        mock_loader_cls.return_value.load.return_value = 0
+        mock_loader_cls.from_contract.return_value.load.return_value = 0
         mock_engine: MagicMock = extractor._engine  # type: ignore[assignment]
         mock_engine.begin.return_value.__enter__ = lambda _: MagicMock()
         mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)

@@ -98,7 +98,7 @@ def _run_with_mocks(
         patch.object(extractor, "_update_watermark"),
     ):
         respx.post(_RECALLS_URL).mock(return_value=api_response)
-        mock_loader_cls.return_value.load.return_value = bronze_insert_count
+        mock_loader_cls.from_contract.return_value.load.return_value = bronze_insert_count
         mock_engine: MagicMock = extractor._engine  # type: ignore[assignment]
         mock_engine.begin.return_value.__enter__ = lambda _: MagicMock()
         mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)

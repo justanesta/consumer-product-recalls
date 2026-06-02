@@ -10,19 +10,23 @@ import structlog
 from pydantic import PrivateAttr, ValidationError
 from sqlalchemy.dialects import postgresql
 
-from src.bronze.invariants import check_date_sanity, check_null_source_id
+from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
+from src.bronze.invariants import (
+    PER_RECORD_INVARIANTS_BY_SOURCE_NAME,
+    run_per_record_invariants,
+)
 from src.bronze.loader import BronzeLoader
 from src.config.settings import (
     Settings,  # noqa: TC001 — Pydantic evaluates field annotations at runtime
 )
 from src.extractors._base import (
     AuthenticationError,
-    ExtractionResult,
     QuarantineRecord,
     RateLimitError,
     RestApiExtractor,
     TransientExtractionError,
 )
+from src.extractors._tables import source_watermarks as _source_watermarks
 from src.landing.r2 import R2LandingClient
 from src.schemas.cpsc import CpscRecord
 
@@ -76,35 +80,8 @@ _cpsc_rejected = sa.Table(
     sa.Column("raw_landing_path", sa.Text),
 )
 
-_source_watermarks = sa.Table(
-    "source_watermarks",
-    _metadata,
-    sa.Column("source", sa.Text, primary_key=True),
-    sa.Column("last_cursor", sa.Text),
-    sa.Column("updated_at", sa.TIMESTAMP(timezone=True)),
-)
-
-_extraction_runs = sa.Table(
-    "extraction_runs",
-    _metadata,
-    sa.Column("id", sa.Integer, primary_key=True),
-    sa.Column("source", sa.Text),
-    sa.Column("started_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("finished_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("status", sa.Text),
-    sa.Column("records_extracted", sa.Integer),
-    sa.Column("records_inserted", sa.Integer),
-    sa.Column("records_rejected", sa.Integer),
-    sa.Column("run_id", sa.Text),
-    sa.Column("error_message", sa.Text),
-    sa.Column("raw_landing_path", sa.Text),
-    sa.Column("change_type", sa.Text),
-    sa.Column("response_status_code", sa.Integer),
-    sa.Column("response_etag", sa.Text),
-    sa.Column("response_last_modified", sa.Text),
-    sa.Column("response_body_sha256", sa.Text),
-    sa.Column("response_headers", postgresql.JSONB),
-)
+# ``_source_watermarks`` (imported above) and ``extraction_runs`` are the shared
+# cross-source operational tables — see src/extractors/_tables.py.
 
 _CPSC_SOURCE = "cpsc"
 _DEFAULT_LOOKBACK_DAYS = 1
@@ -218,8 +195,8 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
         passing: list[CpscRecord] = []
         quarantined: list[QuarantineRecord] = []
         for record in records:
-            failure = check_null_source_id(record.source_recall_id) or check_date_sanity(
-                record.recall_date, "recall_date"
+            failure = run_per_record_invariants(
+                record, PER_RECORD_INVARIANTS_BY_SOURCE_NAME[_CPSC_SOURCE]
             )
             if failure:
                 quarantined.append(
@@ -241,7 +218,11 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
         quarantined: list[QuarantineRecord],
         raw_landing_path: str,
     ) -> int:
-        loader = BronzeLoader(bronze_table=_cpsc_bronze, rejected_table=_cpsc_rejected)
+        loader = BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME[_CPSC_SOURCE],
+            bronze_table=_cpsc_bronze,
+            rejected_table=_cpsc_rejected,
+        )
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
             if records:
@@ -324,54 +305,6 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
                 .values(last_cursor=override_date.isoformat())
             )
 
-    def _record_run(
-        self,
-        run_id: str,
-        started_at: datetime,
-        status: str,
-        result: ExtractionResult | None = None,
-        error_message: str | None = None,
-        change_type: str = "routine",
-    ) -> None:
-        row: dict[str, Any] = {
-            "source": _CPSC_SOURCE,
-            "started_at": started_at,
-            "finished_at": datetime.now(UTC),
-            "status": status,
-            "run_id": run_id,
-            "error_message": error_message,
-            "change_type": change_type,
-        }
-        if result is not None:
-            row["records_extracted"] = result.records_fetched
-            row["records_inserted"] = result.records_loaded
-            row["records_rejected"] = (
-                result.records_rejected_validate + result.records_rejected_invariants
-            )
-            row["raw_landing_path"] = result.raw_landing_path
-        if self._captured_response_status_code is not None:
-            row["response_status_code"] = self._captured_response_status_code
-            row["response_etag"] = self._captured_response_etag
-            row["response_last_modified"] = self._captured_response_last_modified
-            row["response_body_sha256"] = self._captured_response_body_sha256
-            row["response_headers"] = self._captured_response_headers
-        try:
-            with self._engine.begin() as conn:
-                conn.execute(_extraction_runs.insert().values(**row))
-        except Exception as exc:
-            # Run-recording is best-effort: the bronze write already committed,
-            # so a failure here doesn't lose data. Include the exception type
-            # and message so a constraint violation (e.g., missing FK row in
-            # source_watermarks for a new source) is diagnosable from logs
-            # rather than requiring code-side instrumentation to reproduce.
-            logger.warning(
-                "extraction_run.record_failed",
-                run_id=run_id,
-                status=status,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-
 
 class CpscDeepRescanLoader(CpscExtractor):
     """
@@ -416,6 +349,10 @@ class CpscDeepRescanLoader(CpscExtractor):
     ) -> int:
         # Does NOT update source_watermarks — the incremental extractor owns the
         # watermark exclusively (matches FdaDeepRescanLoader / UsdaDeepRescanLoader).
-        loader = BronzeLoader(bronze_table=_cpsc_bronze, rejected_table=_cpsc_rejected)
+        loader = BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME[_CPSC_SOURCE],
+            bronze_table=_cpsc_bronze,
+            rejected_table=_cpsc_rejected,
+        )
         with self._engine.begin() as conn:
             return loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]

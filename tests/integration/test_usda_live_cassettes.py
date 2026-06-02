@@ -112,7 +112,7 @@ def _run(
         patch.object(extractor, "_read_etag_state", return_value=(prior_etag, prior_last_modified)),
         patch("src.extractors.usda.BronzeLoader") as mock_loader_cls,
     ):
-        mock_loader_cls.return_value.load.return_value = 0
+        mock_loader_cls.from_contract.return_value.load.return_value = 0
         mock_engine: MagicMock = extractor._engine  # type: ignore[assignment]
         mock_engine.begin.return_value.__enter__ = lambda _: MagicMock()
         mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)
@@ -278,12 +278,12 @@ def test_malformed_record(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         patch("src.extractors.usda.BronzeLoader") as mock_loader_cls,
     ):
-        mock_loader_cls.return_value.load.return_value = 1
+        mock_loader_cls.from_contract.return_value.load.return_value = 1
         result = extractor.run()
 
     assert result.records_fetched == 2
     assert result.records_rejected_validate == 1
-    load_call = mock_loader_cls.return_value.load.call_args
+    load_call = mock_loader_cls.from_contract.return_value.load.call_args
     quarantined = load_call.args[2] if load_call.args else load_call.kwargs.get("quarantined", [])
     assert len(quarantined) == 1
     assert quarantined[0].failure_stage == "validate_records"
@@ -362,7 +362,7 @@ def test_bilingual_orphan_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         patch("src.extractors.usda.BronzeLoader") as mock_loader_cls,
     ):
-        mock_loader_cls.return_value.load.return_value = 1
+        mock_loader_cls.from_contract.return_value.load.return_value = 1
         result = extractor.run()
 
     assert result.records_fetched == 2

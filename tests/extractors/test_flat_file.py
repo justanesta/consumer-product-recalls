@@ -25,11 +25,7 @@ from src.extractors._base import (
     RateLimitError,
     TransientExtractionError,
 )
-from src.extractors._flat_file import (
-    FlatFileExtractor,
-    FlatFileFieldCountError,
-    inner_content_stream,
-)
+from src.extractors._flat_file import FlatFileExtractor, FlatFileFieldCountError
 
 _FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "nhtsa"
 _FIXTURE_ZIP = _FIXTURE_DIR / "sample_recalls.zip"
@@ -312,23 +308,6 @@ class TestCaptureFlatfileResponse:
             extractor._captured_response_body_sha256
             != extractor._captured_response_inner_content_sha256
         )
-
-
-# ---------------------------------------------------------------------------
-# inner_content_stream — file-like adapter for future flat-file sources
-# ---------------------------------------------------------------------------
-
-
-class TestInnerContentStream:
-    def test_returns_seekable_bytesio(self) -> None:
-        # The adapter exists for callers (e.g., csv.reader) that want a
-        # file-like view of the inner bytes. Verify it round-trips and is
-        # seekable — both behaviors a streaming consumer relies on.
-        content = b"row1\trow1b\r\nrow2\trow2b\r\n"
-        stream = inner_content_stream(content)
-        assert stream.read() == content
-        stream.seek(0)
-        assert stream.read(4) == b"row1"
 
 
 # ---------------------------------------------------------------------------

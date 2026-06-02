@@ -12,6 +12,8 @@ import structlog.contextvars
 import tenacity
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from src.extractors._tables import extraction_runs
+
 if TYPE_CHECKING:
     import httpx
 
@@ -132,6 +134,19 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
     # are observed in production.
     rejection_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
 
+    # Response-capture state for the extraction_runs forensic columns (migrations
+    # 0010 + 0011). The operation-type subclasses populate these via their
+    # _capture_response(); the shared _record_run() template below reads them.
+    # Declared here (not per-subclass) so the template type-checks and the three
+    # op-type subclasses don't each re-declare the same five attrs. FlatFileExtractor
+    # adds one more (_captured_response_inner_content_sha256) for the wrapper/inner
+    # split, surfaced into the row via the _augment_response_row hook.
+    _captured_response_status_code: int | None = PrivateAttr(default=None)
+    _captured_response_etag: str | None = PrivateAttr(default=None)
+    _captured_response_last_modified: str | None = PrivateAttr(default=None)
+    _captured_response_body_sha256: str | None = PrivateAttr(default=None)
+    _captured_response_headers: dict[str, str] | None = PrivateAttr(default=None)
+
     # --- Abstract lifecycle methods ---
 
     @abc.abstractmethod
@@ -185,11 +200,76 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
         error_message: str | None = None,
         change_type: str = "routine",
     ) -> None:
-        """Write a row to extraction_runs. Override in concrete extractors that have a DB engine.
+        """Write a row to ``extraction_runs`` (shared template for all extractors).
 
-        `change_type` is one of routine / schema_rebaseline / hash_helper_rebaseline /
+        Best-effort: a failure here is logged with its exception type + message, not
+        raised — the bronze write has already committed, so run-recording loss doesn't
+        lose data, and a constraint violation stays diagnosable from logs. No-op when the
+        extractor has no DB engine (abstract / mocked-test instantiation), preserving the
+        old stub's behavior.
+
+        Concrete extractors customize two axes via hooks instead of overriding this whole
+        method: :meth:`_augment_run_row` (top-level columns, e.g. USCG's
+        ``was_short_circuited``) and :meth:`_augment_response_row` (response-capture
+        columns when a response was captured, e.g. NHTSA's
+        ``response_inner_content_sha256``).
+
+        ``change_type`` is one of routine / schema_rebaseline / hash_helper_rebaseline /
         historical_seed (per ADR 0027 + ADR 0028). Default is routine; the CLI's
         --change-type flag is validated before reaching this point.
+        """
+        engine = getattr(self, "_engine", None)
+        if engine is None:
+            return
+        row: dict[str, Any] = {
+            "source": self.source_name,
+            "started_at": started_at,
+            "finished_at": datetime.now(UTC),
+            "status": status,
+            "run_id": run_id,
+            "error_message": error_message,
+            "change_type": change_type,
+        }
+        self._augment_run_row(row)
+        if result is not None:
+            row["records_extracted"] = result.records_fetched
+            row["records_inserted"] = result.records_loaded
+            row["records_rejected"] = (
+                result.records_rejected_validate + result.records_rejected_invariants
+            )
+            row["raw_landing_path"] = result.raw_landing_path
+        if self._captured_response_status_code is not None:
+            row["response_status_code"] = self._captured_response_status_code
+            row["response_etag"] = self._captured_response_etag
+            row["response_last_modified"] = self._captured_response_last_modified
+            row["response_body_sha256"] = self._captured_response_body_sha256
+            row["response_headers"] = self._captured_response_headers
+            self._augment_response_row(row)
+        try:
+            with engine.begin() as conn:
+                conn.execute(extraction_runs.insert().values(**row))
+        except Exception as exc:
+            logger.warning(
+                "extraction_run.record_failed",
+                run_id=run_id,
+                status=status,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+    def _augment_run_row(self, row: dict[str, Any]) -> None:
+        """Hook: add source-specific top-level columns to the ``extraction_runs`` row.
+
+        Default no-op. Overridden by sources with extra columns (USCG /
+        USCG-manufacturer add ``was_short_circuited``).
+        """
+
+    def _augment_response_row(self, row: dict[str, Any]) -> None:
+        """Hook: add source-specific response-capture columns to the row.
+
+        Default no-op. Called only when a response was captured (i.e.
+        ``_captured_response_status_code is not None``). Overridden by NHTSA to add
+        ``response_inner_content_sha256``.
         """
 
     # --- Template orchestration ---
@@ -298,18 +378,10 @@ class RestApiExtractor[T: BaseModel](Extractor[T]):
     timeout_seconds: float = 30.0
     rate_limit_rps: float | None = None  # None = no rate limiting enforced
 
-    # Response-capture state for the extraction_runs forensic columns added
-    # in migration 0010 — supports the ETag-viability study at
-    # scripts/sql/_pipeline/etag_viability.sql. Populated via _capture_response()
-    # once per run (paginated sources call it only on the first page so the
-    # headers carry conditional-GET semantics). Read by each extractor's
-    # _record_run() when persisting the row.
-    _captured_response_status_code: int | None = PrivateAttr(default=None)
-    _captured_response_etag: str | None = PrivateAttr(default=None)
-    _captured_response_last_modified: str | None = PrivateAttr(default=None)
-    _captured_response_body_sha256: str | None = PrivateAttr(default=None)
-    _captured_response_headers: dict[str, str] | None = PrivateAttr(default=None)
-
+    # The five _captured_response_* PrivateAttrs are inherited from Extractor.
+    # _capture_response() (populated once per run; paginated sources call it only on the
+    # first page so the headers carry conditional-GET semantics) supports the
+    # ETag-viability study at scripts/sql/_pipeline/etag_viability.sql.
     def _capture_response(self, response: httpx.Response, body: bytes | None = None) -> None:
         """Stash response metadata for persistence to extraction_runs.
 

@@ -73,7 +73,7 @@ def _run_with_mocks(
         patch.object(extractor, "_update_watermark"),
     ):
         respx.get(_BASE_URL).mock(return_value=api_response)
-        mock_loader_cls.return_value.load.return_value = bronze_insert_count
+        mock_loader_cls.from_contract.return_value.load.return_value = bronze_insert_count
         # engine.begin() used in load_bronze() needs a context manager mock
         mock_engine: MagicMock = extractor._engine  # type: ignore[assignment]
         mock_engine.begin.return_value.__enter__ = lambda _: MagicMock()

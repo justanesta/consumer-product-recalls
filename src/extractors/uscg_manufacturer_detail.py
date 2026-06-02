@@ -54,19 +54,22 @@ import sqlalchemy as sa
 import structlog
 from bs4 import BeautifulSoup, Tag
 from pydantic import PrivateAttr, ValidationError
-from sqlalchemy.dialects import postgresql
 
-from src.bronze.invariants import check_null_source_id
+from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
+from src.bronze.invariants import (
+    PER_RECORD_INVARIANTS_BY_SOURCE_NAME,
+    run_per_record_invariants,
+)
 from src.bronze.loader import BronzeLoader
 from src.config.settings import (
     Settings,  # noqa: TC001 — Pydantic evaluates field annotations at runtime
 )
 from src.extractors._base import (
-    ExtractionResult,
     QuarantineRecord,
     TransientExtractionError,
 )
 from src.extractors._html_scraping import HtmlScrapingExtractor
+from src.extractors._tables import source_watermarks as _source_watermarks
 from src.landing.r2 import R2LandingClient
 from src.schemas.uscg_manufacturer_detail import UscgManufacturerDetailRecord
 
@@ -131,40 +134,8 @@ _manufacturers_bronze = sa.Table(
     sa.Column("detail_url", sa.Text),
 )
 
-_source_watermarks = sa.Table(
-    "source_watermarks",
-    _metadata,
-    sa.Column("source", sa.Text, primary_key=True),
-    sa.Column("last_cursor", sa.Text),
-    sa.Column("last_etag", sa.Text),
-    sa.Column("last_successful_extract_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("updated_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("last_records_count", sa.Integer),
-)
-
-_extraction_runs = sa.Table(
-    "extraction_runs",
-    _metadata,
-    sa.Column("id", sa.Integer, primary_key=True),
-    sa.Column("source", sa.Text),
-    sa.Column("started_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("finished_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("status", sa.Text),
-    sa.Column("records_extracted", sa.Integer),
-    sa.Column("records_inserted", sa.Integer),
-    sa.Column("records_rejected", sa.Integer),
-    sa.Column("run_id", sa.Text),
-    sa.Column("error_message", sa.Text),
-    sa.Column("raw_landing_path", sa.Text),
-    sa.Column("change_type", sa.Text),
-    sa.Column("response_status_code", sa.Integer),
-    sa.Column("response_etag", sa.Text),
-    sa.Column("response_last_modified", sa.Text),
-    sa.Column("response_body_sha256", sa.Text),
-    sa.Column("response_headers", postgresql.JSONB),
-    sa.Column("response_inner_content_sha256", sa.Text),
-    sa.Column("was_short_circuited", sa.Boolean),
-)
+# ``_source_watermarks`` (imported above) and ``extraction_runs`` are the shared
+# cross-source operational tables — see src/extractors/_tables.py.
 
 _SOURCE = "uscg_manufacturer_details"
 _BASE_URL = "https://uscgboating.org/content"
@@ -364,7 +335,9 @@ class UscgManufacturerDetailExtractor(HtmlScrapingExtractor[UscgManufacturerDeta
         passing: list[UscgManufacturerDetailRecord] = []
         quarantined: list[QuarantineRecord] = []
         for record in records:
-            failure = check_null_source_id(record.source_recall_id)
+            failure = run_per_record_invariants(
+                record, PER_RECORD_INVARIANTS_BY_SOURCE_NAME[_SOURCE]
+            )
             if failure:
                 quarantined.append(
                     QuarantineRecord(
@@ -392,11 +365,10 @@ class UscgManufacturerDetailExtractor(HtmlScrapingExtractor[UscgManufacturerDeta
         is intentionally IN the hash (the Path B change signal). Touches
         freshness so monitoring sees the run; deep-rescan overrides to skip it.
         """
-        loader = BronzeLoader(
+        loader = BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME[_SOURCE],
             bronze_table=_details_bronze,
             rejected_table=_details_rejected,
-            identity_fields=("source_recall_id",),
-            hash_exclude_fields=frozenset({"detail_url", "uscg_directory_id"}),
         )
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
@@ -554,57 +526,6 @@ class UscgManufacturerDetailExtractor(HtmlScrapingExtractor[UscgManufacturerDeta
             )
         )
 
-    def _record_run(
-        self,
-        run_id: str,
-        started_at: datetime,
-        status: str,
-        result: ExtractionResult | None = None,
-        error_message: str | None = None,
-        change_type: str = "routine",
-    ) -> None:
-        """Persist a row to ``extraction_runs`` with USCG forensic columns.
-
-        Mirrors ``UscgManufacturerExtractor._record_run`` minus the
-        short-circuit column — this source has no ``Records Found`` precheck, so
-        ``was_short_circuited`` stays NULL (per migration 0014 semantics: NULL
-        for sources that don't implement a short-circuit). The detail page emits
-        no ``Last-Modified`` / ``ETag`` (Finding E) — those columns persist NULL.
-        """
-        row: dict[str, Any] = {
-            "source": _SOURCE,
-            "started_at": started_at,
-            "finished_at": datetime.now(UTC),
-            "status": status,
-            "run_id": run_id,
-            "error_message": error_message,
-            "change_type": change_type,
-        }
-        if result is not None:
-            row["records_extracted"] = result.records_fetched
-            row["records_inserted"] = result.records_loaded
-            row["records_rejected"] = (
-                result.records_rejected_validate + result.records_rejected_invariants
-            )
-            row["raw_landing_path"] = result.raw_landing_path
-        if self._captured_response_status_code is not None:
-            row["response_status_code"] = self._captured_response_status_code
-            row["response_etag"] = self._captured_response_etag
-            row["response_last_modified"] = self._captured_response_last_modified
-            row["response_body_sha256"] = self._captured_response_body_sha256
-            row["response_headers"] = self._captured_response_headers
-        try:
-            with self._engine.begin() as conn:
-                conn.execute(_extraction_runs.insert().values(**row))
-        except Exception as exc:
-            logger.warning(
-                "extraction_run.record_failed",
-                run_id=run_id,
-                status=status,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-
 
 class UscgManufacturerDetailDeepRescanLoader(UscgManufacturerDetailExtractor):
     """Historical / deep-rescan loader for the USCG manufacturer detail pages.
@@ -630,11 +551,10 @@ class UscgManufacturerDetailDeepRescanLoader(UscgManufacturerDetailExtractor):
         raw_landing_path: str,
     ) -> int:
         """Same loader config as the incremental path; skip the freshness touch."""
-        loader = BronzeLoader(
+        loader = BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME[_SOURCE],
             bronze_table=_details_bronze,
             rejected_table=_details_rejected,
-            identity_fields=("source_recall_id",),
-            hash_exclude_fields=frozenset({"detail_url", "uscg_directory_id"}),
         )
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]

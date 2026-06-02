@@ -57,6 +57,7 @@ do not apply here. Plain ``httpx.Client`` defaults are sufficient.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, date, datetime
 from typing import Any
@@ -64,19 +65,22 @@ from typing import Any
 import sqlalchemy as sa
 import structlog
 from pydantic import Field, PrivateAttr, ValidationError
-from sqlalchemy.dialects import postgresql
 
-from src.bronze.invariants import check_date_sanity, check_null_source_id
+from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
+from src.bronze.invariants import (
+    PER_RECORD_INVARIANTS_BY_SOURCE_NAME,
+    run_per_record_invariants,
+)
 from src.bronze.loader import BronzeLoader
 from src.config.settings import (
     Settings,  # noqa: TC001 — Pydantic evaluates field annotations at runtime
 )
 from src.extractors._base import (
-    ExtractionResult,
     QuarantineRecord,
     TransientExtractionError,
 )
 from src.extractors._flat_file import FlatFileExtractor, FlatFileFieldCountError
+from src.extractors._tables import source_watermarks as _source_watermarks
 from src.landing.r2 import R2LandingClient
 from src.schemas.nhtsa import NhtsaRecord
 
@@ -135,38 +139,8 @@ _nhtsa_rejected = sa.Table(
     sa.Column("raw_landing_path", sa.Text),
 )
 
-_source_watermarks = sa.Table(
-    "source_watermarks",
-    _metadata,
-    sa.Column("source", sa.Text, primary_key=True),
-    sa.Column("last_cursor", sa.Text),
-    sa.Column("last_etag", sa.Text),
-    sa.Column("last_successful_extract_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("updated_at", sa.TIMESTAMP(timezone=True)),
-)
-
-_extraction_runs = sa.Table(
-    "extraction_runs",
-    _metadata,
-    sa.Column("id", sa.Integer, primary_key=True),
-    sa.Column("source", sa.Text),
-    sa.Column("started_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("finished_at", sa.TIMESTAMP(timezone=True)),
-    sa.Column("status", sa.Text),
-    sa.Column("records_extracted", sa.Integer),
-    sa.Column("records_inserted", sa.Integer),
-    sa.Column("records_rejected", sa.Integer),
-    sa.Column("run_id", sa.Text),
-    sa.Column("error_message", sa.Text),
-    sa.Column("raw_landing_path", sa.Text),
-    sa.Column("change_type", sa.Text),
-    sa.Column("response_status_code", sa.Integer),
-    sa.Column("response_etag", sa.Text),
-    sa.Column("response_last_modified", sa.Text),
-    sa.Column("response_body_sha256", sa.Text),
-    sa.Column("response_headers", postgresql.JSONB),
-    sa.Column("response_inner_content_sha256", sa.Text),
-)
+# ``_source_watermarks`` (imported above) and ``extraction_runs`` are the shared
+# cross-source operational tables — see src/extractors/_tables.py.
 
 _NHTSA_SOURCE = "nhtsa"
 
@@ -398,8 +372,8 @@ class NhtsaExtractor(FlatFileExtractor[NhtsaRecord]):
         passing: list[NhtsaRecord] = []
         quarantined: list[QuarantineRecord] = []
         for record in records:
-            failure = check_null_source_id(record.source_recall_id) or check_date_sanity(
-                record.rcdate, "rcdate"
+            failure = run_per_record_invariants(
+                record, PER_RECORD_INVARIANTS_BY_SOURCE_NAME[_NHTSA_SOURCE]
             )
             if failure:
                 quarantined.append(
@@ -458,25 +432,10 @@ class NhtsaExtractor(FlatFileExtractor[NhtsaRecord]):
           rows. Empty strings need to be treated as a valid identity
           bucket rather than rejected as missing-required-field bugs.
         """
-        loader = BronzeLoader(
+        loader = BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME[_NHTSA_SOURCE],
             bronze_table=_nhtsa_bronze,
             rejected_table=_nhtsa_rejected,
-            identity_fields=(
-                "campno",
-                "maketxt",
-                "modeltxt",
-                "yeartxt",
-                "compname",
-                "rcl_cmpt_id",
-                "mfr_comp_ptno",
-                "mfr_comp_desc",
-                "mfr_comp_name",
-                "endman",
-                "bgman",
-            ),
-            hash_exclude_fields=frozenset({"source_recall_id"}),
-            within_batch_dedup=True,
-            allow_null_identity=True,
         )
         with self._engine.begin() as conn:
             count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
@@ -502,61 +461,15 @@ class NhtsaExtractor(FlatFileExtractor[NhtsaRecord]):
             )
         )
 
-    def _record_run(
-        self,
-        run_id: str,
-        started_at: datetime,
-        status: str,
-        result: ExtractionResult | None = None,
-        error_message: str | None = None,
-        change_type: str = "routine",
-    ) -> None:
-        """Persist a row to ``extraction_runs`` with all forensic columns.
+    def _augment_response_row(self, row: dict[str, Any]) -> None:
+        """Add NHTSA's inner-content hash (migration 0011) to the extraction_runs row.
 
-        Mirrors ``UsdaEstablishmentExtractor._record_run`` plus the new
-        ``response_inner_content_sha256`` column from migration 0011.
-        Diagnostic logging on failure (``error_type`` + ``message``) so
-        constraint violations like a missing FK row in
-        ``source_watermarks`` are diagnosable from logs (per
-        implementation_plan §449-459).
+        The dedup oracle hashes the decompressed inner TSV (ZIP wrapper bytes are
+        non-deterministic — Finding J); this column persists that hash so day-over-day
+        diffs reveal cadence. Called by the base ``_record_run`` only when a response
+        was captured.
         """
-        row: dict[str, Any] = {
-            "source": _NHTSA_SOURCE,
-            "started_at": started_at,
-            "finished_at": datetime.now(UTC),
-            "status": status,
-            "run_id": run_id,
-            "error_message": error_message,
-            "change_type": change_type,
-        }
-        if result is not None:
-            row["records_extracted"] = result.records_fetched
-            row["records_inserted"] = result.records_loaded
-            row["records_rejected"] = (
-                result.records_rejected_validate + result.records_rejected_invariants
-            )
-            row["raw_landing_path"] = result.raw_landing_path
-        if self._captured_response_status_code is not None:
-            row["response_status_code"] = self._captured_response_status_code
-            row["response_etag"] = self._captured_response_etag
-            row["response_last_modified"] = self._captured_response_last_modified
-            row["response_body_sha256"] = self._captured_response_body_sha256
-            row["response_headers"] = self._captured_response_headers
-            row["response_inner_content_sha256"] = self._captured_response_inner_content_sha256
-        try:
-            with self._engine.begin() as conn:
-                conn.execute(_extraction_runs.insert().values(**row))
-        except Exception as exc:
-            # Run-recording is best-effort; a failure here doesn't lose
-            # bronze data. Capture exception type + message so a
-            # constraint violation surfaces in logs.
-            logger.warning(
-                "extraction_run.record_failed",
-                run_id=run_id,
-                status=status,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
+        row["response_inner_content_sha256"] = self._captured_response_inner_content_sha256
 
 
 class NhtsaDeepRescanLoader(NhtsaExtractor):
@@ -594,7 +507,6 @@ class NhtsaDeepRescanLoader(NhtsaExtractor):
     historical_seed_urls: list[str] = Field(
         default_factory=lambda: [_HISTORICAL_PRE_2010_URL],
         min_length=1,
-        max_length=1,
     )
 
     # Bytes for the second wrapper (the parent's _wrapper_bytes holds POST_2010).
@@ -614,8 +526,6 @@ class NhtsaDeepRescanLoader(NhtsaExtractor):
         hash (so day-over-day diffs on this column track the rolling-current
         archive, matching the incremental path's semantics).
         """
-        import hashlib
-
         # POST_2010 (self.file_url) first — populates _captured_response_* and
         # _wrapper_bytes via the parent's machinery.
         post_path, post_response, post_wrapper = self._download_to_temp(self.file_url)
@@ -712,11 +622,20 @@ class NhtsaDeepRescanLoader(NhtsaExtractor):
 
         The incremental extractor owns ``source_watermarks.last_successful_extract_at``
         exclusively; deep-rescan is purely additive to bronze.
+
+        Uses the SAME dedup contract as the incremental path
+        (``DEDUP_CONTRACT_BY_SOURCE_NAME["nhtsa"]`` — the 11-tuple oracle with
+        ``source_recall_id`` hash-excluded). This formerly keyed on
+        ``identity_fields=("source_recall_id",)`` and hashed the regen-unstable
+        RECORD_ID, so the same logical row got a different identity bucket and a
+        different ``content_hash`` than the incremental path wrote — phantom-new-row
+        duplication on every NHTSA file regen. Sharing one contract makes that
+        divergence structurally impossible.
         """
-        loader = BronzeLoader(
+        loader = BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME[_NHTSA_SOURCE],
             bronze_table=_nhtsa_bronze,
             rejected_table=_nhtsa_rejected,
-            identity_fields=("source_recall_id",),
         )
         with self._engine.begin() as conn:
             return loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]

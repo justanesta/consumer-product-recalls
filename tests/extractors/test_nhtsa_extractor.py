@@ -18,6 +18,7 @@ import httpx
 import pytest
 import sqlalchemy as sa
 
+from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
 from src.config.settings import Settings
 from src.extractors._base import ExtractionResult, TransientExtractionError
 from src.extractors.nhtsa import (
@@ -548,7 +549,7 @@ class TestDeepRescan:
             patch("src.extractors.nhtsa.BronzeLoader") as mock_loader_cls,
             patch.object(deep_rescan, "_touch_freshness") as mock_touch,
         ):
-            mock_loader_cls.return_value.load.return_value = 0
+            mock_loader_cls.from_contract.return_value.load.return_value = 0
             # The mock engine's begin() returns a context manager.
             mock_conn = MagicMock()
             deep_rescan._engine.begin.return_value.__enter__.return_value = mock_conn  # type: ignore[attr-defined]
@@ -659,34 +660,41 @@ class TestLoadBronze:
         ``TestDeepRescan.test_load_bronze_skips_watermark_advance`` for
         the contrast.
 
-        Also pins the ADR 0030 BronzeLoader configuration: 7-tuple
-        composite identity (RECORD_ID is regen-unstable per Finding K),
-        ``hash_exclude_fields={"source_recall_id"}`` (so RECORD_ID
-        instability doesn't pollute content_hash), and
-        ``within_batch_dedup=True`` (collapses NHTSA's TSV-shipped
-        byte-duplicate rows per Finding L).
+        Pins the ADR 0030 dedup ORACLE on ``DEDUP_CONTRACT_BY_SOURCE_NAME["nhtsa"]`` —
+        the single source of truth that BOTH the incremental and deep-rescan paths now
+        consume (so they can no longer diverge, which was the deep-rescan latent bug).
         """
         with (
             patch("src.extractors.nhtsa.BronzeLoader") as mock_loader_cls,
             patch.object(extractor, "_touch_freshness") as mock_touch,
         ):
-            mock_loader_cls.return_value.load.return_value = 7
+            mock_loader_cls.from_contract.return_value.load.return_value = 7
             mock_conn = MagicMock()
             extractor._engine.begin.return_value.__enter__.return_value = mock_conn  # type: ignore[attr-defined]
 
             count = extractor.load_bronze([], [], "nhtsa/abc.zip")
 
         assert count == 7
-        mock_loader_cls.assert_called_once()
-        kwargs = mock_loader_cls.call_args.kwargs
-        # ADR 0030 (amended after TSV-level analysis): NHTSA bronze identity
-        # is an 11-tuple composite. The first 7 fields are the original
-        # ADR 0030 set; the last 4 (mfr_comp_desc, mfr_comp_name, endman,
-        # bgman) were added after scripts/nhtsa/tsv_analysis/identity_search.py
-        # surfaced an 822-anomaly residue across the full POST_2010 corpus
-        # that the bronze-narrow-scope diagnostics missed. Two POST_2010
-        # regenerations converge identically to this 11-tuple.
-        assert kwargs["identity_fields"] == (
+        # The loader is built from the shared contract, not hand-constructed.
+        mock_loader_cls.from_contract.assert_called_once()
+        assert (
+            mock_loader_cls.from_contract.call_args.args[0]
+            is DEDUP_CONTRACT_BY_SOURCE_NAME[_NHTSA_SOURCE]
+        )
+        mock_loader_cls.from_contract.return_value.load.assert_called_once_with(
+            mock_conn, [], [], "nhtsa/abc.zip"
+        )
+        mock_touch.assert_called_once_with(mock_conn)
+
+        # Pin the actual oracle on the contract (the SSOT). ADR 0030, amended after
+        # scripts/nhtsa/tsv_analysis/identity_search.py surfaced an 822-anomaly residue
+        # across the full POST_2010 corpus that the bronze-narrow-scope diagnostics
+        # missed: an 11-tuple composite (RECORD_ID is regen-unstable per Finding K),
+        # hash_exclude={"source_recall_id"} (so RECORD_ID churn doesn't pollute the hash),
+        # within_batch_dedup (collapses TSV byte-duplicate rows per Finding L), and
+        # allow_null_identity (four of the eleven fields are legitimately empty).
+        contract = DEDUP_CONTRACT_BY_SOURCE_NAME[_NHTSA_SOURCE]
+        assert contract.identity_fields == (
             "campno",
             "maketxt",
             "modeltxt",
@@ -699,22 +707,9 @@ class TestLoadBronze:
             "endman",
             "bgman",
         )
-        # source_recall_id (= RECORD_ID) is regen-unstable; excluding it
-        # from the hash means same logical row → same hash across daily
-        # extracts. Stored on bronze rows for audit but not load-bearing.
-        assert kwargs["hash_exclude_fields"] == frozenset({"source_recall_id"})
-        # NHTSA TSV ships byte-duplicate rows for ~0.4% of POST_2010 records
-        # (Finding L); within-batch dedup collapses them at extract time.
-        assert kwargs["within_batch_dedup"] is True
-        # Four of the 11 identity fields (bgman, endman, mfr_comp_desc,
-        # mfr_comp_name) are legitimately empty for many rows. The flag
-        # treats empty strings as a valid identity bucket rather than
-        # raising "missing required field" — see ADR 0030 amendment.
-        assert kwargs["allow_null_identity"] is True
-        mock_loader_cls.return_value.load.assert_called_once_with(
-            mock_conn, [], [], "nhtsa/abc.zip"
-        )
-        mock_touch.assert_called_once_with(mock_conn)
+        assert contract.hash_exclude_fields == frozenset({"source_recall_id"})
+        assert contract.default_within_batch_dedup is True
+        assert contract.default_allow_null_identity is True
 
 
 # ---------------------------------------------------------------------------

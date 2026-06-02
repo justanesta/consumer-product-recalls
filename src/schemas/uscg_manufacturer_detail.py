@@ -32,8 +32,9 @@ real ``1972``) — silver must not treat it as a "founded" date in isolation (§
 field surfaces as a schema-fail re-ingest. The extractor's RAISE-on-unknown-label
 drift fence is the first fence; this is the second.
 
-No ``populate_by_name`` — the schema is only constructed from extractor dicts
-keyed by the validation aliases (and field names for the rest).
+``populate_by_name=True`` is set (see ``model_config``) so quarantine-recovery can
+``model_validate`` a field-name-keyed dumped payload; ingestion still passes the
+extractor's alias-keyed dicts (Pydantic v2 prefers the validation alias).
 """
 
 from __future__ import annotations

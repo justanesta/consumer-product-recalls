@@ -248,8 +248,9 @@ def test_lifecycle_against_real_bytes(extractor: UscgScrapingExtractor) -> None:
     with (
         patch.object(extractor, "_parse_listing_page", side_effect=_injected_empty_after_two_pages),
         patch.object(extractor, "_should_short_circuit", return_value=False),
-        patch("src.extractors.uscg.BronzeLoader", return_value=mock_loader),
+        patch("src.extractors.uscg.BronzeLoader") as mock_loader_cls,
     ):
+        mock_loader_cls.from_contract.return_value = mock_loader
         mock_engine: MagicMock = extractor._engine  # type: ignore[assignment]
         mock_engine.begin.return_value.__enter__ = lambda _: MagicMock()
         mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)

@@ -498,7 +498,7 @@ class TestExtractLifecycle:
         ):
             mock_loader = MagicMock()
             mock_loader.load.return_value = 5  # arbitrary insert count
-            mock_loader_cls.return_value = mock_loader
+            mock_loader_cls.from_contract.return_value = mock_loader
 
             raw_records = extractor.extract()
             extractor._current_landing_path = _FAKE_R2_PATH  # would normally be set by land_raw

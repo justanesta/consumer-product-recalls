@@ -38,9 +38,10 @@ sees a single canonical field. Similarly listing-page ``"Opened On"``
 Date"`` (M/D/YYYY) — they ARE the same date semantically but bronze
 captures both raw observations and silver decides canonical.
 
-No ``populate_by_name=True`` — the schema is only ever constructed from
-extractor dicts keyed by the validation aliases, never by Python field
-name. Tests use the same alias-keyed shape.
+``populate_by_name=True`` is set (see ``model_config``) so quarantine-recovery can
+``model_validate`` a field-name-keyed dumped payload (``model_dump(mode="json")``
+output); ingestion still passes the extractor's alias-keyed dicts, since Pydantic v2
+prefers the validation alias when both could match.
 """
 
 from __future__ import annotations

@@ -121,16 +121,9 @@ class HtmlScrapingExtractor[T: BaseModel](Extractor[T]):
     # mis-mapped table. None = no drift fence (development mode).
     expected_columns: list[str] | None = None
 
-    # Forensic state for extraction_runs (universal columns from
-    # migrations 0010 + 0011). Mirror of RestApiExtractor's
-    # ``_captured_response_*`` PrivateAttrs. ``response_inner_content_sha256``
-    # is not applicable to HTML (no wrapper/inner distinction) — leave
-    # NULL.
-    _captured_response_status_code: int | None = PrivateAttr(default=None)
-    _captured_response_etag: str | None = PrivateAttr(default=None)
-    _captured_response_last_modified: str | None = PrivateAttr(default=None)
-    _captured_response_body_sha256: str | None = PrivateAttr(default=None)
-    _captured_response_headers: dict[str, str] | None = PrivateAttr(default=None)
+    # The five universal _captured_response_* PrivateAttrs are inherited from Extractor.
+    # ``response_inner_content_sha256`` is not applicable to HTML (no wrapper/inner
+    # distinction) — left NULL.
 
     # Throttle state: monotonic timestamp of the last completed fetch.
     # Initialized to 0.0 so the first call elides the sleep (the
