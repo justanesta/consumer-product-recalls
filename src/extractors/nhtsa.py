@@ -468,6 +468,13 @@ class NhtsaExtractor(FlatFileExtractor[NhtsaRecord]):
         non-deterministic — Finding J); this column persists that hash so day-over-day
         diffs reveal cadence. Called by the base ``_record_run`` only when a response
         was captured.
+
+        Deep-rescan caveat: ``_captured_response_inner_content_sha256`` holds the
+        POST_2010 inner SHA only (the canonical rolling-current archive — see
+        ``NhtsaDeepRescanLoader.extract``). The PRE_2010 inner SHA is persisted to the R2
+        deep-rescan manifest (``land_raw``), NOT to this column, so it is recoverable but
+        not SQL-queryable. Any future short-circuit reading this column is PRE_2010-blind;
+        see ``documentation/audit/deep_rescan_reliability_audit.md``.
         """
         row["response_inner_content_sha256"] = self._captured_response_inner_content_sha256
 
