@@ -4,10 +4,12 @@ Replaces the stub in src/extractors/_base.py. Provides the shared
 scaffolding any flat-file source needs:
 
 - ``_download_to_temp(url) -> Path``: streams an HTTP GET into a
-  tempfile, classifies status codes the same way RestApiExtractor does
-  (200 → success; 304 → not-modified short-circuit; 401/403 →
-  AuthenticationError; 429 → RateLimitError; 5xx / network →
-  TransientExtractionError).
+  tempfile and classifies status codes (mirrors ``UsdaExtractor._fetch``):
+  200 → success; 401/403 → AuthenticationError; 404 → FileNotFoundError;
+  429 → RateLimitError; 5xx / network / anything else →
+  TransientExtractionError. No conditional-GET headers are sent, so 304 is
+  not reachable here (``UsdaExtractor`` is the reference for a source that
+  adds conditional GET).
 - ``_decompress_zip(path, inner_glob) -> bytes``: opens the local ZIP,
   finds the inner file matching the glob, returns its bytes. Drift
   detection: raises ExtractionError if the glob doesn't match exactly

@@ -160,7 +160,7 @@ def _patch_recover(
     with (
         patch("src.cli.main.configure_logging"),
         patch("src.cli.main.Settings"),
-        patch("src.cli.main.sa.create_engine", return_value=mock_engine),
+        patch("src.cli.main.make_engine", return_value=mock_engine),
         patch("src.cli.main.recover_quarantined", return_value=recovery_result) as mock_recover,
     ):
         yield mock_recover, mock_engine

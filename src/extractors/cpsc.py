@@ -16,6 +16,7 @@ from src.bronze.invariants import (
     run_per_record_invariants,
 )
 from src.bronze.loader import BronzeLoader
+from src.config.db import make_engine
 from src.config.settings import (
     Settings,  # noqa: TC001 — Pydantic evaluates field annotations at runtime
 )
@@ -128,10 +129,7 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
     _current_landing_path: str = PrivateAttr(default="")
 
     def model_post_init(self, __context: Any) -> None:
-        self._engine = sa.create_engine(
-            self.settings.neon_database_url.get_secret_value(),
-            pool_pre_ping=True,
-        )
+        self._engine = make_engine(self.settings.neon_database_url.get_secret_value())
         self._r2_client = R2LandingClient(self.settings)
 
     # --- Lifecycle methods ---

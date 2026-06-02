@@ -12,9 +12,16 @@ name: Deep Rescan USCG Manufacturer Details
 on:
   workflow_dispatch: {}
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   deep-rescan:
     runs-on: ubuntu-latest
+    # No timeout-minutes yet: the full ~14k-page sweep runs ~4.5–7.75h and a real
+    # single-invocation completion time on GHA isn't established. Sizing a timeout
+    # (and the chunked-loop rework) is deferred to the deep-rescan plan's W9.
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
