@@ -83,6 +83,8 @@ without manual demarcation.
 | Path | Purpose | Source doc |
 |---|---|---|
 | `fda/bronze/explore_bronze_shape.sql` | 16-query batch covering cardinality, cadence, edit detection, dedup summary, multi-product event detail, deep-dive on a single recall, center/product/phase distributions, null rates, free-text quantity samples, gap analysis, extraction run history | `documentation/fda/first_extraction_findings.md` |
+| `fda/bronze/inspect_field_population.sql` | 8-query silver-remap profiling batch: narrative length stats (Bug 1/2/3), enum domains (voluntary_type/classification/notification), termination_dt↔phase + null-recall_num↔NC relationships, distribution-area vs short-reason content samples | `documentation/fda/field_audit_2026_w22.md` §8 + `documentation/audit/bronze_corpus_profile.md` |
+| `fda/bronze/profile_freetext_normalization.sql` | 6-query scoping batch sizing the normalization design for `product_distributed_quantity` + `distribution_area_summary_txt`: quantity pattern-coverage buckets + messy tail, distribution scope buckets + negation false-positive risk + Nationwide surface-form compression | normalization-tier decision in `cross_source_consolidation.md` (W2) |
 
 ### USDA recalls
 

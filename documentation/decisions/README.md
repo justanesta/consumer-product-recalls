@@ -35,6 +35,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0033 — Silver row versioning via SCD on stable anchor](0033-silver-row-versioning-via-scd-on-stable-anchor.md) — NHTSA `recall_product` 6-tuple stable anchor + Type-1 latest-wins + Type-2 dbt snapshot; framework generalizes cross-source
 - [0034 — NHTSA silver v1.5 — Layer 3 migration cutover](0034-nhtsa-silver-v15-migration.md) *(Proposed — stub; design in `project_scope/silver_v15_migration_plan.md`)*
 - [0035 — Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) *(Proposed — stub; design in `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 + `implementation_plan.md` Phase 6)*
+- [0036 — Cross-source canonical silver column naming](0036-cross-source-canonical-silver-naming.md) *(Proposed — stub; ledger in `documentation/audit/cross_source_consolidation.md` §5, owned by `project_scope/silver-field-remap-plan.md`)*
 
 ### Pipeline, extraction, and transformation
 
@@ -96,6 +97,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 33. [Silver row versioning via SCD on stable anchor](0033-silver-row-versioning-via-scd-on-stable-anchor.md)
 34. [NHTSA silver v1.5 — Layer 3 migration cutover](0034-nhtsa-silver-v15-migration.md) *(Proposed — stub)*
 35. [Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) *(Proposed — stub)*
+36. [Cross-source canonical silver column naming](0036-cross-source-canonical-silver-naming.md) *(Proposed — stub)*
 
 ---
 
@@ -103,7 +105,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 When adding a new ADR:
 
-1. Pick the next sequential number. Current state: **0001–0033 filed (Accepted); 0034 and 0035 filed as `Proposed` stubs** (NHTSA silver-v1.5 Layer-3 cutover and cross-source SCD-2 — see their owning plans). **0024 and 0025 remain reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). **The next free number is 0036.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
+1. Pick the next sequential number. Current state: **0001–0033 filed (Accepted); 0034, 0035, and 0036 filed as `Proposed` stubs** (NHTSA silver-v1.5 Layer-3 cutover, cross-source SCD-2, and cross-source canonical silver naming — see their owning plans). **0024 and 0025 remain reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). **The next free number is 0037.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
 2. File name: `NNNN-kebab-case-title.md`.
 3. Use the standard template (see any existing ADR as a model).
 4. Add an entry under the appropriate topic above **and** in the numeric index.
