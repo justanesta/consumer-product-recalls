@@ -100,7 +100,7 @@ class FdaRecord(BaseModel):
     # stops the no-window seed from silently quarantining those rows (migration 0020,
     # ADR 0014 permissive bronze). event_lmd uses _FdaNullableDate (storage-forced
     # '' → None per ADR 0027); the three str fields preserve '' verbatim (silver
-    # normalizes via nullif). See project_scope/fda-historical-seed-plan.md §0.1/§0.2.
+    # normalizes via nullif). See project_scope/archive/fda-historical-seed-plan.md §0.1/§0.2.
     center_cd: str | None = Field(default=None, validation_alias="CENTERCD")
     product_type_short: str | None = Field(default=None, validation_alias="PRODUCTTYPESHORT")
     event_lmd: _FdaNullableDate = Field(default=None, validation_alias="EVENTLMD")

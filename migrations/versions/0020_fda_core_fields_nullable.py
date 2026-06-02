@@ -5,7 +5,7 @@ Revises: 0019
 Create Date: 2026-05-31
 
 The Phase 6a.5 FDA historical seed pulls the full corpus via the no-window
-`filter:"[]"` bulk POST (project_scope/fda-historical-seed-plan.md §3) instead of
+`filter:"[]"` bulk POST (project_scope/archive/fda-historical-seed-plan.md §3) instead of
 an `eventlmdfrom` date window. That window silently excluded the ~197 records whose
 `EVENTLMD` is null — per api_observations.md Finding H (line 148) the `*lmd` columns
 "advance on edits only … un-edited records have null", and a server-side `>=`

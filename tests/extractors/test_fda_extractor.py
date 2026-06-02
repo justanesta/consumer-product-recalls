@@ -439,25 +439,27 @@ class TestFdaDeepRescanLoader:
         assert "01/01/2026" in filter_arg
         assert "04/26/2026" in filter_arg
 
-    def test_extract_sort_is_recalleventid_asc(self, deep_rescan: FdaDeepRescanLoader) -> None:
+    def test_extract_sort_is_productid_asc(self, deep_rescan: FdaDeepRescanLoader) -> None:
+        # Unique productid sort (not the non-unique recalleventid) — prevents the
+        # tie-boundary straddle that silently dropped ~245 rows in the 2026-06-01 seed.
         deep_rescan.set_date_range(date(2026, 1, 1), date(2026, 4, 26))
         with patch.object(deep_rescan, "_fetch_page", return_value=[]) as mock_fetch:
             deep_rescan.extract()
         kwargs = mock_fetch.call_args.kwargs
-        assert kwargs["sort"] == "recalleventid"
+        assert kwargs["sort"] == "productid"
         assert kwargs["sortorder"] == "asc"
 
     def test_set_full_corpus_extract_uses_empty_filter(
         self, deep_rescan: FdaDeepRescanLoader
     ) -> None:
         # Full-corpus mode posts filter:"[]" (no eventlmd window) so null-EVENTLMD
-        # rows are included, sorted recalleventid asc.
+        # rows are included, sorted productid asc (unique key — no tie-boundary straddle).
         deep_rescan.set_full_corpus()
         with patch.object(deep_rescan, "_fetch_page", return_value=[]) as mock_fetch:
             deep_rescan.extract()
         kwargs = mock_fetch.call_args.kwargs
         assert kwargs["filter_str"] == "[]"
-        assert kwargs["sort"] == "recalleventid"
+        assert kwargs["sort"] == "productid"
         assert kwargs["sortorder"] == "asc"
 
     def test_extract_defaults_to_window_when_not_full_corpus(

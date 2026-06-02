@@ -583,11 +583,12 @@ class FdaDeepRescanLoader(FdaExtractor):
       filter:"[]" (NO eventlmd window) so the ~197 null-EVENTLMD un-edited records
       (Finding H) are included rather than silently excluded by a >= comparison.
       Requires migration 0020 (nullable core fields) so they land instead of
-      quarantining. See project_scope/fda-historical-seed-plan.md.
+      quarantining. See project_scope/archive/fda-historical-seed-plan.md.
 
-    Both modes paginate without a record-count guard, sort recalleventid asc (a stable
-    total order — new recalls sort to the tail, no offset shift), and pace pages via
-    inter_page_sleep_seconds (5.0s default here, the Probe-4 anti-abuse floor).
+    Both modes paginate without a record-count guard, sort ``productid`` asc (the UNIQUE
+    row key — a total order with NO ties, so offset pagination cannot straddle a page
+    boundary and silently drop rows), and pace pages via inter_page_sleep_seconds (5.0s
+    default here, the Probe-4 anti-abuse floor).
 
     Does NOT update source_watermarks — deep rescans are additive to the bronze table;
     the incremental watermark is managed exclusively by FdaExtractor.
@@ -621,16 +622,22 @@ class FdaDeepRescanLoader(FdaExtractor):
         """Fetch FDA records — the full corpus (full-corpus mode) or an EVENTLMD window."""
         if self._full_corpus:
             # filter:"[]" returns the whole dataset including null-EVENTLMD rows that a
-            # date window's >= comparison drops (Finding H). recalleventid asc gives a
-            # stable total order; tie-boundary straddle dups collapse in load_bronze
-            # (within_batch_dedup + rid hash-exclusion).
+            # date window's >= comparison drops (Finding H). Sort on the UNIQUE productid,
+            # NOT the non-unique recalleventid: recalleventid groups many products per
+            # event, so its tie boundaries reshuffle non-deterministically across page
+            # requests and offset pagination silently DROPS distinct products (~245 per
+            # seed, confirmed 2026-06-01 via scripts/fda/audit/diagnose_seed_straddle.py).
+            # A unique sort key has no ties -> no straddle -> complete; within_batch_dedup
+            # stays on as belt-and-suspenders.
             logger.info("fda.deep_rescan.extract", mode="full_corpus", filter="[]")
-            return self._paginate("[]", sort="recalleventid", sortorder="asc")
+            return self._paginate("[]", sort="productid", sortorder="asc")
         start_str = self._start_date.strftime("%m/%d/%Y")
         end_str = self._end_date.strftime("%m/%d/%Y")
         filter_str = f"[{{'eventlmdfrom':'{start_str}'}},{{'eventlmdto':'{end_str}'}}]"
         logger.info("fda.deep_rescan.extract", start_date=start_str, end_date=end_str)
-        return self._paginate(filter_str, sort="recalleventid", sortorder="asc")
+        # Sort on the unique productid (see the full-corpus branch above): the windowed
+        # re-pull has the same tie-boundary straddle risk whenever a window exceeds one page.
+        return self._paginate(filter_str, sort="productid", sortorder="asc")
 
     def load_bronze(
         self,
