@@ -1,6 +1,6 @@
 # Quarantine-recovery tooling (`recalls recover-rejected`) — rationale & execution plan
 
-- **Status:** Design proposed 2026-06-01; not yet implemented. Code off this doc.
+- **Status:** ✅ Implemented & merged — PR #45 (`af2542b`, v0.10.0), 2026-06-01. See the §10 checklist. This is the owning/source-of-truth doc; `implementation_plan.md` + `TODO.md` point here. Archive-ready (move to `project_scope/archive/` and repoint when convenient).
 - **Branch:** `feature/quarantine-recovery-tool` (cut off `main` on 2026-06-01 after
   `feature/phase-6a5-historical-backfill` merged as PR #44). Cross-cutting infra/tooling,
   deliberately **off** the 6a.5 backfill branch.
@@ -284,8 +284,8 @@ reason this tool exists. Both may share `recovery.py`'s reconstruct primitive at
 ---
 
 ## 9. Sequencing
-- New branch `feature/quarantine-recovery-cli`, cut off `main` **immediately after**
-  `feature/phase-6a5-historical-backfill` merges (2026-06-01 user decision: "right after this one").
+- Branch `feature/quarantine-recovery-tool`, cut off `main` **immediately after**
+  `feature/phase-6a5-historical-backfill` merged as PR #44 (2026-06-01 user decision: "right after this one"). ✓ shipped as PR #45.
 - **Non-overlapping with `feature/silver-field-remap`** (recovery touches `src/bronze/`,
   `src/extractors/`, `src/cli/`; the remap touches `dbt/models/silver|staging/*` only), so the two
   do not conflict; per the user instruction this branch comes first. Re-check
@@ -318,4 +318,4 @@ reason this tool exists. Both may share `recovery.py`'s reconstruct primitive at
 - [x] `populate_by_name=True` added to the three USCG schemas (§0.5).
 - [x] Removed `scripts/fda/recover_rejected_invariant_records.py` + its test; kept the census SQL.
 - [x] Gates: ruff / pyright / pytest green; per-source round-trip + idempotency (mock) verified.
-- [ ] Version bump (`pyproject.toml`) when this lands — your call.
+- [x] Version bump (`pyproject.toml`) → **v0.10.0** (PR #45).

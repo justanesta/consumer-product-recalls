@@ -1,3 +1,7 @@
+# Data-source research links (pre-decision)
+
+> Raw research links gathered during initial source scoping (~2026-04-16). **Scope is decided by [ADR 0001](../documentation/decisions/0001-sources-in-scope.md): CPSC / FDA / USDA / NHTSA / USCG in scope; EPA deferred; FAA cut.** The EPA and FAA sections below are kept for research provenance, not active work.
+
 # FDA
 * [Enforcement Reports landing page](https://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts/enforcement-reports)
 * [Enforcement Report Information and Definitions](https://www.fda.gov/safety/enforcement-reports/enforcement-report-information-and-definitions)
@@ -21,6 +25,7 @@
 * [Recall API](https://www.fsis.usda.gov/science-data/developer-resources/recall-api) from the USDA FSIS as well as [documentation](https://www.fsis.usda.gov/sites/default/files/media_file/documents/Recall-API-documentation.pdf)
 
 # EPA
+> **DEFERRED** per [ADR 0001](../documentation/decisions/0001-sources-in-scope.md) — pending confirmation of a usable SSURO / enforcement feed. Pre-decision research links:
 * [Pesticide Registration](https://www.epa.gov/pesticide-registration)
 * [Pesticide Product and Label System](https://ordspub.epa.gov/ords/pesticides/f?p=PPLS:1)
 * [Pesticide Product Information System (PPIS)](https://www.epa.gov/ingredients-used-pesticide-products/pesticide-product-information-system-ppis)
@@ -36,6 +41,7 @@
   * [Enforcement Data and Results](https://www.epa.gov/enforcement/enforcement-data-and-results)
 
 # FAA
+> **CUT** (out of scope) per [ADR 0001](../documentation/decisions/0001-sources-in-scope.md). Retained as historical research notes.
 * [Airworthiness Directives](https://www.faa.gov/regulations_policies/airworthiness_directives)
 * [Airworthiness Directives Biweekly (AD Biweekly)](https://drs.faa.gov/reports/ad-biweekly?close=true) SPECIFICALLY FOR SMALL AIRCRAFT, ROTOCRAFT, GLIDERS, BALLONS, AIRSHIPS, AND UAS  
 * [DRS Help Details](https://drs.faa.gov/help/helpdetails)

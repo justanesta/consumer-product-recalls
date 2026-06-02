@@ -1,5 +1,8 @@
 # Plan: USCG Manufacturers Directory Ingestion (Phase 5d Step 7 follow-up)
 
+- **Status:** ✅ Complete — shipped in **PR #40** (2026-05-30), branch `feature/phase-5d-uscg-manufacturers`. As-built record: `documentation/uscg/manufacturer_scraping_observations.md`; see `implementation_plan.md` Phase 5d Step 7. The promised standalone `uscg_manufacturers_directory_plan.md` was **never split out** — the six-step plan below stayed inline and the work landed directly from it, so **this document IS the directory-ingestion plan.** Archive to `project_scope/archive/` once the Phase 6b SCD-2 follow-on (ADR 0035) lands.
+- **Open questions (bottom of doc): RESOLVED** — Q1→§B, Q2→§C + the detail-capture plan, Q3→foreign-MIC finding, Q4→status field/§M, Q5→cadence finding, all in `documentation/uscg/manufacturer_scraping_observations.md`.
+
 ## Context
 
 During the Phase 6a USCG audit (2026-05-29), `https://uscgboating.org/content/manufacturers-identification.php` was surfaced as a sibling page to the recalls endpoint already in pipeline. It's a paginated HTML directory of **16,263 USCG-registered boat manufacturers** with MIC + Company + Address + City + State per row — roughly **10× the recall corpus**. Currently uncaptured.
@@ -16,7 +19,7 @@ During the Phase 6a USCG audit (2026-05-29), `https://uscgboating.org/content/ma
 
 **Architectural precedent:** Identical to how USDA has two sources (`usda` recalls + `usda_establishments` directory). The two-table firm pattern (`firm` cross-source dim + `firm_establishment_attributes` USDA-only sibling) is already established. This work creates the USCG analog: `firm_manufacturer_attributes`.
 
-**Output deliverable:** A separate plan file `project_scope/uscg_manufacturers_directory_plan.md` (mirroring `project_scope/silver_v15_migration_plan.md` precedent for substantial multi-layer plans). Plus a 2-3 line reference inserted into `project_scope/implementation_plan.md` Phase 5d section noting Step 7 reopened.
+**Output deliverable (as-built):** The six-step plan stayed **inline in this document** — the separate `uscg_manufacturers_directory_plan.md` was never split out (unnecessary once the work landed directly from here). A reference was inserted into `project_scope/implementation_plan.md` Phase 5d Step 7. ✓
 
 ## Recommended approach
 
@@ -71,9 +74,9 @@ During the Phase 6a USCG audit (2026-05-29), `https://uscgboating.org/content/ma
 - `documentation/uscg/manufacturer_scraping_observations.md` — Findings A onwards mirroring `scraping_observations.md`
 - Update `documentation/uscg/field_audit_2026_w22.md` §3 Bug 3 with final mic-only-no-name rescue count + §6 firm-relationship update
 
-**To create (final deliverable):**
-- `project_scope/uscg_manufacturers_directory_plan.md` — the detailed multi-step plan (this meta-plan describes that file's structure)
-- 2-3 line reference inserted into `project_scope/implementation_plan.md` Phase 5d section (around line 408-481 per the existing Phase 5d closure notes) pointing to the new plan file
+**Final deliverable (as-built):**
+- ~~`project_scope/uscg_manufacturers_directory_plan.md`~~ — never created; this document is the plan, and the work shipped directly from it (PR #40).
+- Reference inserted into `project_scope/implementation_plan.md` Phase 5d Step 7. ✓
 
 ## Existing primitives to reuse
 
@@ -142,9 +145,9 @@ During the Phase 6a USCG audit (2026-05-29), `https://uscgboating.org/content/ma
 
 - **End-to-end smoke**: `recalls extract uscg_manufacturers` (incremental, post-historical-seed) hits the Finding J short-circuit on the next run (no records changed). Confirms `_should_short_circuit` short-circuit count matches recalls behavior.
 
-## Open questions for the user (deferred to plan-file write, not blocking)
+## Open questions for the user — RESOLVED (Step 1 empirical work)
 
-These don't gate the plan structure — surface them in the separate plan file's "Open questions" section for resolution during Step 1 empirical work:
+All five were answered during the Step 1 source inspection — resolutions are in `documentation/uscg/manufacturer_scraping_observations.md` (mapping in the Status banner at the top of this doc). Retained below for provenance:
 
 1. **Are the visible values `101, 102, 103` in the directory page the actual MIC values or row indices?** Cannot tell from the WebFetch summary alone — the recall data's MIC is 2-4 chars alpha (`YDV`, `NLP`, `123`) per Finding A. Step 1's HTML source inspection resolves this.
 2. **Per-manufacturer details page?** USCG recalls have a two-tier model (listing + details). Does the manufacturer directory have details pages or is it listing-only? Step 1 confirms.

@@ -28,4 +28,4 @@ USCG is kept despite requiring scraping because it adds a distinct skill surface
 - Five sources with heterogeneous shapes justify the harmonization layer in ADR 0004.
 - USCG ingestion needs defensive scraping: rate limiting, raw HTML archival to landing storage, and schema-drift alarms when the page structure changes.
 - The unified schema must anticipate non-recall regulatory actions if EPA is reopened — addressed in ADR 0003.
-- `project_scope/project_vision_and_constraints.md` still lists all seven agencies and is now stale relative to this decision; this ADR supersedes its source list.
+- At the time of this decision (2026-04-16), `project_scope/project_vision_and_constraints.md` still listed all seven agencies; this ADR superseded its source list. (The vision doc has since been reconciled to five sources and now references this ADR; `project_scope/data_source_notes.md` retains EPA/FAA research links, now annotated as deferred/cut per this ADR.)

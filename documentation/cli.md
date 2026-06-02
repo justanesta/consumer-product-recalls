@@ -69,8 +69,9 @@ recalls extract <source> [--lookback-days N] [--change-type TYPE]
   - `usda` — USDA FSIS recalls
   - `usda_establishments` — USDA FSIS establishments database
   - `nhtsa` — NHTSA flat-file recall data (per [ADR 0008](decisions/0008-nhtsa-flat-file-primary-api-for-vehicle-lookup.md))
-
-  USCG is indefinitely deferred (see `project_scope/implementation_plan.md`).
+  - `uscg` — USCG boating-defect recalls (HTML scrape; live since 2026-05-15)
+  - `uscg_manufacturers` — USCG manufacturer-identification (MIC) directory
+  - `uscg_manufacturer_details` — USCG per-MIC detail pages (succession lineage)
 
 #### Options
 

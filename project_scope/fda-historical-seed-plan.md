@@ -1,6 +1,6 @@
 # FDA iRES historical-seed (full-corpus) implementation plan
 
-- **Status:** Design locked 2026-05-31; not yet implemented. Code off this doc.
+- **Status:** ✅ Code/tooling **SHIPPED** (PR #44 — migrations 0019/0020, `set_full_corpus`, per-page pacing/retry, dbt warn-tripwire + silver coalesce, gate SQL, tests). ✅ Seed **RUN 2026-06-01** → **134,205 distinct in bronze** (134,181 inserted + 24 `check_date_sanity` rows reclaimed via `recalls recover-rejected fda`, PR #45). ⚠️ **CONFIRMED ~245 incomplete** (`scripts/fda/audit/diagnose_seed_straddle.py`, 2026-06-01): the seed's R2 payload has **245/245 duplicates as page-boundary straddles — 0 in-page, 0 scattered**, i.e. NO genuine source dups, so all 245 collapsed rows = 245 *dropped* distinct products (fetched 134,450 = RESULTCOUNT). A 2nd independent fetch of the same corpus dropped a *different* 339 (different boundaries), proving non-deterministic server-side tie ordering on the non-unique `recalleventid`. Not corpus drift (re-probe still 134,450). Null-tail quality clean (197 captured, 0 recent leak — Phase 7 blind-spot still resolved). **Fix (do next, on a fresh branch off `main`): apply the §12 hardening — re-seed with `sort=productid`** (unique key → no ties → no straddle); the re-seed is an idempotent top-up (content-hash dedup inserts only the missing ~245). Re-gate (expect distinct ≈ 134,450), then archive.
 - **Phase:** 6a.5 historical backfill — the FDA leg (the last and trickiest source).
 - **Branch:** `feature/phase-6a5-historical-backfill` (this branch).
 - **Triggering analysis:** the 2026-05-31 skeptical workflow audit (run `w9fhhkl5u`) +
@@ -95,9 +95,11 @@ excludes the body; the FDA signature/auth filter lives in
 ### 0.6 Open decisions — RESOLVED (user, 2026-05-31)
 - **§5 resumability:** per-page **retry** + 5s pacing + dedup-safe re-run. No persisted
   offset. (Confirmed.)
-- **§8 productid-sort:** **defer** — keep `recalleventid asc` + within_batch_dedup +
-  the mandatory COUNT(DISTINCT) gate; no pre-seed `productid` probe (avoids a live
-  request against the throttle-sensitive endpoint before the imminent seed).
+- **§8 productid-sort:** ~~**defer** — keep `recalleventid asc` + within_batch_dedup +
+  the mandatory COUNT(DISTINCT) gate; no pre-seed `productid` probe.~~ **REVERSED 2026-06-01:**
+  the recalleventid seed dropped ~245 distinct products via tie-boundary straddle (the gate
+  caught it: distinct 134,205 < RESULTCOUNT 134,450). The productid-sort hardening is now
+  **required** — re-seed with the unique `sort=productid` (no ties → no straddle). See Status.
 - **§8 tie-boundary drop:** accept gate + idempotent re-run; the gate is
   **mandatory/non-skippable**, and it must census the null-`event_lmd` subset
   specifically (those rows are irrecoverable by the daily incremental).
@@ -379,11 +381,11 @@ psql -f scripts/sql/_pipeline/seed_verify.sql                # fda_recalls_bronz
 
 | Item | Disposition |
 |---|---|
-| **Tie-boundary DROP** (rare; recalleventid non-determinism) | Caught by the §4.5 `COUNT(DISTINCT)` gate; healed by an idempotent re-run (different boundaries). Optionally eliminated by sorting on the unique `productid` — needs one probe (`sort=productid` valid? stable?) before relying on it. Not blocking. |
+| **Tie-boundary DROP** (recalleventid non-determinism) — **OBSERVED 2026-06-01: ~245 dropped** (NOT rare). `within_batch_dedup` collapsed 245 straddle dups (passing 134,426 → inserted 134,181); fetched 134,450 = RESULTCOUNT + unique `productid` ⟹ ~245 distinct products missing (gate distinct = 134,205). | The §4.5 `COUNT(DISTINCT)` gate caught it (distinct 134,205 < RESULTCOUNT 134,450). **Resolve via the §12 hardening — re-seed `sort=productid`** (unique → no ties → no straddle); `probe_corpus_completeness.py` already confirmed `sort=productid` returns cleanly. A plain `recalleventid` re-run only partially heals. |
 | **The 197 are structural vs transient** (inferred) | Settled for free post-seed by §4.5's null-`event_lmd` year histogram. Doesn't change the seed (full-corpus captures them either way); affects only whether the daily incremental would ever pick them up (it won't, if structural). |
 | **Per-page checkpoint depth** | §5 decision — defaulting to per-page retry; confirm or upgrade to per-page-commit at code time. |
 | **Akamai throttle on ~54 pages** | Low at 5s/page (Probe 4). Detected by the `text/html` guard (non-retryable abort); recovery = wait 30+ min, re-run (dedup-safe). |
-| **`productid`-sort hardening** | Optional future improvement; one probe to validate, then swap the sort + keep dedup as belt-and-suspenders. |
+| **`productid`-sort hardening** | **NOW REQUIRED** (was optional) — the 2026-06-01 seed dropped ~245 via recalleventid straddle. Swap the full-corpus `sort` to the unique `productid`, keep `within_batch_dedup` as belt-and-suspenders, re-seed + re-gate. `sort=productid` validity already confirmed by `probe_corpus_completeness.py`. |
 
 ---
 
@@ -403,14 +405,15 @@ psql -f scripts/sql/_pipeline/seed_verify.sql                # fda_recalls_bronz
 
 > Authoritative order; §0 amendments override the prose sections where they differ.
 
-- [ ] `0020_fda_core_fields_nullable.py` (event_lmd, center_cd, product_type_short, firm_legal_nam); cite ADR 0014 **and** ADR 0027 in the docstring
-- [ ] `schemas/fda.py` — 4 fields nullable + relocate them out from under the "core identifiers — non-nullable" comment (§0.5: 3 str fields stay `''`-verbatim; only event_lmd `''→None`)
-- [ ] `fda.py` — guard `max(event_lmd)`; `_paginate` pacing + per-page retry **scoped to `TransientExtractionError` only** (§0.3); `set_full_corpus()`; `within_batch_dedup=True`
-- [ ] `cli/main.py` — `deep-rescan fda` no-dates → full corpus; one-date error; move the `:354` assert into the both-dates branch; fix the `[None → None]` summary prefix (§0.4)
-- [ ] **dbt staging** — `stg_fda_recalls.yml` `event_lmd` not_null → warn-tripwire (`warn_if: ">300"`, `error_if: ">1000"`) (§0.1)
-- [ ] **dbt silver** — `recall_event.sql:62` FDA `published_at` → `coalesce(event_lmd, recall_initiation_dt[, posted_internet_dt])` (§0.1)
-- [ ] `scripts/sql/fda/bronze/seed_completeness_gate.sql` — incl. null-`event_lmd` subset census + null-`recall_initiation_dt` check on those rows
-- [ ] tests: schema (remove `test_missing_required_field_raises`; keep `test_invalid_date_format_raises`; add None/`''` cases) / extractor (full-corpus, within_batch_dedup, mixed-batch watermark, per-page-retry type-scoping, RateLimitError still propagates, anti-abuse not retried) / cli (replace `test_deep_rescan_fda_missing_dates_exits_with_error`) (§0.5)
-- [ ] docs: api_observations Finding + correct `:374` core-never-null claim + field_audit + phase-6-execution-plan FDA row
-- [ ] gates: ruff / pyright / pytest / alembic heads
-- [ ] (user) `alembic upgrade head` → seed → gate → `dbt build` (staging+silver green)
+- [x] `0020_fda_core_fields_nullable.py` (event_lmd, center_cd, product_type_short, firm_legal_nam); cite ADR 0014 **and** ADR 0027 in the docstring
+- [x] `schemas/fda.py` — 4 fields nullable + relocate them out from under the "core identifiers — non-nullable" comment (§0.5: 3 str fields stay `''`-verbatim; only event_lmd `''→None`)
+- [x] `fda.py` — guard `max(event_lmd)`; `_paginate` pacing + per-page retry **scoped to `TransientExtractionError` only** (§0.3); `set_full_corpus()`; `within_batch_dedup=True`
+- [x] `cli/main.py` — `deep-rescan fda` no-dates → full corpus; one-date error; move the `:354` assert into the both-dates branch; fix the `[None → None]` summary prefix (§0.4)
+- [x] **dbt staging** — `stg_fda_recalls.yml` `event_lmd` not_null → warn-tripwire (`warn_if: ">300"`, `error_if: ">1000"`) (§0.1)
+- [x] **dbt silver** — `recall_event.sql:62` FDA `published_at` → `coalesce(event_lmd, recall_initiation_dt[, posted_internet_dt])` (§0.1) — shipped as `coalesce(event_lmd, recall_initiation_dt)` at `recall_event.sql:67`
+- [x] `scripts/sql/fda/bronze/seed_completeness_gate.sql` — incl. null-`event_lmd` subset census + null-`recall_initiation_dt` check on those rows
+- [x] tests: schema (remove `test_missing_required_field_raises`; keep `test_invalid_date_format_raises`; add None/`''` cases) / extractor (full-corpus, within_batch_dedup, mixed-batch watermark, per-page-retry type-scoping, RateLimitError still propagates, anti-abuse not retried) / cli (replace `test_deep_rescan_fda_missing_dates_exits_with_error`) (§0.5)
+- [x] docs: api_observations Finding + correct `:374` core-never-null claim + field_audit + phase-6-execution-plan FDA row
+- [x] gates: ruff / pyright / pytest / alembic heads
+- [x] (user) `alembic upgrade head` → seed → `dbt build` → gate — **done 2026-06-01** (134,205 distinct; 24 reclaimed via `recalls recover-rejected fda`). Gate clean on dups/null-tail/recent-leak. ⚠️ **Action needed:** the 245 shortfall vs RESULTCOUNT is *most likely* `recalleventid` tie-boundary straddle drops (not drift — a 2026-06-01 re-probe still reads 134,450). **Confirm with `scripts/fda/audit/diagnose_seed_straddle.py`** (analyzes the landed R2 payload by page boundary — no re-fetch); if straddle, **re-seed with `sort=productid`** (§12) and re-gate.
+- [ ] **(§12 hardening — now required, not optional)** change the full-corpus path `sort` from `recalleventid` to the unique `productid` in `src/extractors/fda.py` `set_full_corpus`/`_paginate` (eliminates tie-boundary straddle dups+drops); update the extractor test that asserts `sort=recalleventid`; re-seed + re-gate. Lands on `feature/phase-6a5-historical-backfill` (where the seed code lives), not this docs branch.

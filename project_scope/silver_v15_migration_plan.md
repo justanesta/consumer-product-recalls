@@ -1,6 +1,6 @@
 # Silver v1.5 migration plan — SCD on stable anchor for NHTSA `recall_product`
 
-- **Status:** Layer 1 in progress (2026-05-15)
+- **Status:** Layer 1 complete — merged in PR #32 (2026-05-25). Layer 2 (`feature/silver-v15-scd-prototype`) not started; gated on the post-6a.5 full-corpus NHTSA bronze baseline (sequencing owned by [`branch_sequencing_strategy.md`](branch_sequencing_strategy.md)).
 - **Architectural decision:** [ADR 0033](../documentation/decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md)
 - **Triggering event:** Pierce ARROW XT family `26V217000` `mfr_comp_desc` population event, 2026-05-15 (see `documentation/nhtsa/incremental_delta_findings.md` Section K)
 - **Sunset prerequisite:** ADR 0031 9-tuple migration evaluation (sunset 2026-05-15 per Stop criterion #1 firing)
@@ -37,7 +37,7 @@ This plan executes the architectural decision in ADR 0033 — migrate NHTSA silv
 
 **Each layer's output is a precondition for the next layer's decision.** Layer 1's documentation gives Layer 2 conceptual scaffolding. Layer 2's empirical evidence gates the Layer 3 decision. Layer 3 is the commitment.
 
-## Layer 1 — Documentation (in progress, 2026-05-15)
+## Layer 1 — Documentation (complete — merged in PR #32, 2026-05-25)
 
 ### Deliverables
 
@@ -56,7 +56,7 @@ Fully reversible. Documents can be revised, marked superseded, or deleted withou
 
 ### Branch
 
-Commits land on the current `docs/findings-2025-05-w3` branch alongside today's Pierce/Nissan documentation work (Section K addition, ADR 0031 sunset edits, Section I H1 confirmation, inspector generalization). Ships in one merge to `main` at end of week.
+Landed on the `docs/findings-2025-05-w3` branch alongside the Pierce/Nissan documentation work (Section K addition, ADR 0031 sunset edits, Section I H1 confirmation, inspector generalization) and **merged to `main` in PR #32 (2026-05-25)**.
 
 ### Gate to Layer 2
 
@@ -93,7 +93,7 @@ Reversible. Drop the snapshot table, drop the parallel models, no consumer impac
 
 ### Branch
 
-New branch off `main` after `docs/findings-2025-05-w3` merges. Suggested name: **`feature/silver-v15-scd-prototype`**.
+New branch off `main` (after PR #32 merged, and — per `branch_sequencing_strategy.md` — after Phase 6a.5, so the snapshot baseline initializes against full-corpus NHTSA bronze). Suggested name: **`feature/silver-v15-scd-prototype`**.
 
 Rationale: starts from the merged-to-main docs state (so Layer 1 context is available). Isolated from USCG work and from any future docs branches. Survives multiple iterations of the prototype if early validation reveals adjustments are needed.
 
@@ -159,36 +159,9 @@ If any pre-condition fails at gate-2 evaluation time, defer Layer 3 (keep v1.5 p
 
 ## Branching strategy — full picture
 
-```
-main
-├── docs/findings-2025-05-w3 ← CURRENT (Layer 1 work + today's findings docs)
-│       └── merge to main at end of week
-│
-├── (after merge) docs/findings-2025-05-w4 ← next week's daily findings
-│
-├── (after merge) feature/uscg-bronze ← independent USCG Phase 5d work
-│
-├── (after merge) feature/silver-v15-scd-prototype ← Layer 2 work
-│       │
-│       └── after ~2 weeks parallel observation + gate evaluation:
-│           ├── if proceed: feature/silver-v15-migration ← Layer 3 work
-│           ├── if defer: stay on feature/silver-v15-scd-prototype, observe longer
-│           └── if abandon: close branch, update plan doc to "abandoned" status
-```
-
-### Concurrent-work guidance
-
-| Branch pair | Conflict risk | Mitigation |
-|---|---|---|
-| `feature/uscg-bronze` × `feature/silver-v15-scd-prototype` | Low — different source code paths; USCG adds new files, v1.5 modifies NHTSA-specific dbt models | Both can run fully in parallel. Minor merge friction possible at `dbt/models/silver/recall_product.sql` if USCG adds a `uscg_products` CTE — resolve by hand at merge |
-| `feature/uscg-bronze` × `docs/findings-2025-05-w4` | Very low — different file scopes | None needed |
-| `feature/silver-v15-scd-prototype` × `docs/findings-2025-05-w4` | Low — findings docs may reference v1.5 prototype state | Coordinate at merge time; v1.5 prototype lands first usually |
-
-### Daily NHTSA extracts
-
-Continue regardless of which branch is checked out. Bronze writes land in the production Neon database + R2 unchanged by branch state. The branch only matters for code/doc/dbt-model commits, not for extraction-pipeline state.
-
-**Exception:** if `feature/silver-v15-scd-prototype` is checked out and `dbt build` is run, the new `nhtsa_recall_product_snapshot` table will be created in your dev silver schema. This is fine — parallel to existing models, doesn't replace them. Just be aware of the operational footprint.
+> **Superseded 2026-05-30 — branching/sequencing is now owned by [`project_scope/branch_sequencing_strategy.md`](branch_sequencing_strategy.md)**, which carries the current dependency graph (incl. the "6a.5 precedes Layer 2" constraint) and live branch names. The graph + concurrent-work tables previously here referenced obsolete branches (`docs/findings-2025-05-w3`, `feature/uscg-bronze`) and were removed to avoid drift.
+>
+> The one v1.5-specific operational note worth keeping: running `dbt build` on `feature/silver-v15-scd-prototype` creates the `nhtsa_recall_product_snapshot` table in your dev silver schema — parallel to existing models, doesn't replace them. Daily NHTSA extracts continue regardless of which branch is checked out (bronze/R2 writes are branch-independent).
 
 ## Risk register
 
@@ -205,8 +178,8 @@ Continue regardless of which branch is checked out. Bronze writes land in the pr
 
 | Layer | Status | Last update | Next action | Owner |
 |---|---|---|---|---|
-| Layer 1 — Documentation | In progress | 2026-05-15 | Both docs drafted; awaiting commit + a few-day review window before Layer 2 gate evaluation | (TBD — assign before commit) |
-| Layer 2 — Parallel prototype | Not started | 2026-05-15 | Gate 1 → 2 evaluation when Layer 1 merge lands | (TBD) |
+| Layer 1 — Documentation | Complete | 2026-05-25 | Merged in PR #32 (d14d609); ADR 0033 + this plan landed. Layer 2 gate now evaluates against the post-6a.5 full-corpus baseline | — |
+| Layer 2 — Parallel prototype | Not started | 2026-06-01 | Starts after Phase 6a.5 — the snapshot baseline must initialize against full-corpus NHTSA bronze (per branch_sequencing_strategy.md) | — |
 | Layer 3 — Migration | Not started | 2026-05-15 | Gated on Layer 2 evidence | (TBD) |
 
 Update this table when status changes. Append a brief log entry below for material decisions or evidence captures.
