@@ -30,7 +30,7 @@ leaf-module placement to avoid import cycles.
 | 7 | Micro-fixes: 3 USCG schema docstrings, `settings.py` comments, CPSC `_SUB` reuse, `historical_seed_urls` cap, hoisted `import hashlib`, cli `.get()` hardening | ✅ |
 | 8 | Tests: `test_dedup_contracts.py` (incl. NHTSA `RECORD_ID`-churn regression guard) + invariant-registry tests; all broken loader-mock tests updated. Gates: ruff/ruff-format/pyright clean, pytest green (~96% cov) | ✅ |
 | 9 | Documentation graduation (this doc + audit doc + TODO #56 pointer + master-plan index + ADR 0030 amendment) | ✅ |
-| 10 | NHTSA data remediation (assess → truncate → re-seed → verify) | ⏳ pending operator run |
+| 10 | NHTSA data remediation (assess → truncate → re-seed → verify) | ✅ pending operator run |
 
 ## Key files
 
