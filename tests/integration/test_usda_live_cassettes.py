@@ -96,7 +96,7 @@ def vcr_extractor(monkeypatch: pytest.MonkeyPatch) -> UsdaExtractor:
     mock_r2.land.return_value = _FAKE_R2_PATH
     with (
         patch("sqlalchemy.create_engine", return_value=mock_engine),
-        patch("src.extractors.usda.R2LandingClient", return_value=mock_r2),
+        patch("src.extractors._fsis_base.R2LandingClient", return_value=mock_r2),
     ):
         settings = Settings()  # type: ignore[call-arg]
         return UsdaExtractor(base_url=_BASE_URL, settings=settings)
@@ -257,7 +257,7 @@ def test_malformed_record(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_r2.land.return_value = _FAKE_R2_PATH
     with (
         patch("sqlalchemy.create_engine", return_value=mock_engine),
-        patch("src.extractors.usda.R2LandingClient", return_value=mock_r2),
+        patch("src.extractors._fsis_base.R2LandingClient", return_value=mock_r2),
     ):
         settings = Settings()  # type: ignore[call-arg]
         extractor = UsdaExtractor(base_url=_BASE_URL, settings=settings, rejection_threshold=1.0)
@@ -323,7 +323,7 @@ def test_bilingual_orphan_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_r2.land.return_value = _FAKE_R2_PATH
     with (
         patch("sqlalchemy.create_engine", return_value=mock_engine),
-        patch("src.extractors.usda.R2LandingClient", return_value=mock_r2),
+        patch("src.extractors._fsis_base.R2LandingClient", return_value=mock_r2),
     ):
         settings = Settings()  # type: ignore[call-arg]
         extractor = UsdaExtractor(base_url=_BASE_URL, settings=settings, rejection_threshold=1.0)
