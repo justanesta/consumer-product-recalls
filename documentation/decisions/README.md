@@ -38,7 +38,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 ### Pipeline, extraction, and transformation
 
-- [0010 — Ingestion cadence and orchestration via GitHub Actions cron](0010-ingestion-cadence-and-github-actions-cron.md) *(partially superseded by 0023; amended 2026-05-01 for CPSC + USDA findings)*
+- [0010 — Ingestion cadence and orchestration via GitHub Actions cron](0010-ingestion-cadence-and-github-actions-cron.md) *(partially superseded by 0023; amended 2026-05-01 for CPSC + USDA findings, 2026-06-02 for Phase-7 deep-rescan cadence + GHA hardening)*
 - [0011 — Transformation framework: dbt-core](0011-transformation-framework-dbt-core.md)
 - [0023 — FDA deep rescan required; archive migration detected](0023-fda-deep-rescan-required-archive-migration-detected.md) — supersedes ADR 0010's FDA no-rescan exemption
 - [0012 — Extractor pattern: custom ABC + per-source subclasses](0012-extractor-pattern-custom-abc-and-per-source-subclasses.md) — adopts patterns from NYC DCP's `dcpy` without the dependency *(amended 2026-05-01: multi-response-shape pattern note)*

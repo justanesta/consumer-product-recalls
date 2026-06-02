@@ -24,9 +24,6 @@ jobs:
     # (and the chunked-loop rework) is deferred to the deep-rescan plan's W9.
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
-      - run: uv python install
-      - run: uv sync --frozen
 
       - name: Validate required secrets
         run: |
@@ -41,6 +38,10 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install
+      - run: uv sync --frozen
 
       - name: Run USCG manufacturer-details deep rescan
         run: uv run recalls deep-rescan uscg_manufacturer_details
