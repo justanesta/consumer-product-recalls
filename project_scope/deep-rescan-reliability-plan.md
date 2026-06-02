@@ -1,9 +1,8 @@
 # Deep-rescan reliability & workload — plan
 
-- **Status:** Active — graduation (PR #50) + Tier 1 (PR #51) + Tier 2 (W5; PR #52) merged. Tier 3
-  W7 (FDA cron window) + W8 (ADR 0010 cadence + secret-step reorder) is in progress as PR #53 on
-  `feat/deep-rescan-fda-cron-cadence`; W6 (NHTSA short-circuit + migration — needs a design pass) and
-  Tier 4 (W9, W10) not yet started.
+- **Status:** Active — graduation (PR #50) + Tier 1 (PR #51) + Tier 2 (W5; PR #52) + Tier 3 W7+W8
+  (PR #53) merged. W6 (NHTSA inner-SHA short-circuit + migration 0021 + backfill) is in progress on
+  `feature/deep-rescan-nhtsa-short-circuit`; only Tier 4 (W9, W10) remains, both deferred-pending-measurement.
 - **Owns:** the fix ladder for deep-rescan reliability + workload ahead of Phase-7 scheduled GitHub
   Actions, and the PRE_2010 `response_inner_content_sha256` mitigation (#1–#3).
 - **Points at:** `documentation/audit/deep_rescan_reliability_audit.md` for *what we found* (this doc
@@ -40,7 +39,7 @@ reshaped half of them, and those corrections are baked into the workstream descr
 | W3 | **R7-A** — add `timeout-minutes` (NHTSA 40, CPSC/USDA 30, FDA 60; USCG-detail deferred until a real single-run time exists) + `concurrency` (cancel-in-progress: false) to all five deep-rescan workflows (YAML only) | 1 | ✅ PR #51 |
 | W4 | **D1** — fix the stale `loader.py` chunk-count comment/docstring (65k/~12 → ~321k/~59) and the `_flat_file.py` 304 claim | 1 | ✅ PR #51 |
 | W5 | **R4** — extend `_TRANSIENT_RETRY`'s predicate with an `is_disconnect()` guard (matches "server closed the connection unexpectedly" / `connection_invalidated`); **not** a blanket `OperationalError` catch (the `_PG_PARAM_SAFETY_LIMIT` overflow must stay non-retried), **not** a second wrapper; keep it on `load_bronze`, never `run()` | 2 | ✅ PR #52 |
-| W6 | **R1+R2** — NHTSA pre-extract short-circuit + `was_short_circuited` flag; gates on **both** inner SHAs (needs Mitigation #3's DB home + manifest backfill), placed in `NhtsaDeepRescanLoader` before download; `change_type` rebaseline bypass + NULL-baseline = proceed | 3 | ⏳ |
+| W6 | **R1+R2** — NHTSA inner-SHA short-circuit + `was_short_circuited` flag, gated in `NhtsaDeepRescanLoader.extract()` **post-download** (the inner-SHA is the only reliable oracle — the ZIP wrapper/ETag churns daily, Finding J); gates on **both** archives via migration 0021's JSONB by-archive column + R2-manifest backfill (Mitigation #3); `change_type` rebaseline bypass + NULL-baseline = proceed | 3 | ✅ this PR |
 | W7 | **R6** — make `deep-rescan-fda.yml` cron-runnable: a "Resolve start date" step (mirror the existing end-date step) computing a rolling window; never pass the raw `""` input; validate the window vs ADR 0023 back-dating | 3 | ✅ PR #53 |
 | W8 | **R8** — amend **ADR 0010** with per-source deep-rescan cadence: NHTSA/FDA weekly (cheap once W6 lands), CPSC weekly, USDA n/a (full snapshot), **USCG detail quarterly** (matches `phase-5d-uscg-manufacturers-detail.md`, not monthly); record the 1/12 rotation as a *future option* needing a range param + offset cursor (neither exists). Reorder secret-validation before `uv sync` (YAML) | 3 | ✅ PR #53 |
 | W9 | **R5** — port the chunked-process pattern into the USCG-detail **deep-rescan** workflow (the incremental cron path already fits and needs nothing); benchmark real GHA page-rate first; `timeout-minutes` guard | 4 (defer) | ⏳ |

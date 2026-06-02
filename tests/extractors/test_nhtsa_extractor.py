@@ -8,6 +8,7 @@ load_bronze`` lifecycle against the deterministic fixture ZIP at
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, timedelta
 from datetime import datetime as dt
 from pathlib import Path
@@ -645,6 +646,152 @@ class TestDeepRescan:
         assert b"post-hash" in manifest_content
         assert _HISTORICAL_PRE_2010_URL.encode() in manifest_content
         assert _INCREMENTAL_URL.encode() in manifest_content
+
+
+# ---------------------------------------------------------------------------
+# NhtsaDeepRescanLoader — W6 inner-content-SHA short-circuit
+# ---------------------------------------------------------------------------
+
+
+class TestShortCircuitGate:
+    @staticmethod
+    def _set_fresh_shas(loader: NhtsaDeepRescanLoader, *, post: str, pre: str) -> None:
+        loader._post_2010_inner_sha256 = post
+        loader._pre_2010_inner_sha256 = pre
+
+    def test_should_short_circuit_true_when_both_archives_match(
+        self, deep_rescan: NhtsaDeepRescanLoader
+    ) -> None:
+        self._set_fresh_shas(deep_rescan, post="POST", pre="PRE")
+        deep_rescan._change_type = "routine"
+        prior = {deep_rescan.file_url: "POST", deep_rescan.historical_seed_urls[0]: "PRE"}
+        with patch.object(deep_rescan, "_prior_inner_shas", return_value=prior):
+            assert deep_rescan._should_short_circuit() is True
+
+    def test_should_short_circuit_false_when_post_changed(
+        self, deep_rescan: NhtsaDeepRescanLoader
+    ) -> None:
+        self._set_fresh_shas(deep_rescan, post="POST-NEW", pre="PRE")
+        deep_rescan._change_type = "routine"
+        prior = {deep_rescan.file_url: "POST-OLD", deep_rescan.historical_seed_urls[0]: "PRE"}
+        with patch.object(deep_rescan, "_prior_inner_shas", return_value=prior):
+            assert deep_rescan._should_short_circuit() is False
+
+    def test_should_short_circuit_false_when_pre_changed(
+        self, deep_rescan: NhtsaDeepRescanLoader
+    ) -> None:
+        self._set_fresh_shas(deep_rescan, post="POST", pre="PRE-NEW")
+        deep_rescan._change_type = "routine"
+        prior = {deep_rescan.file_url: "POST", deep_rescan.historical_seed_urls[0]: "PRE-OLD"}
+        with patch.object(deep_rescan, "_prior_inner_shas", return_value=prior):
+            assert deep_rescan._should_short_circuit() is False
+
+    def test_should_short_circuit_false_when_no_prior_baseline(
+        self, deep_rescan: NhtsaDeepRescanLoader
+    ) -> None:
+        self._set_fresh_shas(deep_rescan, post="POST", pre="PRE")
+        deep_rescan._change_type = "routine"
+        with patch.object(deep_rescan, "_prior_inner_shas", return_value=None):
+            assert deep_rescan._should_short_circuit() is False
+
+    @pytest.mark.parametrize("change_type", ["schema_rebaseline", "hash_helper_rebaseline"])
+    def test_should_short_circuit_false_on_rebaseline_bypass(
+        self, deep_rescan: NhtsaDeepRescanLoader, change_type: str
+    ) -> None:
+        # Even with a perfect match, a rebaseline run must do the full walk — and the
+        # bypass returns before the DB read.
+        self._set_fresh_shas(deep_rescan, post="POST", pre="PRE")
+        deep_rescan._change_type = change_type
+        prior = {deep_rescan.file_url: "POST", deep_rescan.historical_seed_urls[0]: "PRE"}
+        with patch.object(deep_rescan, "_prior_inner_shas", return_value=prior) as mock_prior:
+            assert deep_rescan._should_short_circuit() is False
+        mock_prior.assert_not_called()
+
+    def test_extract_short_circuits_when_unchanged(
+        self, deep_rescan: NhtsaDeepRescanLoader
+    ) -> None:
+        post_body, pre_body = b"POST-BODY", b"PRE-BODY"
+        prior = {
+            deep_rescan.file_url: hashlib.sha256(post_body).hexdigest(),
+            deep_rescan.historical_seed_urls[0]: hashlib.sha256(pre_body).hexdigest(),
+        }
+        response = _make_zip_response(b"unused")
+        with (
+            patch("httpx.Client") as mock_client,
+            patch.object(
+                deep_rescan,
+                "_decompress_zip",
+                side_effect=[(post_body, "f.txt"), (pre_body, "f.txt")],
+            ),
+            patch.object(deep_rescan, "_prior_inner_shas", return_value=prior),
+        ):
+            mock_client.return_value.__enter__.return_value.get.return_value = response
+            records = deep_rescan.extract()
+
+        assert records == []
+        assert deep_rescan._was_short_circuited is True
+
+    def test_extract_full_walk_when_changed(self, deep_rescan: NhtsaDeepRescanLoader) -> None:
+        body = ("\t".join(["x"] * _EXPECTED_FIELDS) + "\r\n").encode("utf-8")
+        response = _make_zip_response(b"unused")
+        with (
+            patch("httpx.Client") as mock_client,
+            patch.object(deep_rescan, "_decompress_zip", return_value=(body, "f.txt")),
+            patch.object(deep_rescan, "_prior_inner_shas", return_value=None),
+        ):
+            mock_client.return_value.__enter__.return_value.get.return_value = response
+            records = deep_rescan.extract()
+
+        # 1 row per archive × 2 archives; no short-circuit.
+        assert len(records) == 2
+        assert deep_rescan._was_short_circuited is False
+
+    def test_land_raw_skips_upload_when_short_circuited(
+        self, deep_rescan: NhtsaDeepRescanLoader
+    ) -> None:
+        deep_rescan._was_short_circuited = True
+        path = deep_rescan.land_raw([])
+        assert path == ""
+        deep_rescan._r2_client.land.assert_not_called()  # type: ignore[attr-defined]
+
+    def test_augment_run_row_writes_was_short_circuited(
+        self, deep_rescan: NhtsaDeepRescanLoader
+    ) -> None:
+        deep_rescan._was_short_circuited = True
+        row: dict[str, Any] = {}
+        deep_rescan._augment_run_row(row)
+        assert row["was_short_circuited"] is True
+
+    def test_augment_response_row_writes_by_archive_map(
+        self, deep_rescan: NhtsaDeepRescanLoader
+    ) -> None:
+        deep_rescan._captured_response_inner_content_sha256 = "post-sha"
+        deep_rescan._post_2010_inner_sha256 = "post-sha"
+        deep_rescan._pre_2010_inner_sha256 = "pre-sha"
+        row: dict[str, Any] = {}
+        deep_rescan._augment_response_row(row)
+        # Parent's POST-only column preserved + the both-archive map (W6).
+        assert row["response_inner_content_sha256"] == "post-sha"
+        assert row["response_inner_content_sha256_by_archive"] == {
+            deep_rescan.historical_seed_urls[0]: "pre-sha",
+            deep_rescan.file_url: "post-sha",
+        }
+
+    def test_run_override_stashes_change_type_for_the_gate(
+        self, deep_rescan: NhtsaDeepRescanLoader
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_super_run(self_: Any, change_type: str = "routine") -> str:
+            captured["change_type"] = change_type
+            return "ok"
+
+        with patch("src.extractors._base.Extractor.run", fake_super_run):
+            result = deep_rescan.run(change_type="schema_rebaseline")
+
+        assert result == "ok"
+        assert captured["change_type"] == "schema_rebaseline"
+        assert deep_rescan._change_type == "schema_rebaseline"
 
 
 # ---------------------------------------------------------------------------
