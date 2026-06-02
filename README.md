@@ -74,6 +74,7 @@ Full local setup, including optional direnv integration and Proton Pass CLI for 
 ## Documentation
 
 - [Architecture Decision Records](documentation/decisions/README.md) — every major design choice and the reasoning behind it
+- [Documentation model](documentation/documentation_model.md) — how the project organizes ADRs, plans, findings, and TODOs (the doc-process meta-doc)
 - [Development guide](documentation/development.md) — local setup, direnv, Proton Pass, running tests
 - [Operations guide](documentation/operations.md) — secret rotation runbooks, re-ingestion procedure, cassette re-recording
 

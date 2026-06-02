@@ -2,6 +2,8 @@
 
 System-level overview of the consumer-product-recalls EtLT medallion pipeline. Covers the four-layer medallion structure, end-to-end data flow, the components that implement each layer, and the load-bearing invariants that hold across them.
 
+> ⚠️ **Note (2026-06-01):** the extractor table and registry counts below were corrected inline for the USCG scraping sources (live since 2026-05-15). A fuller architecture refresh — data-flow diagrams, medallion narrative, source lists — is scheduled in the Phase 6f doc-sync (`project_scope/phase-6-execution-plan.md` §6f).
+
 This is the reader's-entry-point document. For:
 - **Per-source silver mapping decisions** (column unification, surrogate keys, null-filling) — see [`silver_design_notes.md`](silver_design_notes.md).
 - **Schema reference** (table-by-table column types, business keys, glossary) — see [`data_schemas.md`](data_schemas.md).
@@ -141,10 +143,11 @@ Three things happen per extraction run that the diagram above abbreviates:
 
 | File | Role |
 |---|---|
-| `_base.py` | `Extractor` ABC — defines the 5-step lifecycle (`extract`, `land_raw`, `validate`, `check_invariants`, `load_bronze`) shared by every source; also contains `RestApiExtractor` (REST sources) and `HtmlScrapingExtractor` (scraping; reserved for future use) operation-type subclasses |
+| `_base.py` | `Extractor` ABC — defines the 5-step lifecycle (`extract`, `land_raw`, `validate`, `check_invariants`, `load_bronze`) shared by every source; also contains the `RestApiExtractor` (REST sources) operation-type subclass |
 | `_flat_file.py` | `FlatFileExtractor` — operation-type subclass for tab-delimited downloads (NHTSA) |
+| `_html_scraping.py` | `HtmlScrapingExtractor` — operation-type subclass for paginated HTML scrapes (BeautifulSoup). **In production for the three USCG sources** (was "reserved for future use" before the 2026-05-15 USCG reactivation) |
 | `_fsis_headers.py` | Shared browser-fingerprint header helper for USDA FSIS endpoints (per ADR 0016 amendment — bot-manager fingerprinting) |
-| `cpsc.py` / `fda.py` / `usda.py` / `usda_establishment.py` / `nhtsa.py` | Per-source concrete subclasses |
+| `cpsc.py` / `fda.py` / `usda.py` / `usda_establishment.py` / `nhtsa.py` / `uscg.py` / `uscg_manufacturer.py` / `uscg_manufacturer_detail.py` | Per-source concrete subclasses |
 
 The hierarchy is **two layers deep**: `Extractor` (ABC) → operation-type subclass (`RestApiExtractor`, etc.) → per-source concrete subclass. This was deliberate per [ADR 0012](decisions/0012-extractor-pattern-custom-abc-and-per-source-subclasses.md): `Extractor` defines the lifecycle contract, the operation-type subclasses encode shape-specific concerns (pagination loops for REST, ZIP unpacking for flat files, BeautifulSoup parsing for scraping), and concrete subclasses encode source-specific quirks (auth headers, watermark column names, response-shape multiplexing).
 
@@ -183,7 +186,7 @@ Per [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md), schemas
 |---|---|
 | `settings.py` | `pydantic-settings` `Settings` model — loads `.env`, fails loud on missing required values, marks credentials as `SecretStr` |
 | `source_loader.py` | YAML loader — reads `config/sources/<source>.yaml` and validates through the discriminated union in `source_registry.py`. Strict-fails on extra fields, missing required fields, or wrong `source_type`. |
-| `source_registry.py` | Pydantic discriminated-union models (`RestApiSourceConfig`, `FlatFileSourceConfig`); static dicts `EXTRACTOR_BY_SOURCE_NAME` (5 entries) and `DEEP_RESCAN_BY_SOURCE_NAME` (3 entries); `build_extractor_kwargs` helper using `model_fields` introspection per ADR 0012. |
+| `source_registry.py` | Pydantic discriminated-union models (`RestApiSourceConfig`, `FlatFileSourceConfig`); static dicts `EXTRACTOR_BY_SOURCE_NAME` (8 entries) and `DEEP_RESCAN_BY_SOURCE_NAME` (7 entries); `build_extractor_kwargs` helper using `model_fields` introspection per ADR 0012. |
 | `logging.py` | `structlog` configuration with `run_id` contextvar, stdlib bridge for third-party libraries |
 
 ### `migrations/versions/` — Alembic migrations

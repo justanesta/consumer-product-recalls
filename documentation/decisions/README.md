@@ -6,6 +6,8 @@ ADRs are **immutable once accepted** — if a decision changes, a new ADR is wri
 
 A new ADR is written when someone reading the code six months later would ask "why did they do it this way and not the obvious alternative?" Trivial choices (variable naming, lint config) don't get ADRs; substantive tradeoffs do.
 
+> For how docs *other than ADRs* are organized (plans, findings, TODO, branch sequencing), see [`documentation/documentation_model.md`](../documentation_model.md). This README is the authority on ADRs and on the next-free ADR number.
+
 ---
 
 ## By topic
@@ -27,7 +29,12 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0022 — FDA history endpoints empty; snapshot synthesis for all sources](0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) — supersedes ADR 0007's FDA-specific history path
 - [0026 — Lifecycle tracking via per-run snapshot-presence manifest](0026-lifecycle-tracking-snapshot-presence-manifest.md) — closes bronze's retraction gap; USDA-first, separate `extraction_run_identities` table
 - [0027 — Bronze keeps storage-forced transforms only; value-level normalization moves to silver](0027-bronze-storage-forced-transforms-only.md) — bronze hashes change iff the source changed
+- [0030 — NHTSA bronze identity: composite tuple + within-batch dedup](0030-nhtsa-bronze-identity-composite-tuple-and-within-batch-dedup.md) — 11-tuple identity; `RECORD_ID` excluded from content hash
+- [0031 — Silver-row fragmentation strategy](0031-silver-row-fragmentation-strategy.md) — per-source surrogate keys, drift detection, reconciliation tiers
 - [0032 — USDA establishment `latest_mpi_active_date` hash exclusion (upstream heartbeat fields)](0032-usda-establishment-heartbeat-field-hash-exclusion.md) — third category of `hash_exclude_fields` use; suppresses weekly ~7k phantom re-versions
+- [0033 — Silver row versioning via SCD on stable anchor](0033-silver-row-versioning-via-scd-on-stable-anchor.md) — NHTSA `recall_product` 6-tuple stable anchor + Type-1 latest-wins + Type-2 dbt snapshot; framework generalizes cross-source
+- [0034 — NHTSA silver v1.5 — Layer 3 migration cutover](0034-nhtsa-silver-v15-migration.md) *(Proposed — stub; design in `project_scope/silver_v15_migration_plan.md`)*
+- [0035 — Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) *(Proposed — stub; design in `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 + `implementation_plan.md` Phase 6)*
 
 ### Pipeline, extraction, and transformation
 
@@ -86,6 +93,9 @@ A new ADR is written when someone reading the code six months later would ask "w
 30. [NHTSA bronze identity: composite tuple + within-batch dedup](0030-nhtsa-bronze-identity-composite-tuple-and-within-batch-dedup.md)
 31. [Silver-row fragmentation strategy: per-source surrogate keys, drift detection, reconciliation tiers](0031-silver-row-fragmentation-strategy.md)
 32. [USDA establishment `latest_mpi_active_date` hash exclusion (upstream heartbeat fields)](0032-usda-establishment-heartbeat-field-hash-exclusion.md)
+33. [Silver row versioning via SCD on stable anchor](0033-silver-row-versioning-via-scd-on-stable-anchor.md)
+34. [NHTSA silver v1.5 — Layer 3 migration cutover](0034-nhtsa-silver-v15-migration.md) *(Proposed — stub)*
+35. [Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) *(Proposed — stub)*
 
 ---
 
@@ -93,7 +103,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 When adding a new ADR:
 
-1. Pick the next sequential number. **0024 and 0025 are reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). The next free number is 0033.
+1. Pick the next sequential number. Current state: **0001–0033 filed (Accepted); 0034 and 0035 filed as `Proposed` stubs** (NHTSA silver-v1.5 Layer-3 cutover and cross-source SCD-2 — see their owning plans). **0024 and 0025 remain reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). **The next free number is 0036.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
 2. File name: `NNNN-kebab-case-title.md`.
 3. Use the standard template (see any existing ADR as a model).
 4. Add an entry under the appropriate topic above **and** in the numeric index.

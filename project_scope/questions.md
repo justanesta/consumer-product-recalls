@@ -1,4 +1,7 @@
 # Architecture Questions
+
+> 📌 **Historical inception brainstorm (~2026-04-16) — resolved, retained for provenance.** These questions drove the initial scoping pass and are now answered by the ADRs in `documentation/decisions/` (esp. 0002 unit-of-analysis, 0004 medallion / EtLT, 0011 dbt, 0012 extractor pattern, 0013 landing+quarantine, 0015 testing/fixtures). Not live open work; not a tracked TODO. Two items have no dedicated ADR and were settled by default: Lambda vs Kappa (batch medallion per ADR 0004 — Kappa not adopted) and single-vs-multi-repo (single repo). Kept here, unedited, as a record of how the project was first framed.
+
 * What is the data model for recalls data from each source? OLTP? OLAP? Relational? NoSQL? Object-oriented? Hierarchial? Network?
   * What is the unit of analysis? 
   * What are the features that are present in all sources?

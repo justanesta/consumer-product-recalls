@@ -1,6 +1,6 @@
 # Phase 5d Step 7 (detail) — USCG manufacturer detail-page capture (Path B, bronze-only)
 
-- **Status:** Complete 2026-05-30 — all deliverables shipped on `feature/uscg-manufacturers-detail-addition`; pending PR merge to `main`. The alembic migration, `dbt build`, live extraction, and live-cassette recording are user-run (see §10 + §14).
+- **Status:** ✅ Complete — bronze-capture shipped and **merged to `main` in PR #42** (commit `ffe9536`, 2026-05-30). The §11 SCD-2 silver half stays deferred to Phase 6 / ADR 0035. (Alembic migration, `dbt build`, live extraction, and live-cassette recording were user-run — see §10 + §14.) Archive to `project_scope/archive/` once the ADR 0035 SCD-2 follow-on lands.
 - **Scope class:** **bronze-capture only** (per `project_scope/implementation_plan.md:490`). The SCD-2 silver model and the recall→manufacturer time-aware join are **out of scope** on this branch and deferred to Phase 6 (see §11).
 - **Branch:** `feature/uscg-manufacturers-detail-addition`.
 - **Parent plan:** `project_scope/implementation_plan.md` Phase 5d Step 7 follow-up (lines 482–490).
@@ -8,7 +8,7 @@
 - **Deferred-half home (Phase 6):** `implementation_plan.md:707` (cross-source SCD-2 item) + `project_scope/silver_v15_migration_plan.md:229–247` (cross-source application section).
 - **Sequencing doc:** `project_scope/branch_sequencing_strategy.md` (updated alongside this doc to register the branch).
 - **Empirical source-of-truth:** `documentation/uscg/manufacturer_scraping_observations.md` §M (M.1–M.6) + `documentation/uscg/field_audit_2026_w22.md`.
-- **Sunset:** branch merges to `main`; the §11 SCD-2 design migrates into Phase 6 / ADR 0035.
+- **Sunset:** ✅ branch merged (#42); remaining trigger — the §11 SCD-2 design migrates into Phase 6 / ADR 0035, then archive this doc.
 
 ---
 

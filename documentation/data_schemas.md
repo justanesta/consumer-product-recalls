@@ -2,6 +2,8 @@
 
 A reader's index for "what does column X mean, where is it defined, and what does this domain term refer to?" The authoritative definitions for the schemas themselves live in code (`src/schemas/`) and dbt configuration (`dbt/models/`). This document is the glossary, the cross-reference, and the quick-lookup — not a copy of the schemas.
 
+> ⚠️ **Note (2026-06-01):** the bronze-table list below was extended inline to include NHTSA + the three USCG tables (previously omitted). Glossary additions (MIC as a temporal SCD anchor; HIN ⊃ MIC) and silver/gold schema coverage are scheduled in the Phase 6f doc-sync (`project_scope/phase-6-execution-plan.md` §6f).
+
 For:
 - **System-level architecture** — see [`architecture.md`](architecture.md).
 - **Per-source silver mapping decisions** (CPSC vs. FDA column unification, surrogate keys, null-filling) — see [`silver_design_notes.md`](silver_design_notes.md).
@@ -25,6 +27,14 @@ The two-pronged validation surface ([ADR 0014](decisions/0014-schema-evolution-p
 | `usda_fsis_recalls_rejected` | (same) | same | (forensic only) |
 | `usda_fsis_establishments_bronze` | `src/schemas/usda_establishment.py` | `migrations/versions/0006_*`, `0007_*`, `0008_*` | `_sources.yml` |
 | `usda_fsis_establishments_rejected` | (same) | same | (forensic only) |
+| `nhtsa_recalls_bronze` | `src/schemas/nhtsa.py` | `migrations/versions/0011_nhtsa_recalls_bronze.py` | `_sources.yml` |
+| `nhtsa_recalls_rejected` | (same) | same | (forensic only) |
+| `uscg_recalls_bronze` | `src/schemas/uscg.py` | `migrations/versions/0013_uscg_recalls_bronze.py` | `_sources.yml` |
+| `uscg_recalls_rejected` | (same) | same | (forensic only) |
+| `uscg_manufacturers_bronze` | `src/schemas/uscg_manufacturer.py` | `migrations/versions/0015_uscg_manufacturers_bronze.py` | `_sources.yml` |
+| `uscg_manufacturers_rejected` | (same) | same | (forensic only) |
+| `uscg_manufacturer_details_bronze` | `src/schemas/uscg_manufacturer_detail.py` | `migrations/versions/0017_uscg_manufacturer_details_bronze.py` | `_sources.yml` |
+| `uscg_manufacturer_details_rejected` | (same) | same | (forensic only) |
 
 Bronze tables follow the [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md) rule: only storage-forced transforms (date string → datetime, "True"/"False" → bool) happen at the Pydantic layer. Value-level normalization moves to silver staging.
 

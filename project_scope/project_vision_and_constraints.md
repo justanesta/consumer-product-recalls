@@ -1,5 +1,7 @@
 # Desired Product
 
+> 📌 **Vision / North-Star doc (frozen).** This describes intent and constraints, not current build status or tooling choices. For live status see `implementation_plan.md`; for the selected stack (Neon Postgres + Cloudflare R2 per ADR 0005, dbt-core per ADR 0011, uv per ADR 0017) see `documentation/decisions/`. The future-tense phrasing below is deliberate — it is not updated to track progress (that is the implementation plan's job).
+
 I am looking to create a database of various product recalls that are published by U.S. government agencies. v1 ingests from five sources:
 
 1. The Food and Drug Administration (FDA)

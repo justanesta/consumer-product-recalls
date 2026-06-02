@@ -2,6 +2,8 @@
 
 This document covers production operations: scheduled runs, monitoring, secret rotation, and recovery procedures. For architectural rationale, see the ADRs in `documentation/decisions/`. For system architecture and component relationships, see [`architecture.md`](architecture.md).
 
+> ⚠️ **Partially stale (as of 2026-06-01) — full refresh scheduled in the Phase 6f doc-sync** (`project_scope/phase-6-execution-plan.md` §6f). USCG is **live since 2026-05-15** (3 extraction sources: recalls + manufacturers + manufacturer-details; 8 total across the pipeline). The USCG row below and any "4-source" framing predate the reactivation; live USCG cadences are in `documentation/uscg/` and the Phase 6f plan. The rest of this guide is current.
+
 ---
 
 ## Pipeline overview
@@ -17,7 +19,7 @@ Per-source extraction workflows (per [ADR 0010](decisions/0010-ingestion-cadence
 | USDA recalls | daily | **Full-dump** every run — no server-side filter exists | `.github/workflows/extract-usda.yml` |
 | USDA establishments | weekly (Mon) | Full-dump every run; ETag conditional GET enabled (Finding A revision, 2026-05-09) | `.github/workflows/extract-usda-establishments.yml` |
 | NHTSA | weekly | Full flat-file download per [ADR 0008](decisions/0008-nhtsa-flat-file-primary-api-for-vehicle-lookup.md) | `.github/workflows/extract-nhtsa.yml` |
-| USCG | — | **Indefinitely deferred** (USCG website down 2026-05-09; project proceeds 4-source). Polite HTML scrape was the planned strategy; reactivate when/if USCG returns | `.github/workflows/extract-uscg.yml` (planned, not implemented) |
+| USCG | daily | **LIVE since 2026-05-15** — polite HTML scrape with Records-Found short-circuit. (Plus `uscg_manufacturers` daily + `uscg_manufacturer_details` two-tier; full 3-source USCG cadence table lands in the Phase 6f §6f rewrite.) | `.github/workflows/extract-uscg.yml` |
 
 Plus a transformation workflow scheduled to run after the latest extraction completes (per [ADR 0018](decisions/0018-ci-posture.md)):
 
