@@ -3,7 +3,7 @@
 - **Status:** Active (findings; 2026-06-01)
 - **Type:** cross-cutting audit (per `documentation/documentation_model.md` type 6 — describes the
   world; the remediation/refactor work it motivated is owned by
-  `project_scope/src-consolidation-plan.md`, which this doc points at rather than prescribing here).
+  `project_scope/archive/src-consolidation-plan.md`, which this doc points at rather than prescribing here).
 - **Method:** three read-only `codebase-analyzer` passes over `src/` (extractors / bronze+landing /
   schemas+config+cli), then direct verification of every load-bearing claim.
 
@@ -83,7 +83,7 @@ These looked like inconsistencies but are correct; the refactor preserved them d
 ---
 
 ## Related
-- `project_scope/src-consolidation-plan.md` — the work this audit motivated (what we did + the NHTSA
+- `project_scope/archive/src-consolidation-plan.md` — the work this audit motivated (what we did + the NHTSA
   data remediation).
 - ADR 0030 (amended 2026-06-01) — the dedup-contract SSOT that makes the bug class structurally
   impossible.

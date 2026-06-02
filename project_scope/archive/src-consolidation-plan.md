@@ -1,7 +1,7 @@
 # `src/` soundness consolidation — plan
 
-- **Status:** Active — code complete on `refactor/src-soundness-consolidation`; NHTSA data remediation
-  pending; flips to `Complete (PR #N)` at merge.
+- **Status:** Complete — PR #48 (2026-06-01); archived. The NHTSA data remediation (Task 10) is the
+  one open operator step, tracked below.
 - **Owns:** the execution of the refactor + the NHTSA data remediation.
 - **Points at:** `documentation/audit/src_soundness_audit.md` for *what we found* (this doc does not
   restate the findings — single-home rule). ADR 0030 (amended 2026-06-01) for the dedup-contract

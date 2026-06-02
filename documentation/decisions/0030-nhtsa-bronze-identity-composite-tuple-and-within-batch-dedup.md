@@ -233,7 +233,7 @@ This ADR's existence is itself an argument for the per-source-Step-3 "first-extr
 
 ## Amendment (2026-06-01) — dedup-contract single source of truth; deep-rescan bug fixed
 
-The decision above (11-tuple identity, `hash_exclude_fields={source_recall_id}`, within-batch dedup, `allow_null_identity=True`) **stands unchanged**. This amendment records the *enforcement mechanism* added during the `src/` soundness consolidation (`project_scope/src-consolidation-plan.md`; findings in `documentation/audit/src_soundness_audit.md`) and the latent bug it eliminated.
+The decision above (11-tuple identity, `hash_exclude_fields={source_recall_id}`, within-batch dedup, `allow_null_identity=True`) **stands unchanged**. This amendment records the *enforcement mechanism* added during the `src/` soundness consolidation (`project_scope/archive/src-consolidation-plan.md`; findings in `documentation/audit/src_soundness_audit.md`) and the latent bug it eliminated.
 
 **The bug.** Each source's `BronzeLoader` dedup config was hand-copied in three places: the incremental `load_bronze`, the deep-rescan `load_bronze`, and `recovery.py`'s `RECOVERY_CONFIG_BY_SOURCE_NAME`. For NHTSA those copies had drifted — `NhtsaDeepRescanLoader.load_bronze` keyed on `identity_fields=("source_recall_id",)` and hashed the regen-unstable `RECORD_ID`, while the incremental path used this ADR's 11-tuple and excluded `RECORD_ID` from the hash. Both write `nhtsa_recalls_bronze`, so the deep-rescan path (reachable via the weekly `deep-rescan-nhtsa.yml` cron and `recalls deep-rescan nhtsa --change-type=historical_seed`) disagreed with the incremental path on both the identity bucket and the content hash — re-inserting the corpus as phantom rows on every NHTSA file regen.
 
