@@ -264,6 +264,40 @@ Single-variable difference between Test C and Test E (adding `eventlmd` to displ
 - `scripts/fda/audit/probe_displaycolumns.py` enforces this rule via a `--sort` pre-flight check at argument-parse time (errors before sending the request), so the probe never burns even an Akamai roundtrip on a known-malformed payload.
 - Production `src/extractors/fda.py` is structurally immune: `_DISPLAY_COLUMNS` ends with `eventlmd` and the payload's `sort: "eventlmd"` matches. Any future `_DISPLAY_COLUMNS` edit must preserve the invariant `sort_field ∈ displaycolumns`.
 
+### K0.3. Tier-2 per-product GET carries no net-new content — `*short` are whitespace-normalized truncations, `*indicator` are presence flags
+
+Codifies whether the lookup-only Tier-2 fields (`productdescriptionshort`, `recallreasonshort`, `codeinfoshort`, and the three `*indicator` flags) are worth capturing via per-product GET. **Decision: do not capture — derive the shorts in silver if needed; the indicators are redundant with `short IS NOT NULL`.**
+
+These fields 406 on the bulk POST (Finding K0), have never touched our bronze, and were inferred — from the Definitions PDF, via the audit docs — to be "truncations / UI toggle flags." That inference was tested directly on 2026-06-03 with `scripts/fda/audit/probe_tier2_shorts.py` (a random sample of 60 products from the 134,450-product bronze, plus length-extreme diagnostics; full payloads under `data/exploratory/fda/probes/`, gitignored).
+
+**`*short` = whitespace-normalized truncations of full fields already in bronze.** For each populated short, the probe tested whether its text — ignoring all whitespace — is a prefix of the corresponding full field (`content ⊆ full`):
+
+| short field | full field (in bronze) | prevalence (sample) | `content ⊆ full` |
+|---|---|---|---|
+| `productdescriptionshort` | `productdescriptiontxt` | 8/60 (13.3%) | **8/8** |
+| `recallreasonshort` | `productshortreasontxt` | 7/60 (11.7%) | **7/7** |
+| `codeinfoshort` | `codeinformation` | 5/60 (8.3%) | **5/5** |
+
+A raw character-prefix test flagged ~5 cases as `not_prefix`, but the bounded head dumps showed the only divergence was FDA stripping newlines and collapsing tabs (`Molift⏎Product` → `MoliftProduct`, `INJECTABLE\t10` → `INJECTABLE 10`) — i.e. the same text reflowed, then truncated. **Zero net-new content.** The cut length varies (`codeinfoshort` 84/522/543; `productdescriptionshort` 55–480), so it is *not* reproducible as `LEFT(full, N)`, but it does not need to be — the full field is stored.
+
+**`*indicator` = pure "was-truncated" presence flags.** The indicator value tracked short-presence with zero exceptions across all 60 records:
+
+| indicator | observed values × short-presence |
+|---|---|
+| `productdescriptionindicator` | `'false'`→short_null ×52, `'true'`→short_present ×8 |
+| `recallreasonindicator` | `'false'`→short_null ×53, `'true'`→short_present ×7 |
+| `codeinfoindicator` | `None`→null ×13, `'false'`→short_null ×42, `'true'`→short_present ×5 |
+
+So `indicator='true' ⟺ a short exists`; the flag is the "show more…" UI toggle and is equivalent to `short IS NOT NULL`. Not collected; carries nothing beyond the short's nullness.
+
+**Cost-benefit.** Capturing the shorts would be ~134K Akamai-paced per-product GETs for content already in bronze (or derivable). The decision: **skip all Tier-2** (this finding), consistent with the `productlmd` skip (K0.1). **Bug 2** (FDA `product_name` should prefer the truncated `productdescriptionshort`) → derive in silver via `regexp_replace(product_description_txt,'\s+',' ','g')` then truncate, not a fetch.
+
+**Reopen condition.** If a populated `*short` is ever observed whose whitespace-stripped content is *not* a prefix of its full field (genuinely curated text), reopen — re-run `probe_tier2_shorts.py --sample N`, which reports the `content ⊆ full` count and dumps any genuine net-new cases.
+
+**Side finding.** `codeinformation` reaches **8,867,432 chars** in full bronze (vs the 205,424 max in the 2026-05-29 100-record window) — the `src/schemas/fda.py` comment and `capture_expansion_backlog.md` figure were updated. Its silver treatment (parse into product-code records) is deferred to `project_scope/freetext-enrichment-backlog.md`.
+
+The capture decision is homed in `project_scope/silver-field-capture-expansion-plan.md` (the "(b) PR" — Tier-2 excluded).
+
 ### K. GET lookup endpoints handle the empty-result case cleanly
 
 Confirmed against `get_press_release_urls.yml` for `event_id=98815` (which has zero press releases):

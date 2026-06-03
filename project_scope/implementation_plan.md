@@ -706,6 +706,7 @@ If a fourth source's schema reveals a pattern that meaningfully repeats across t
 
 - Silver `recall_event`, `recall_product`, `firm`, `recall_event_firm` fed from all five sources' staging models
 - **Silver field remap (the "(a) PR")** — audit-driven correction of cross-source silver field mappings + canonical column naming + dbt tests, grounded in full-corpus bronze profiling. Owned by `project_scope/silver-field-remap-plan.md`; audit artifacts `documentation/audit/{bronze_corpus_profile,cross_source_consolidation}.md`; canonical-naming decision ADR 0036. Precedes 6b/6c per `phase-6-execution-plan.md` § Sequencing Constraints.
+- **Silver field capture-expansion (the "(b) PR")** — the FDA work the (a) remap deferred: (A) `firm_fda_attributes` sidecar + posted-date silver lift (fields already in bronze via migration 0019), (C) new Tier-3 per-event press-release extractor + bronze child table. Tier-2 excluded (no net-new content, `api_observations.md` K0.3); `code_information` parse deferred to `freetext-enrichment-backlog.md`. Owned by `project_scope/silver-field-capture-expansion-plan.md`; candidate parking lot `documentation/audit/capture_expansion_backlog.md` § FDA.
 - Firm entity resolution: FDA's `firmfeinum` as the anchor per ADR 0002; fuzzy-match (RapidFuzz) across sources for non-FDA firms
 - Full dbt test suite per ADR 0015 (60–80 generic tests + 5 singular + freshness)
 - Gold: aggregate views for dashboards, denormalized search index

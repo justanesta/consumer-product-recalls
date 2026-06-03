@@ -147,9 +147,12 @@ class FdaRecord(BaseModel):
     # Phase 6a.5 capture expansion (2026-05-31) — audit §7a SHIP fields. All
     # nullable: populations range from 0% (firm_line2_adr in the probe window)
     # through 15% (firm_surviving_*) to 100% (firm_city/country). codeinformation
-    # is lot/serial text up to ~205k chars. firm_surviving_fei is an FEI (numeric,
-    # storage-forced to int like firm_fei_num). All silver mapping/naming is
-    # deferred to the (b) capture-expansion PR; bronze just lands the bytes.
+    # is lot/serial free text — up to ~8.86M chars across full bronze (2026-06-03
+    # probe; the earlier ~205k was a 100-record-window max). firm_surviving_fei is
+    # an FEI (numeric, storage-forced to int like firm_fei_num). Bronze just lands
+    # the bytes; silver mapping/naming for the firm/posted fields is the (b)
+    # capture-expansion PR, while codeinformation's silver *parse* is deferred
+    # further to project_scope/freetext-enrichment-backlog.md (post-6b).
     code_information: str | None = Field(default=None, validation_alias="CODEINFORMATION")
     firm_city_nam: str | None = Field(default=None, validation_alias="FIRMCITYNAM")
     firm_country_nam: str | None = Field(default=None, validation_alias="FIRMCOUNTRYNAM")
