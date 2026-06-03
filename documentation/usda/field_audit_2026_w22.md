@@ -285,6 +285,37 @@ USDA is also Akamai-fronted (per `documentation/usda/recall_api_observations.md`
 | `district` has format inconsistency: `'5'` (100 records) coexists with `'05'` (1830 records) — same district, two formats | Data-quality note for future Phase 6/7 normalization |
 | `county` 1.5%, `geolocation` 1.2% null after treating JSON-`false` sentinel as null per `_is_null` | Matches Finding C; no change |
 
+### Corpus-scale re-validation (2026-06-02 — full-corpus seed)
+
+The 2026-05-31 re-seed consolidated bronze to a single snapshot: **2,005 recall rows (1,216 English silver grain + 789 Spanish), 0 edit-versions**; **7,979 establishments** (1 version each). Unlike FDA/CPSC, USDA was already at full corpus in the 2026-05-28 R2 run (1,216 distinct recalls) — the re-seed mainly removed multi-snapshot edit-stacking (6,072 rows → 2,005 single-version). Re-running the four scripts + the two new siblings (`usda_recalls/.../inspect_field_population.sql`, `usda_establishments/.../inspect_join_key_and_dbas.sql`) **confirmed the R2 findings and added three load-bearing results.** Feeds `documentation/audit/bronze_corpus_profile.md` §1–§6.
+
+**The `''`-sentinel correction (the headline).** `explore_usda_bronze.sql` Q19 counts SQL NULL only and reads **0%** for `establishment`/`states`/`distro_list`/`product_items`/`qty_recovered`/`summary`/`company_media_contact`. But USDA preserves `''` as the missing sentinel (ADR 0027). The nullif-based silver-accurate emptiness — what staging actually sees — is very different:
+
+| Field | Q19 (SQL-NULL) | nullif (silver-accurate) |
+|---|---|---|
+| `establishment` | 0% | **35.0%** (probe Q4 no_establishment_field) |
+| `distro_list` | 0% | **79.7%** |
+| `product_items` | 0% | **40.5%** |
+| `company_media_contact` | 0% | **44.7%** |
+| `states` | 0% | **28.4%** |
+| `qty_recovered` | 0% | **14.1%** |
+| `recall_reason` | 0% | **1.2%** |
+| `summary` | 0% | 0.0% (genuinely populated) |
+
+The establishment side has the same artifact: `duns_number` reads 0% SQL-NULL but is ~85% `''`; `county`/`geolocation` use a `'false'` text sentinel (122 / 94 records). **Any NOT-NULL decision must use the nullif figures, not Q19.**
+
+**The risk_level derive — confirmed 1:1 at corpus scale (Q2).** Class I → High - Class I (823), Class II → Low - Class II (187), Class III → Marginal - Class III (43), Public Health Alert → Public Health Alert (163); `risk_levels_per_classification` = **1 on every row**. The §4/§7 decision to **derive** `risk_level` in silver (CASE WHEN on `recall_classification`), not lift it, is locked.
+
+**Exploded tokens recover the PDF taxonomy (Q4–Q6).** The comma-separated multi-value fields explode cleanly to the documented base sets: `processing` → **10 tokens** (from 20 raw combinations; 2.0% multivalued), `recall_reason` → **9 tokens** (from 26 raw combinations; **30.3% multivalued**) — matching the PDF's 10/9 exactly. The W5 `accepted_values` tests **must run on exploded tokens**: testing raw `recall_reason` would false-fail ~30% of rows. Token SSOTs (with %) are in `bronze_corpus_profile.md` §4.
+
+**Establishment join key (Q1–Q3, new sibling).** `establishment_number` is **100% populated + 100% unique** (7,979/7,979) — the empirical basis for Option A keying `firm_establishment_attributes` on it; `establishment_name` is only **86.1% unique** (1,110 shared), confirming the name can't be the key. New shape result: **67.1% of numbers are '+'-joined multi-grant composites** (`M46712+P46712`; prefixes M 81% / V 11% / P 4% / I 3% / G 1%, none outside M/P/I/G/V). Implication: the deferred `product_items` embedded-number match (6b Signal 1) must **split the composite** to match a single embedded grant.
+
+**DBA fallback adds zero join coverage (probe Q2 == Q3 == 82.91%)** — empirically confirms "DBAs marginal." The §7 element-filter removes exactly **94 `'N/A'` + 15 `'None'`** placeholder elements (0 empty-string) of 6,350 total; real-DBA fill is 32.4% (2,585 establishments).
+
+**Confirmed.** `size` 4 values + `''` (Very Small 41.7% / Small 38.9% / **N / A 10.1% undocumented** / Large 6.6% / `''` 2.6%); `status_regulated_est` `''` active 90.0% / Inactive 10.0%; recall→establishment per-record coverage **55.0% on bronze** (→ ~63% post-staging-decode, gated by the 35.0% empty `establishment`); `qty_recovered` dominated by `"0 pounds"` recovered-nothing recalls (note a whitespace-variant duplicate — `"0 pounds"` ×235 and ×17 — for the enrichment Tier-0 trim).
+
+**SCD signal.** 0 edit-versions in the single snapshot (NEED low, snapshot caveat). BENEFIT candidates: `status_regulated_est` active↔Inactive flips (10% Inactive) and the **105/789 bilingual pairs whose EN/ES `last_modified_date` diverge** (FSIS updates languages independently) — both need cross-snapshot history to measure; recorded as hypothesis per the inference-vs-observation discipline.
+
 ## References
 
 - `src/schemas/usda.py` — recall bronze Pydantic contract

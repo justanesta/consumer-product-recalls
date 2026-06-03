@@ -506,6 +506,27 @@ DEEP_RESCAN_BY_SOURCE_NAME = {
 10. What does `pageNum_manufacturers=651` (out-of-range) return? 200 with empty table? 404? Redirect? Determines whether the walk loop's stop condition is empty-row detection vs HTTP signal.
 11. How many recall MICs (~93.2% population per Finding S of recalls) resolve to a directory row? Are there orphans? Cross-source coverage gap is a Phase 6b firm-resolution input.
 
+## N. Corpus-scale re-validation (2026-06-02 — silver-field-remap W1)
+
+Re-running the new `scripts/sql/uscg_manufacturers/bronze/explore_bronze_shape.sql` + `scripts/sql/uscg_manufacturer_details/bronze/explore_bronze_shape.sql` at corpus scale (both tables 16,263 rows) confirmed Findings A–M and surfaced the SCD-relevant shape. Feeds `documentation/audit/bronze_corpus_profile.md` §1/§2/§3/§5.
+
+### N.1 — Both tables re-seeded to single snapshots: the §M reassignments are wiped from live bronze
+
+`uscg_manufacturers_bronze`: 16,263 rows / 16,263 distinct MICs / **0 edit-versions** (the seed-vs-incremental AXY/COP pair from §M.1 is gone — bronze was re-seeded; the reassignment-detail query returns 0 rows). **Observation-vs-inference:** MIC reassignment is real and measured (§M detail-page lineage; §M.6 probe), but it is **not visible in the current listing-table edit-versions** — the recycle signal now lives *statically* in the detail-table succession lineage (N.3), not in cross-snapshot diffs. The SCD-2 modeling must read `past_company`/`out_of_business`, not edit-versions.
+
+### N.2 — Confirmations at corpus scale
+- **MIC format** (Finding I): alpha-3 99.40% / mixed-alnum 0.41% / digit-block 0.16% / lowercase-drift 0.03% — exact match to §L.1.
+- **Missing rates** (Finding F.3, silver-accurate): company 0.02% / address 0.24% / city 0.45% / state 0.38%.
+- **State** (Finding G): FL 19.9% dominates; Canadian BC (3.66%, rank 5) / ON (3.63%, rank 6) / QC (1.72%) present despite the dropdown gap.
+- **Address truncation** (Finding F.1): max 29 chars, 274 rows at the cap; full address detail-only.
+- **Detail seed complete:** 1:1 listing coverage (16,263 both), 0 detail-not-in-listing orphans.
+
+### N.3 — Succession lineage + the defunct-directory finding (the SCD-2 inputs)
+- **The directory is mostly DEFUNCT:** `out_of_business` populated on **67.6%** of all MICs; `status` is `''` on the same 67.6% (≈ the OOB set); only 29.5% `In Business`, 2.5% `Inactive`, 0.4% `Federal or State Agency`. The 16k directory is an accumulating historical registry, not a current-firms list.
+- **Recycle signal:** `past_company_1` 20.6% / `dba` 30.9% / `parent_company` 4.9% / `parent_mic` 1.0%. Of 6,604 past-company entries, 58% carry an `(OOB)` marker but **only 392 (10%) a parseable year** — confirms §M.6: the time-aware recall↔manufacturer join is **flag-only**, not precise.
+- **`date_modified` change oracle:** 96.0% populated, range 1972 → **2031** (a future-date data-quality outlier — silver should sanity-bound), 4,302 distinct dates. The Path B incremental signal per §M.5.
+- (Minor: `past_company_3` fill 10.3% > `past_company_2` 9.7% — the source's slot assignment isn't strictly sequential; not load-bearing.)
+
 ## References
 
 - Phase 5d Step 7 plan: `project_scope/phase-5d-uscg-manufacturers.md`

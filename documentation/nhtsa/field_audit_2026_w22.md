@@ -535,6 +535,20 @@ Per `project_scope/phase-6-execution-plan.md` § Phase 6a.5, after the NHTSA his
 - [ ] Cross-corpus stability run post-seed (`cross_corpus_stability.py`) — likely surfaces additional AC DELCO-class drift events given the wider time window
 - [ ] Capture-expansion review for `recalls.json` API + `RCL_Annual_Rpts` if FastAPI consumers request these features
 
+### Corpus-scale re-validation (2026-06-02 — silver-field-remap W1, 321,592 rows)
+
+Closes most of the "Phase 6a.5 post-seed re-validation" checklist above (explore Q1–Q16 + the 11-tuple assert + inspect + mfgname_vs_mfgtxt re-run). The full FLAT_RCL seed + the 2026-06-02 incremental put bronze at **321,592 rows / 30,045 campaigns / 321,425 distinct records** — the 74,604 above was a `--since` slice; the full corpus is ~4.3× and makes NHTSA the **largest** bronze table. The incremental inserted **167 changed rows**, so unlike the single-shot FDA/CPSC/USDA seeds NHTSA carries **real cross-run edit-versions** — which makes the identity assert a measurement, not a hypothesis. Feeds `documentation/audit/bronze_corpus_profile.md` §1–§6.
+
+**11-tuple identity STABLE at corpus scale (the SCD anchor — ADR 0033 holds).** `assert_eleven_tuple_identity_stable.sql`: the natural-key core (`compname`/`maketxt`/`modeltxt`/`yeartxt`/`rcl_cmpt_id`/`mfr_comp_name`) = **0 drift**; the only non-zero is `mfr_comp_ptno` (7 groups), and the samples are supplier part-number supersession (NOVA BUS window part numbers across 2 landing paths) — the documented structural-multi-batch class (silver-correct, not fragmenting). The 11-tuple surrogate key does **not** fragment on the 167 real edit-versions.
+
+**The `''`-sentinel correction (load-bearing).** `explore_bronze_shape.sql` Q9 reports the drift-added fields as 100% populated every year back to 1966 — a column-presence artifact (the flat file backfills `''`, not absence). The nullif-based `inspect_field_population.sql` Q1 is silver-accurate: `rpno` **94.5%** empty (→ §4 drop confirmed), `fmvss` 74.3%, `mfr_comp_ptno` 48.4% / `mfr_comp_desc` 48.4% / `mfr_comp_name` 47.3% (the 2020-drift component fields), `mfgcampno` 39.2%, `notes` 8.5%, `conequence_defect` 5.5%, `odate` 4.1%, `desc_defect` 2.6%, `corrective_action` 2.5%. NHTSA joins FDA + USDA in the must-nullif club.
+
+**Bug 1 — `rcltype` enum at corpus scale (6 values):** V 87.3% (280,679) / T 6.9% (22,282) / E 5.3% (16,978) / C 0.3% (1,117) / **I 0.1% (393)** / **X 0.04% (143)**. The audit's V/E/T/C mapping is right; `I`/`X` are rare + undocumented → `accepted_values` warn. `yeartxt = 9999` sentinel 9.5% (→ NULL).
+
+**Bug 2 — filer/manufacturer split strongly validated:** `mfgname` (filer) ≠ `mfgtxt` (manufacturer) on **38.0% of rows exact / 30.3% normalized**; of the differing rows **95.9% are completely disjoint** strings (not casing) — genuine supplier/equipment-filed recalls (campaign 09E012000: filer `SABERSPORT` affecting **19 distinct vehicle manufacturers**; Honeywell affecting GM). `mfgname` is constant per campaign (0 campaigns vary); `mfgtxt` varies up to 19/campaign. NHTSA contributes **3,940** distinct firms under the two-role split (3,569 filers + 2,836 manufacturers, 2,465 in both). The two-row (filer + manufacturer) emission is confirmed correct.
+
+**§4 lift sizing:** `desc_defect` (→ recall_reason) avg 392 / max 1,982 chars, 97.4% populated; `corrective_action` avg 278 / max 1,678; `conequence_defect` avg 130 / max 759 (typo-fix → `consequence_of_defect`); `notes` avg 195 / max 1,875. `influenced_by`: MFR 82.8% / ODI 14.4% / OVSC 2.9% / ISSUE_INVGSTN (2 rows) → warn. `do_not_drive` 0.62% true / `park_outside` 0.37% true (clean booleans). `number_of_units ← potaff` is a **clean integer** (0% empty, 0–32M) — no Tier-0 parse, unlike FDA/USDA free-text quantity.
+
 ## References
 
 - `src/extractors/nhtsa.py` — incremental extractor (`NhtsaExtractor`) + historical loader (`NhtsaDeepRescanLoader`). 11-tuple identity config at `load_bronze()`

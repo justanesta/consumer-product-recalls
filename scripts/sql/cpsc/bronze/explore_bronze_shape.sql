@@ -127,12 +127,28 @@ order by records desc
 limit 5;
 
 \echo ''
-\echo '=== Q11: weekday gap analysis ==='
+\echo '=== Q11: weekday gap analysis (dense-era only) ==='
 -- Finds weekdays with zero CPSC activity. Expected gaps = US federal
 -- holidays. Unexpected gaps may indicate pipeline failures or API outages.
-with date_series as (
-  select generate_series(min(last_publish_date)::date, max(last_publish_date)::date, '1 day'::interval)::date as day
+--
+-- RECENT-HEALTH WINDOW (added 2026-06-02): the full-corpus deep-rescan seed
+-- carries last_publish_date back to 1975-04-07, and CPSC only reached steady
+-- ~5-active-days/week cadence around 2024 — so a "weekday with no activity" is
+-- an anomaly ONLY in the recent dense era. Pre-dense, CPSC published 1-4
+-- days/week and gaps are normal; a min(date) floor would emit ~13k meaningless
+-- rows spanning 51 years. Bound the series to a trailing 2-year window from the
+-- max date so the result is the actual holiday/outage signal — this
+-- auto-advances as the corpus grows (never goes stale). Widen the interval for
+-- a longer historical view (but gaps before ~2024 are expected, not anomalies).
+with bounds as (
+  select greatest(min(last_publish_date)::date,
+                  (max(last_publish_date) - interval '2 years')::date) as floor_day,
+         max(last_publish_date)::date                                  as max_day
   from cpsc_recalls_bronze
+),
+date_series as (
+  select generate_series(floor_day, max_day, '1 day'::interval)::date as day
+  from bounds
 ),
 active_days as (
   select distinct last_publish_date::date as day from cpsc_recalls_bronze
