@@ -164,3 +164,34 @@ class FdaRecord(BaseModel):
     firm_surviving_nam: str | None = Field(default=None, validation_alias="FIRMSURVIVINGNAM")
     firm_surviving_fei: _FdaNullableInt = Field(default=None, validation_alias="FIRMSURVIVINGFEI")
     posted_internet_dt: _FdaNullableDate = Field(default=None, validation_alias="POSTEDINTERNETDT")
+
+
+class FdaPressReleaseRecord(BaseModel):
+    """Bronze-layer schema for FDA press-release rows (Tier-3, capture-expansion (b) PR).
+
+    Targets ``GET /search/pressreleaseurls/{eventid}`` — RESULT is a list of dicts with
+    UPPERCASE keys (finding D), 4 columns per row. Press releases are **event-grain** and
+    M:1 to the recall event, so ``source_recall_id`` here is RECALLEVENTID (the event),
+    NOT PRODUCTID like ``FdaRecord``. The bronze identity is
+    ``(source_recall_id, press_release_url)`` — one event can carry several releases.
+
+    Not every event has a press release (the response may be 0 rows); the extractor treats
+    an empty RESULT as a successful no-op, so a zero-PR event simply produces no rows here.
+    ``strict=True`` + ``extra='forbid'`` is the JSON drift fence — an unexpected column
+    (e.g. a 5th field FDA adds) quarantines the row (ADR 0014).
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+    # Event id (RECALLEVENTID) as TEXT — the work-list anchor + first identity field.
+    # Stored as str (not int like FdaRecord.recall_event_id) to match the bronze
+    # source_recall_id TEXT column and the (source_recall_id, press_release_url) identity.
+    source_recall_id: _FdaStrId = Field(validation_alias="RECALLEVENTID")
+    # Second identity field — required; a null URL is a meaningless PR row → quarantine.
+    press_release_url: str = Field(validation_alias="PRESSRELEASEURL")
+    # "State", "Firm", or "FDA" per the Definitions PDF. Nullable; silver nullifs ''.
+    press_release_type: str | None = Field(default=None, validation_alias="PRESSRELEASETYPE")
+    # MM/DD/YYYY → UTC midnight (finding H); '' / null → None (finding J), storage-forced.
+    press_release_issued_dt: _FdaNullableDate = Field(
+        default=None, validation_alias="PRESSRELEASEISSUEDT"
+    )

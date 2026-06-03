@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from src.schemas.fda import FdaRecord, _parse_fda_date, _to_int, _to_nullable_int, _to_str
+from src.schemas.fda import (
+    FdaPressReleaseRecord,
+    FdaRecord,
+    _parse_fda_date,
+    _to_int,
+    _to_nullable_int,
+    _to_str,
+)
 
 # ---------------------------------------------------------------------------
 # Minimal valid row matching the bulk POST displaycolumns + RID
@@ -51,6 +58,60 @@ _FULL_ROW: dict = {
     "FIRMSURVIVINGFEI": "9876543",
     "POSTEDINTERNETDT": "05/07/2025",
 }
+
+
+# ---------------------------------------------------------------------------
+# Tier-3 press-release rows (capture-expansion (b) PR)
+# ---------------------------------------------------------------------------
+
+_PR_ROW: dict = {
+    "RECALLEVENTID": "98815",
+    "PRESSRELEASEURL": "https://www.fda.gov/safety/recalls/example",
+    "PRESSRELEASETYPE": "Firm",
+    "PRESSRELEASEISSUEDT": "05/07/2025",
+}
+
+
+class TestFdaPressReleaseRecord:
+    def test_happy_path(self) -> None:
+        rec = FdaPressReleaseRecord.model_validate(_PR_ROW)
+        # source_recall_id is the EVENT id (RECALLEVENTID), stored as str.
+        assert rec.source_recall_id == "98815"
+        assert rec.press_release_url == "https://www.fda.gov/safety/recalls/example"
+        assert rec.press_release_type == "Firm"
+        assert rec.press_release_issued_dt == datetime(2025, 5, 7, tzinfo=UTC)
+
+    def test_recalleventid_int_coerced_to_str(self) -> None:
+        rec = FdaPressReleaseRecord.model_validate({**_PR_ROW, "RECALLEVENTID": 98815})
+        assert rec.source_recall_id == "98815"
+
+    def test_null_issued_date(self) -> None:
+        rec = FdaPressReleaseRecord.model_validate({**_PR_ROW, "PRESSRELEASEISSUEDT": None})
+        assert rec.press_release_issued_dt is None
+
+    def test_empty_issued_date_is_none(self) -> None:
+        # FDA's dual null sentinel (finding J): '' → None, storage-forced (ADR 0027).
+        rec = FdaPressReleaseRecord.model_validate({**_PR_ROW, "PRESSRELEASEISSUEDT": ""})
+        assert rec.press_release_issued_dt is None
+
+    def test_null_type_preserved(self) -> None:
+        rec = FdaPressReleaseRecord.model_validate({**_PR_ROW, "PRESSRELEASETYPE": None})
+        assert rec.press_release_type is None
+
+    def test_extra_field_forbidden(self) -> None:
+        # The JSON drift fence: a 5th column FDA adds quarantines the row (ADR 0014).
+        with pytest.raises(ValidationError):
+            FdaPressReleaseRecord.model_validate({**_PR_ROW, "UNEXPECTED": "x"})
+
+    def test_missing_url_quarantines(self) -> None:
+        row = {k: v for k, v in _PR_ROW.items() if k != "PRESSRELEASEURL"}
+        with pytest.raises(ValidationError):
+            FdaPressReleaseRecord.model_validate(row)
+
+    def test_missing_event_id_quarantines(self) -> None:
+        row = {k: v for k, v in _PR_ROW.items() if k != "RECALLEVENTID"}
+        with pytest.raises(ValidationError):
+            FdaPressReleaseRecord.model_validate(row)
 
 
 # ---------------------------------------------------------------------------
