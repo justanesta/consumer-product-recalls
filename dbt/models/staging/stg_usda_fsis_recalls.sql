@@ -64,6 +64,7 @@ select
     nullif(distro_list, '')         as distro_list,
     nullif(labels, '')              as labels,
     nullif(qty_recovered, '')       as qty_recovered,
+    nullif(company_media_contact, '') as company_media_contact,  -- W4 Phase A: → recall_event.firm_contact_block_text
     nullif(recall_url, '')          as url,
     content_hash,
     extraction_timestamp,

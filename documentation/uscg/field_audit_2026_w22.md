@@ -482,6 +482,20 @@ Run command: `psql -f scripts/sql/uscg/bronze/inspect_field_population.sql`. Bro
 - Update `firm.sql` + `recall_event_firm.sql` USCG branches per §3 Bug 3 fix (recommended in §7)
 - Email USCG OII with the boat_type empirical code list + severity enum meaning ask + `0`/`00` distinction ask + MIC `111` data-quality question
 
+### Corpus-scale re-validation (2026-06-02 — silver-field-remap W1, 1,763-row re-seed)
+
+The 2026-05-31 historical re-seed (1,763 fetched / 1,763 loaded / **0 rejected** — the year-prefix-invariant removal eliminated the prior 251 quarantines) confirmed every §4/§5 finding at corpus scale; no corrections. Feeds `documentation/audit/bronze_corpus_profile.md` §1–§6.
+
+- ✅ **severity** (`inspect` Q1): H 38.2% / L 34.9% / M 1.4% / S 0.1%, **NULL 23.1%** (77% populated), + 37 lowercase (`l`=35, `h`=2) + the `1` outlier. Silver `upper(nullif(severity,''))` + `accepted_values {H,L,M,S}` warn.
+- ✅ **hin** (Q2): 52.8% real / 1.2% `N/A` / 46.0% null. Silver `'N/A'→NULL`.
+- ✅ **boat_type** (Q3): 25 distinct codes, NULL 35.7%; `11` 24.9% dominates; `0`(7)≡`00`(46). Lookup-table gap stands (USCG OII ask). Silver `lpad(boat_type,2,'0')`.
+- ✅ **25-char narrative cap** (Q4): `problem_1` max 25 / p95 25 (avg 17); `problem_2` max 25 (avg 18). Confirmed source-side cap — snippets only.
+- ✅ **model_year** (Q5): single 4-digit 59.7% / null 32.4% / 2-digit 5.3% / range-list 1.8% / non-numeric 0.1% (`AFTER 1`,`ALL`); `9999` sentinel. Silver `9999→NULL`; 2-digit padding deferred to enrichment.
+- ✅ **disposition** (Q6): `Closed` 1476 / `Open` 190 / `CLOSED` 95 / `OPEN` 2 — 4 case-forms → `lower()` → {open,closed}.
+- ✅ **firm-rollup quality** (Q7/Q8): 83.0% of MICs → 1 company, 91.3% of companies → 1 MIC; recall→directory coverage **714/718 (99.44%)**. The ~10–17% multi-name tail (e.g. `SER`→`SEA RAY BOATS`/`SEA RAY BOATS INC`; `BUJ`→3 forms) is Phase 6b suffix-strip/RapidFuzz scope.
+- 🆕 **`''`-club correction:** USCG missing scalars are genuine SQL NULL, not `''` (Q5 `IS NULL` == nullif counts). USCG is the HTML-scraper exception (like CPSC); its traps are named sentinels, not bare `''`.
+- **SCD:** 0 edit-versions in the single-shot recalls seed; the SCD axis is the firm anchor `mic`, measured on the manufacturer side (see `manufacturer_scraping_observations.md` §N).
+
 ## References
 
 - `src/extractors/uscg.py` — HTML scraping extractor with `_should_short_circuit` + `_check_year_prefix_consistency` (removed per Finding G) + `UscgDeepRescanLoader` override

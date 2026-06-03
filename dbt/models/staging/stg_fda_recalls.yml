@@ -32,6 +32,37 @@ models:
                 severity: warn
                 warn_if: ">300"
                 error_if: ">1000"
+      - name: phase_txt
+        description: FDA recall lifecycle phase (→ silver lifecycle_status). Stable 3-value enum.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Terminated', 'Ongoing', 'Completed']
+      - name: center_classification_type_txt
+        description: FDA classification severity (→ silver classification); 1/2/3 + NC.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['1', '2', '3', 'NC']
+      - name: initial_firm_notification_txt
+        description: >
+          How the firm first notified the public (→ silver notification_method).
+          warn: the full corpus surfaced FAX + Visit beyond the audit's 6-value
+          assumption — a new method should flag, not break the build.
+        tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - 'Letter'
+                  - 'Combination'
+                  - 'Telephone'
+                  - 'E-Mail'
+                  - 'Press Release'
+                  - 'FAX'
+                  - 'Other'
+                  - 'Visit'
+              config:
+                severity: warn
       - name: content_hash
         description: SHA-256 of canonicalized record payload (ADR 0007). Dedup key.
         tests:

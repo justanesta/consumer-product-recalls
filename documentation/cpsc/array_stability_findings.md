@@ -127,6 +127,56 @@ the only observed CPSC source-side edit did not character-normalize
 name or model. One data point isn't validation, but it's no longer
 zero. Continued monitoring as more edits accumulate.
 
+## Corpus-scale update — 2026-06-02 (full-corpus seed, 9,828 rows)
+
+The Phase 6a.5 full-corpus deep-rescan seed (extraction run 2026-05-31;
+9,828 rows / 9,828 distinct recalls) **falsifies the single-product premise**
+the 2026-05-08 "vacuous" interpretation rested on. Source:
+`scripts/sql/cpsc/bronze/explore_bronze_shape.sql` Q8 +
+`inspect_array_field_population.sql` Q3, folded into
+`documentation/audit/bronze_corpus_profile.md` §2/§6.
+
+### Multi-product recalls now exist at scale — the ordinal key is load-bearing
+
+| `products[]` length | recalls | % |
+|---|---|---|
+| 1 | 9,011 | 91.69% |
+| 2 | 520 | 5.29% |
+| 3 | 124 | 1.26% |
+| ≥4 | 173 | 1.76% |
+| **max** | **57** | one recall |
+
+11,836 product elements across 9,828 recalls (mean ~1.20). **8.3% of recalls
+carry >1 product.** The silver `recall_product` model now genuinely fans out to
+multiple rows per recall, so `product_ordinal` in the md5 surrogate key at
+`recall_product.sql:38-46` is **load-bearing, not decorative** — and the C2/C3
+failure mode is now *physically possible* (it could not fire on a uniformly
+1-element corpus). The "failure mode physically cannot fire on a 1-element
+array" reasoning from the 2026-05-08 baseline is **retired**.
+
+### But C2/C3 are still untested — the blocker shifted, it didn't clear
+
+Detecting an append-only violation (C2) or a name/model re-normalization (C3)
+requires **two content-hash snapshots of the same recall** to diff. The fresh
+single-shot seed has **0 edit-versions** (`explore` Q4/Q5: 9,828 rows / 9,828
+distinct, 0 multi-hash recalls). Consequences:
+
+- The C2/C3 assert scripts still return `drift_group_count = 0` — but now
+  because there is **nothing to compare**, not because arrays are 1-element.
+- The re-seed reset bronze to one row per recall, so the lone 2026-05-08 recall
+  `00015` C3 data point **predates this seed and is no longer in the live
+  table** (it stands above as provenance only). C3 is back to zero observed
+  cross-run scenarios in current bronze.
+- The assumptions become genuinely testable only once **multi-version ×
+  multi-product** recalls accumulate (daily incrementals + weekly deep-rescans
+  over time).
+
+**Net position (2026-06-02):** the silver product surrogate key is now exercised
+by real fan-out — validating that the ordinal-based recipe is *necessary* — while
+the append-only / normalization-stability guarantees on that key remain
+**unproven and now non-vacuously untested**. Keep both assert scripts running at
+`severity=warn`; the first multi-version multi-product recall is the real test.
+
 ## ADR 0031 threshold reconciliation
 
 ADR 0031's CPSC row currently reads:
@@ -136,10 +186,10 @@ ADR 0031's CPSC row currently reads:
 After running the scripts, update the ADR row with:
 
 - **Detection status cell**: replace "TBD" with `scripts/sql/cpsc/bronze/assert_products_array_append_only.sql` + the C3 sibling.
-- **Threshold cell**: if both Q1s are 0 and Q3 confirms array-length=1 dominates, note that the threshold is "vacuous so far — assumption physically cannot fail at observed array sizes" alongside the existing 0.1% figure. Revisit when multi-product recalls land.
+- **Threshold cell**: if both Q1s are 0 and Q3 confirms array-length=1 dominates, note that the threshold is "vacuous so far — assumption physically cannot fail at observed array sizes" alongside the existing 0.1% figure. Revisit when multi-product recalls land. **Updated 2026-06-02:** multi-product recalls have landed (8.3%, max 57 — see the corpus-scale update above), so retire the "vacuous" qualifier; the failure mode is now physically possible and testability is blocked on edit-versions (0 in the current seed), not array size. The 0.1%-per-quarter revisit threshold stands.
 
 ## Follow-up triggers
 
 - If Q1 (C2) ever returns >0: trigger Phase 6 reconciliation per ADR 0031. Likely fix is switching CPSC's silver surrogate from ordinal-based to content-based, mirroring NHTSA's 11-tuple recipe structurally.
 - If Q1 (C3, either field) ever returns >0: same trigger; product-level fuzzy resolution becomes a Phase 6 deliverable item alongside firm-level resolution at `implementation_plan.md:606-610`.
-- If Q3 shows the corpus is starting to accumulate multi-product recalls (max > 1): the assumption is no longer vacuous — flag in next monthly review.
+- ~~If Q3 shows the corpus is starting to accumulate multi-product recalls (max > 1): the assumption is no longer vacuous — flag in next monthly review.~~ **FIRED 2026-06-02** — the full-corpus seed surfaced 8.3% multi-product recalls (max 57); the assumption is no longer vacuous (see the corpus-scale update section). Next trigger: the first recall observed with **both** >1 product **and** >1 content-hash version — that is the first genuine C2/C3 test.

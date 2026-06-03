@@ -17,9 +17,22 @@ models:
         tests:
           - not_null
       - name: classification
-        description: Recall classification (Class I/II/III; always populated).
+        description: Recall classification (Class I/II/III + Public Health Alert; always populated).
         tests:
           - not_null
+          - accepted_values:
+              arguments:
+                values: ['Class I', 'Class II', 'Class III', 'Public Health Alert']
+      - name: recall_type
+        description: >
+          USDA recall lifecycle type (→ silver lifecycle_status). warn: the PDF
+          documented 2 values; the corpus surfaced a 3rd (Public Health Alert).
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Closed Recall', 'Public Health Alert', 'Active Recall']
+              config:
+                severity: warn
       - name: content_hash
         tests:
           - not_null

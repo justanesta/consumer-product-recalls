@@ -1,8 +1,10 @@
 {{ config(materialized='table') }}
 
 -- Firm dimension (ADR 0002). Deduped by normalized (upper-trimmed) name.
--- CPSC contributes firms from four JSONB arrays (manufacturers, retailers, importers,
--- distributors) with structured {name, company_id} objects.
+-- CPSC contributes firms from three JSONB arrays (manufacturers, importers,
+-- distributors) with structured {name, company_id} objects. Retailers are
+-- excluded (Option B, consolidation §3) — retailer names live in
+-- recall_event.sales_channel_narrative, not the firm dimension.
 -- FDA contributes a single scalar firm per product row (firm_legal_nam + firm_fei_num),
 -- always in the 'establishment' role — `firm_legal_nam` is semantically the
 -- recalling FDA-registered establishment, analogous to USDA's establishment
@@ -16,8 +18,9 @@
 -- documentation/usda/establishment_join_coverage.md (HTML-entity decode applied
 -- on the recall side in stg_usda_fsis_recalls.sql lifts the rate from 82.85%).
 -- Names with no FSIS match keep company_id=null and are unaffected by the join.
--- NHTSA contributes a single scalar firm per recall row (mfgname), always
--- 'manufacturer' role. company_id=null — NHTSA has no analog to FDA's firmfeinum.
+-- NHTSA contributes two firms per recall row via the filer/manufacturer split
+-- (consolidation §3): mfgname (role 'filer' in the bridge) and mfgtxt (role
+-- 'manufacturer'). company_id=null — NHTSA has no analog to FDA's firmfeinum.
 -- The 'AC DELCO' vs 'ACDELCO' drift class (ADR 0031) currently produces two
 -- firm rows; reconciliation is Phase 6 RapidFuzz work per ADR 0002.
 -- USCG contributes a directory-enriched firm anchor (Phase 5d Step 7),
@@ -36,10 +39,6 @@
 with cpsc_firms as (
     select 'manufacturer' as role,
            jsonb_array_elements(coalesce(manufacturers, '[]'::jsonb)) as firm_json
-    from {{ ref('stg_cpsc_recalls') }}
-    union all
-    select 'retailer' as role,
-           jsonb_array_elements(coalesce(retailers, '[]'::jsonb)) as firm_json
     from {{ ref('stg_cpsc_recalls') }}
     union all
     select 'importer' as role,
@@ -90,14 +89,28 @@ usda_normalized as (
 ),
 
 nhtsa_normalized as (
+    -- Filer/manufacturer split (consolidation §3): mfgname is the entity that
+    -- FILED the recall with NHTSA, mfgtxt the actual product manufacturer —
+    -- 95.9% disjoint when they differ, so both belong in the firm dimension.
+    -- company_id=null (no analog to FDA's firm_fei_num). role is vestigial in
+    -- this model (the dim groups by normalized_name); it drives the bridge.
     select distinct
-        'manufacturer'              as role,
+        'filer'                     as role,
         mfgname                     as raw_name,
         upper(trim(mfgname))        as normalized_name,
         cast(null as text)          as company_id
     from {{ ref('stg_nhtsa_recalls') }}
     where mfgname is not null
       and trim(mfgname) <> ''
+    union all
+    select distinct
+        'manufacturer'              as role,
+        mfgtxt                      as raw_name,
+        upper(trim(mfgtxt))         as normalized_name,
+        cast(null as text)          as company_id
+    from {{ ref('stg_nhtsa_recalls') }}
+    where mfgtxt is not null
+      and trim(mfgtxt) <> ''
 ),
 
 uscg_normalized as (

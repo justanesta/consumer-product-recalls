@@ -15,6 +15,26 @@ models:
         description: NHTSA recall campaign ID (e.g., 24V930000). Stable upstream.
         tests:
           - not_null
+      - name: rcltype
+        description: >
+          NHTSA recall type code (→ silver recall_product.type, Bug 1 fix).
+          warn: I/X are rare (<0.2%) and undocumented — a new code should flag.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['V', 'T', 'E', 'C', 'I', 'X']
+              config:
+                severity: warn
+      - name: influenced_by
+        description: >
+          What prompted the recall (→ silver recall_initiator). warn —
+          ISSUE_INVGSTN is a 2-row long-tail value; treat new values as a flag.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['MFR', 'ODI', 'OVSC', 'ISSUE_INVGSTN']
+              config:
+                severity: warn
       - name: content_hash
         tests:
           - not_null

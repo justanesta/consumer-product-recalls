@@ -53,6 +53,11 @@ cpsc_products as (
         type,
         category_id,
         number_of_units,
+        cast(null as integer)  as unit_count,
+        cast(null as text)     as model_year,
+        cast(null as text)     as hin,
+        cast(null as text)     as label_artifact_name,
+        cast(null as text)     as distribution_list_artifact_name,
         cast(null as text)     as upc,
         source_specific_attrs
     from cpsc_exploded
@@ -65,11 +70,19 @@ fda_products as (
         'FDA'                                         as source,
         source_recall_id,
         product_description_txt                       as product_name,
-        product_short_reason_txt                      as product_description,
+        -- Bug 3 fix: product_description is the product description text, not the
+        -- short reason (that's the event-level recall_reason). product_name maps
+        -- to the same field until Bug 2 lifts productdescriptionshort in (b).
+        product_description_txt                       as product_description,
         cast(null as text)                            as model,
         product_type_short                            as type,
         cast(null as text)                            as category_id,
         product_distributed_quantity                  as number_of_units,
+        cast(null as integer)                         as unit_count,
+        cast(null as text)                            as model_year,
+        cast(null as text)                            as hin,
+        cast(null as text)                            as label_artifact_name,
+        cast(null as text)                            as distribution_list_artifact_name,
         cast(null as text)                            as upc,
         jsonb_build_object(
             'rid',                            rid,
@@ -89,14 +102,23 @@ usda_products as (
         title                                         as product_name,
         product_items                                 as product_description,
         cast(null as text)                            as model,
-        recall_type                                   as type,
+        -- Bug 1 fix: type is the processing category, not the recall lifecycle
+        -- type (which is recall_event.lifecycle_status). Multi-value comma-joined.
+        processing                                    as type,
         cast(null as text)                            as category_id,
         qty_recovered                                 as number_of_units,
+        cast(null as integer)                         as unit_count,
+        cast(null as text)                            as model_year,
+        cast(null as text)                            as hin,
+        labels                                        as label_artifact_name,
+        distro_list                                   as distribution_list_artifact_name,
         cast(null as text)                            as upc,
+        -- C-slim: labels → label_artifact_name and processing → type are now
+        -- first-class columns. product_items_raw is kept — product_description
+        -- holds the same unparsed blob and ADR 0002 defers its structured
+        -- parsing, so the raw stays available under a distinct key.
         jsonb_build_object(
-            'product_items_raw', product_items,
-            'labels',            labels,
-            'processing',        processing
+            'product_items_raw', product_items
         )                                             as source_specific_attrs
     from {{ ref('stg_usda_fsis_recalls') }}
 ),
@@ -117,9 +139,15 @@ nhtsa_products as (
         compname                                      as product_name,
         mfr_comp_desc                                 as product_description,
         modeltxt                                      as model,
-        cast(null as text)                            as type,
+        -- Bug 1 fix: type is the recall-type code (rcltype), previously NULL.
+        rcltype                                       as type,
         cast(null as text)                            as category_id,
         potaff                                        as number_of_units,
+        case when potaff ~ '^[0-9]+$' then potaff::integer end as unit_count,
+        model_year                                    as model_year,
+        cast(null as text)                            as hin,
+        cast(null as text)                            as label_artifact_name,
+        cast(null as text)                            as distribution_list_artifact_name,
         cast(null as text)                            as upc,
         jsonb_build_object(
             'maketxt',       maketxt,
@@ -144,22 +172,31 @@ uscg_products as (
         source_recall_id,
         model_name                                    as product_name,
         coalesce(problem_1, problem_2)                as product_description,
-        model_name                                    as model,
+        -- Bug 1 fix: model duplicated product_name (model_name); USCG has no
+        -- distinct model field, so model is NULL. boat_type → type below.
+        cast(null as text)                            as model,
         boat_type                                     as type,
         cast(null as text)                            as category_id,
         units::text                                   as number_of_units,
+        units                                         as unit_count,
+        model_year                                    as model_year,
+        hin                                           as hin,
+        cast(null as text)                            as label_artifact_name,
+        cast(null as text)                            as distribution_list_artifact_name,
         cast(null as text)                            as upc,
+        -- C-slim: model_year, hin, and units are now first-class columns
+        -- (model_year / hin / unit_count). The rest are residual: mic /
+        -- company_name / company_official are firm-grain, problem_1/problem_2
+        -- are the pre-coalesce originals of product_description, and severity /
+        -- disposition / campaign dates are event-level USCG context.
         jsonb_build_object(
             'mic',                  mic,
             'company_name',         company_name,
             'company_official',     company_official,
-            'model_year',           model_year,
             'problem_1',            problem_1,
             'problem_2',            problem_2,
-            'hin',                  hin,
             'severity',             severity,
             'disposition',          disposition,
-            'units',                units,
             'campaign_open_date',   campaign_open_date,
             'campaign_close_date',  campaign_close_date
         )                                             as source_specific_attrs

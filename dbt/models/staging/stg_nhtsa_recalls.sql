@@ -52,6 +52,10 @@ select
     endman,
     bgman,
 
+    -- W4 Phase A: derived model_year for the recall_product lift (9999 sentinel
+    -- → NULL; yeartxt itself stays above as an 11-tuple key field).
+    nullif(nullif(yeartxt, ''), '9999')                       as model_year,
+
     -- Manufacturer / event metadata
     mfgcampno,
     mfgname,

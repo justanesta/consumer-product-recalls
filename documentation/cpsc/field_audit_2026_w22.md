@@ -318,6 +318,39 @@ Logged in `documentation/audit/capture_expansion_backlog.md` § CPSC (to be popu
 
 CPSC has **no Akamai gating** (per `last_publish_date_semantics.md` cache-validator finding: server emits `Cache-Control: no-cache` but no bot-detection headers; per `src/extractors/cpsc.py` no UA spoofing or cookie handling needed). Per `array_stability_findings.md`, current bronze sits at 1,360 rows / 1,357 distinct recalls as of 2026-05-08; the corpus has likely grown since.
 
+### Corpus-scale re-validation (2026-06-02 — full-corpus seed, 9,828 rows)
+
+The full-corpus deep-rescan seed (extraction run 2026-05-31: 9,828 extracted / 9,828 inserted / 0 rejected; `last_publish_date` 1975-04-07 → 2026-05-29) is **6.9× the 1,422-record May slice**. Re-running the three CPSC bronze scripts at this scale (`explore_bronze_shape.sql`, `inspect_array_field_population.sql`, the new `inspect_firm_name_fragmentation.sql`) confirmed most prior findings and **corrected several the small sample got wrong**. Feeds `documentation/audit/bronze_corpus_profile.md` §1/§2/§3/§4/§5/§6.
+
+**Structural changes (load-bearing):**
+
+- 🆕 **Multi-product CPSC recalls are now REAL — the C2 "always length 1" assumption is falsified.** 11,836 product elements across 9,828 recalls: 91.7% length 1, but **8.3% have >1 product, up to 57** (`explore` Q8 / `array` Q3). Every prior corpus (1,193 / 1,357 / 1,422) was universally single-product, making the `array_stability_findings.md` C2/C3 append-only assumptions *vacuous*. They are no longer vacuous: the ordinal-based silver product surrogate key is load-bearing and `assert_products_array_append_only.sql` now guards real data. **Follow-up: revisit `array_stability_findings.md` C2/C3 status (currently "vacuously holds").**
+- 🆕 **~18.3% archival-skeleton cohort.** `remedies` (18.3%), `injuries` (18.3%), `images` (18.2%), `retailers` (18.5%), `consumer_contact` (18.5% null), `manufacturer_countries` (17.5%) all empty at a near-uniform ~18.3% floor — an archival cohort (led by the 1,597-record 2014-05-23 migration spike, `explore` Q10) carrying only core scalars (`title`/`description`/`url`/`recall_date`/`products`, all ~0% empty). This floor is the realistic NULL rate for **every** collection lift; the rich-collection lifts are ~81.7% populated, not ~99%.
+
+**Corrections to sample-based figures:**
+
+| Field | May sample | Full corpus (9,828) | Note |
+|---|---|---|---|
+| `products[].number_of_units` empty | 0.2% | **32.2%** | sample was recent-only; corpus (incl. archival + secondary products) is 1/3 empty → silver TEXT, nullable |
+| `products[].name` empty | 0.0% | **3.3%** | can't be hard NOT NULL → warn-tripwire |
+| `products[].type` / `.category_id` empty | 41.2% | 40.4% | confirmed (~59.6% populated) |
+| `Image.Caption` empty | 0.0% | **5.1%** | landing-page alt-text needs a ~5% fallback after all |
+| `RemedyOption` enum | 4 values | **8 values** | added `New Instructions` (1.05%), `Label` (0.15%), `No Remedy Available` (0.10%), `Inspect` (0.08%); top 3 still 97.95%; `R` typo + narrative-paragraph outlier persist → warn |
+| `ManufacturerCountries` top | China 61.4% | China 52.6%, US 17.9% | distribution shifted; `United Stateso` typo persists |
+
+**Confirmed at corpus scale:**
+
+- ✅ `CompanyID` **100% empty across all 22,463 firm-role elements** (Bug 3) — 8,202 manufacturer + 8,015 retailer + 4,101 importer + 2,145 distributor (`array` Q1).
+- ✅ `Hazards[].hazard_type` + `hazard_type_id` 100% empty across 9,710 elements; `name` 100% populated (Finding G).
+- ✅ `sold_at_label` 100% NULL; `products[].description` + `products[].model` 100% empty (documented-empty-by-source).
+- ✅ **Bug 1 (retailer narrative) worse at scale:** retailer `Name` avg length **141** (vs 26–45 for M/I/D), max **1,454**, **99.2% distinct** across 8,015 elements (`array` Q10).
+- ✅ **Edit detection: 0 multi-hash recalls** (`explore` Q4/Q5) — 1:1 recall_id:row in this single-shot seed (one edit *was* observed pre-seed: recall `00015`, 2026-05-08). SCD NEED at the recall key = low; snapshot caveat applies (can't measure long-term edit rate).
+
+**Firm fragmentation baseline (new `inspect_firm_name_fragmentation.sql`):**
+
+- **§6 Option B quantified:** dropping `retailers[]` from the firm dim removes **7,947 firm rows = 44.2%** of CPSC's 17,974-name footprint, with **zero overlap** with M/I/D names (`net_firms_removed` == `retailer_only_distinct_names` == 7,947). Cleanest possible backing for Option B — it touches only the retailer-narrative rows.
+- **§3 Bug 2 magnitude (deferred to 6b):** **62.8%** of the 14,444 M/I/D names carry a strippable `, of <geo>`/`dba` suffix (`comma_strippable_total` 9,074). The conservative comma-anchored strip collapses **5.7% (576 firms)** *within the current corpus* — most fragmentation is **latent** (a unique name with a geo suffix stays unique until the same firm recurs with a different spelling, e.g. the three `3M Company, of {St. Paul, Minnesota / Saint Paul, Minnesota / St. Paul, Minn.}` rows → one `3M COMPANY`). Recurring-firm share rises 16.2% → 18.1%. Space-prefixed `dba` (595 names) + parentheticals (501) are residual headroom the simulation deliberately leaves for full 6b normalization.
+
 ### Toolkit built 2026-05-29 — ready to run
 
 - ✅ **`scripts/cpsc/audit/_lib.py`** — mirror of FDA + USDA `_lib.py`. `DEFAULT_CACHE_DIR = data/exploratory/cpsc/` (gitignored). Extended `summarize_field` with a list-of-dict path: reports element_count distribution + element samples for the 13 dict-element JSONB arrays (Manufacturers, Retailers, Hazards, etc.), skips distinct-count where elements aren't hashable.

@@ -256,6 +256,8 @@ Each requested column returned **STATUSCODE 406** on bulk POST (or is documented
 
 Cassette inspection (`tests/fixtures/cassettes/fda/test_happy_path_single_page.yaml`, 168 records from one window in April 2026) initially confirmed the three mismappings. Broader R2-corpus validation completed 2026-05-28 across **447 records** from 5 daily payloads (2026-05-05, 05-12, 05-19, 05-25, 05-28) — 177 distinct events, 387 distinct products, 134 distinct firms.
 
+> **Figures in the §8 subsections below are from that 447-record 2026-05-28 sample.** Full-corpus figures (134,461 rows, 2026-06-02) live in the **Corpus-scale re-validation** subsection at the end of §8 and supersede the sample where they differ — most consequentially the `voluntary_type_txt` (2→4 values) and `initial_firm_notification_txt` (6→8 values) enum domains. Cross-source shape matrices live in `documentation/audit/bronze_corpus_profile.md`.
+
 ### Confirmations
 
 - **Bug 1 is more impactful than initially scoped.** `DISTRIBUTIONAREASUMMARYTXT` is populated in **100%** of records (max length 1146 chars). Silver's current `recall_event.description ← distribution_area_summary_txt` mapping has been silently surfacing geographic distribution lists ("Distribution in United States to AZ, CA, FL, GA, …") as the user-facing recall description for every single FDA recall ever ingested.
@@ -312,6 +314,33 @@ Cassette inspection (`tests/fixtures/cassettes/fda/test_happy_path_single_page.y
 - [x] Probe MEDIUM-priority (b) candidates — completed 2026-05-29. All firm-address fields validated in a single 14-column sweep. Surfaced `firmstatecd` as a previously-unknown 2-letter state code paired with `firmstateprvncnam`. See §7a table for per-field empirical verdicts.
 - [x] `OCS` resolved — Office of the Chief Scientist; cosmetics + color-additive regulation
 - [ ] Decide `VOLUNTARYTYPETXT` normalization shape (string canonicalization vs boolean) — deferred to cross-source consolidation
+
+### Corpus-scale re-validation (2026-06-02 — full seed, 134,461 rows)
+
+Re-run of `scripts/sql/fda/bronze/{explore_bronze_shape,inspect_field_population}.sql` against the complete Phase 6a.5 seed (134,461 bronze rows / 50,509 distinct events / ~134,450 distinct products). Confirms the three bugs and **corrects four sample-scale figures** the 447-record window had wrong.
+
+**Bug 1 / Bug 3 confirmed by content, not just length** (`inspect_field_population.sql` Q7/Q8):
+- `distribution_area_summary_txt` top values are geographic — `Nationwide` (8,619), `US Nationwide distribution.` (1,673), `Florida` (1,070), `CA` (806), `AR, GA, IL, LA, MS, MO, OK, and TX` (637): a distribution list, never a reason.
+- `product_short_reason_txt` top values are defect narrative — `Lack of Assurance of Sterility` (1,917), `Not in conformance with cGMP` (646), `Product may contain undeclared milk.` (619), `Product may be contaminated with Listeria monocytogenes.` (350).
+- ⇒ `recall_reason ← product_short_reason_txt`; `distribution_area_summary ← distribution_area_summary_txt` (its own column). All three narrative fields ≤0.1% empty. Lengths (non-empty): `distribution_area_summary_txt` avg 102 / p50 42 / p95 383 / max 4000; `product_short_reason_txt` avg 139 / p50 114 / max 2130; `product_description_txt` avg 191 / p50 128 / max 4000. *(Hypothesis — not confirmed: the two fields maxing at exactly 4000 may be source/storage-truncated; low-priority follow-up = count rows at length=4000.)*
+
+**Enum corrections — the sample missed low-frequency values; the corpus is the SSOT for `accepted_values`:**
+
+| Field | Sample (447) said | Corpus (134,461) shows | Silver `accepted_values` |
+|---|---|---|---|
+| `voluntary_type_txt` | 2 values; "no FDA Requested/Mandated" | **4 + ''**: Firm Initiated 109,837 · Voluntary: Firm Initiated 23,726 · FDA Requested 768 · FDA Mandated 121 · '' 9 | after `ilike '%firm initiated%' → 'Firm Initiated'`: `['Firm Initiated','FDA Requested','FDA Mandated']` |
+| `initial_firm_notification_txt` | 6 values | **8 + ''** (adds **FAX** 3,106, **Visit** 654): Letter 47,274 · '' 34,747 · Combination 17,069 · Telephone 12,066 · E-Mail 11,821 · Press Release 6,356 · FAX 3,106 · Other 1,368 · Visit 654 | `['Letter','Combination','Telephone','E-Mail','Press Release','FAX','Other','Visit']` · **severity warn** · nullable (25.8% empty) |
+| `center_classification_type_txt` | 4 values | stable: 2 (91,861) · 1 (27,904) · 3 (14,671) · NC (25) | `['1','2','3','NC']` |
+| `phase_txt` | Ongoing-heavy sample | Terminated 110,488 · Ongoing 19,327 · Completed 4,646 | `['Terminated','Ongoing','Completed']` |
+
+**Relationship / null-rate corrections:**
+- `termination_dt`: **17.7% null** at corpus scale (the sample's 66.2% was an Ongoing-skewed-window artifact — 59% Ongoing in the sample vs 82% Terminated in the corpus). The invariant is **not** "populated iff Terminated": Terminated 99.95% populated (58 exceptions), **Completed only 4.6%**, and **8 Ongoing rows carry one** (anomaly). ⇒ silver `terminated_at` nullable; the tightest singular test is *"phase Ongoing ⇒ `terminated_at IS NULL`"* (8 current violators → warn).
+- `recall_num`: **0.1% null (142 rows, all genuine NULL, no '' variant)** — not the sample's 6.5%. 100% of the 25 NC rows + 117 classified. ⇒ warn-tripwire `not_null` (warn >300 / error >1000), **not** conditional-required (the 117 classified nulls break a clean NC-only rule).
+- `product_distributed_quantity`: 8.1% null, irreducibly free-text (`1 unit` 10,367 · `Unknown`/`unknown` 3,081 · `1` 1,575 · `one unit` 914). ⇒ cross-source `recall_product.number_of_units` canonical type must be **TEXT**, not integer (a W2 consolidation decision — USDA `qty_recovered` / USCG `units` are similarly free-text).
+
+**Grain & SCD signal (feeds W3):** 134,461 rows ≈ 134,450 distinct products ⇒ **near-1:1, almost no edit-versions** in the seed; `recall_event` aggregates to 50,509 events; largest multi-product event = 470 products (event 70452). *Caveat (observation vs inference): a single-shot seed cannot reveal the long-term re-extraction edit-rate — the SCD-NEED verdict must also weigh `assert_productid_stable.sql` / daily-incremental history, not this snapshot alone.*
+
+**Silver date caveats (carry into `recall_event`):** `published_at ← event_lmd` inherits the **2018-09-06 archive-migration timestamp for 72,770 records** (Q14 spike) — not their true publish date — and the **197 null-`event_lmd` archive-tail rows** → null `published_at`. `posted_internet_dt` (84% populated) is a truer "first posted" date but is **(b)-deferred**, so (a) accepts the artifact and documents it.
 
 ## References
 

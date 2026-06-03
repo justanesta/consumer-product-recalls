@@ -3,6 +3,12 @@ version: 2
 models:
   - name: recall_event
     description: Header-level recall events, one row per (source, source_recall_id) (ADR 0002).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - source
+              - source_recall_id
     columns:
       - name: recall_event_id
         description: Surrogate key md5(source || '|' || source_recall_id).
@@ -19,14 +25,27 @@ models:
         tests:
           - not_null
       - name: announced_at
+        description: >
+          True recall-initiation date — NULLABLE by design. A small archive tail
+          (~6 FDA events, early-2000s) has no source-provided initiation date and
+          we do not fabricate one (the bulk-migration timestamp lives honestly in
+          published_at). The not_null below is severity=warn: a watch-list, not a
+          hard contract. Downstream sorts/filters on published_at, the guaranteed
+          date. If the warn count grows materially beyond ~6, investigate.
         tests:
-          - not_null
+          - not_null:
+              config:
+                severity: warn
       - name: published_at
+        description: >
+          Last-published/modified date, coalesced to be present for every row —
+          the hard NOT-NULL contract date downstream (gold/API) sorts and filters
+          on. Contrast announced_at, which is nullable by design.
         tests:
           - not_null
-    # Unique on recall_event_id (md5 of source|source_recall_id) transitively
-    # enforces uniqueness of (source, source_recall_id); when Phase 6 adds
-    # dbt_utils, promote to an explicit combination test.
+    # (source, source_recall_id) uniqueness is now enforced explicitly via the
+    # model-level dbt_utils.unique_combination_of_columns test above; the
+    # recall_event_id unique test covers the same grain transitively (md5 key).
 
   - name: recall_product
     description: Line-level recall products, one row per affected product instance (ADR 0002).
@@ -50,7 +69,12 @@ models:
                 values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
 
   - name: firm
-    description: Firm dimension deduped by normalized name (ADR 0002).
+    description: >
+      Conformed firm dimension, deduped by normalized name across all 5 sources
+      (ADR 0002). Role-specific structured attributes live in the
+      firm_establishment_attributes (USDA) and firm_manufacturer_attributes
+      (USCG) sidecars, joined via observed_company_ids. Cross-source fuzzy
+      name resolution is deferred to Phase 6b.
     columns:
       - name: firm_id
         tests:
@@ -110,7 +134,19 @@ models:
           - not_null
 
   - name: recall_event_firm
-    description: Many-to-many between recall events and firms with role.
+    description: >
+      Many-to-many between recall events and firms with role. Roles: CPSC
+      manufacturer/importer/distributor (retailer removed per Option B →
+      recall_event.sales_channel_narrative); FDA/USDA establishment; NHTSA
+      filer (mfgname) + manufacturer (mfgtxt) split; USCG manufacturer. Kept
+      in lockstep with firm.sql.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - recall_event_id
+              - firm_id
+              - role
     columns:
       - name: recall_event_id
         tests:
@@ -131,7 +167,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['manufacturer', 'retailer', 'importer', 'distributor', 'establishment']
-    # recall_event_firm is built with SELECT DISTINCT so composite uniqueness
-    # of (recall_event_id, firm_id, role) is structurally enforced; promote to
-    # dbt_utils.unique_combination_of_columns in Phase 6.
+                values: ['manufacturer', 'importer', 'distributor', 'establishment', 'filer']
+    # Composite uniqueness of (recall_event_id, firm_id, role) is now enforced
+    # explicitly via the model-level dbt_utils.unique_combination_of_columns
+    # test above (the SELECT DISTINCT in the model also guarantees it).
