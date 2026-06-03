@@ -53,11 +53,11 @@ _ETAG_AUDIT_SOURCES = {"usda", "usda_establishments"}
 # would defeat the latter under test.
 _LOOKBACK_DAYS_SOURCES = {"cpsc", "fda"}
 
-# Sources that honor --limit (cap the work-list to the first N items). Only the
-# bronze-work-list-driven detail extractor supports it — for cheap dev validation
-# (a few detail pages exercise the full fetch->R2->bronze->dbt path) and for
+# Sources that honor --limit (cap the work-list to the first N items). The
+# bronze-work-list-driven extractors support it — for cheap dev validation
+# (a few records exercise the full fetch->R2->bronze->dbt path) and for
 # chunked/resumable seeding. Other sources emit an ignored-notice for parity.
-_WORK_LIST_LIMIT_SOURCES = {"uscg_manufacturer_details"}
+_WORK_LIST_LIMIT_SOURCES = {"uscg_manufacturer_details", "fda_press_releases"}
 
 # Per-source notices when --lookback-days is passed to a source that does not
 # honor it (no override_watermark_lookback method). Keeps the user's existing
@@ -83,6 +83,10 @@ _LOOKBACK_NO_OP_MESSAGES: dict[str, str] = {
         "uscg_manufacturer_details: --lookback-days has no effect (work-list is a "
         "listing-delta cursor over bronze; see phase-5d-uscg-manufacturers-detail.md)."
     ),
+    "fda_press_releases": (
+        "fda_press_releases: --lookback-days is not wired; the press-release watermark "
+        "defaults to today-1 on first run. Use --limit for dev, or deep-rescan to seed."
+    ),
 }
 
 # Per-source notices when deep-rescan ignores --start-date/--end-date.
@@ -107,6 +111,10 @@ _DEEP_RESCAN_NO_DATE_WINDOW_MESSAGES: dict[str, str] = {
     "uscg_manufacturer_details": (
         "uscg_manufacturer_details: --start-date / --end-date are ignored "
         "(detail pages have no date-range query surface; full sweep on deep-rescan)."
+    ),
+    "fda_press_releases": (
+        "fda_press_releases: --start-date / --end-date are ignored (the deep-rescan is a "
+        "full event sweep; chunk it with --limit + --resume-after-event-id instead)."
     ),
 }
 
@@ -318,6 +326,29 @@ def deep_rescan(
             ),
         ),
     ] = "routine",
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit",
+            help=(
+                "fda_press_releases only: cap the event sweep to the first N events "
+                "(recall_event_id order). Pair with --resume-after-event-id for "
+                "chunked/resumable seeding. Ignored by other sources."
+            ),
+        ),
+    ] = None,
+    resume_after_event_id: Annotated[
+        int | None,
+        typer.Option(
+            "--resume-after-event-id",
+            help=(
+                "fda_press_releases only: skip events with recall_event_id <= N — the "
+                "chunked-seed cursor. Run --limit N, note the last event id from the "
+                "work-list log, then --resume-after-event-id <id> --limit N. Ignored "
+                "by other sources."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run a historical / deep-rescan load for a given source over a date window.
 
@@ -386,6 +417,24 @@ def deep_rescan(
                 start_date=date.fromisoformat(start_date),
                 end_date=date.fromisoformat(end_date),
             )
+
+    # fda_press_releases-only: post-construction chunking knobs for the large event
+    # sweep. --limit + --resume-after-event-id march through the corpus in
+    # recall_event_id order across runs (content-hash dedup makes overlaps idempotent) —
+    # the operator-controlled way to fit the seed under the Actions 6h job limit.
+    if source == "fda_press_releases":
+        if limit is not None and limit < 1:
+            typer.echo("--limit must be >= 1", err=True)
+            raise typer.Exit(code=1)
+        if limit is not None:
+            loader.work_list_limit = limit  # type: ignore[attr-defined]
+        if resume_after_event_id is not None:
+            loader.resume_after_event_id = resume_after_event_id  # type: ignore[attr-defined]
+    elif limit is not None or resume_after_event_id is not None:
+        typer.echo(
+            f"{source}: --limit / --resume-after-event-id apply only to "
+            "fda_press_releases; ignored."
+        )
 
     result = loader.run(change_type=change_type)
     if source == "fda":

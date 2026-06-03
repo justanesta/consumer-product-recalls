@@ -155,4 +155,8 @@ PER_RECORD_INVARIANTS_BY_SOURCE_NAME: dict[str, tuple[PerRecordInvariant, ...]] 
     "usda_establishments": (_null_id_invariant,),
     "uscg_manufacturers": (_null_id_invariant,),
     "uscg_manufacturer_details": (_null_id_invariant,),
+    # fda_press_releases: enrichment source — no recall-publication timestamp (only the
+    # nullable press_release_issued_dt). date_sanity deliberately does NOT apply; the
+    # null-id check guards source_recall_id (= RECALLEVENTID). Reviewed omission, not a gap.
+    "fda_press_releases": (_null_id_invariant,),
 }

@@ -47,6 +47,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.extractors.cpsc import CpscDeepRescanLoader, CpscExtractor
 from src.extractors.fda import FdaDeepRescanLoader, FdaExtractor
+from src.extractors.fda_press_release import (
+    FdaPressReleaseDeepRescanLoader,
+    FdaPressReleaseExtractor,
+)
 from src.extractors.nhtsa import NhtsaDeepRescanLoader, NhtsaExtractor
 from src.extractors.uscg import UscgDeepRescanLoader, UscgScrapingExtractor
 from src.extractors.uscg_manufacturer import (
@@ -77,6 +81,7 @@ EXTRACTOR_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
     "uscg": UscgScrapingExtractor,
     "uscg_manufacturers": UscgManufacturerExtractor,
     "uscg_manufacturer_details": UscgManufacturerDetailExtractor,
+    "fda_press_releases": FdaPressReleaseExtractor,
 }
 
 # Source-name → deep-rescan loader class for ``recalls deep-rescan <source>``.
@@ -95,6 +100,7 @@ DEEP_RESCAN_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
     "uscg": UscgDeepRescanLoader,
     "uscg_manufacturers": UscgManufacturerDeepRescanLoader,
     "uscg_manufacturer_details": UscgManufacturerDetailDeepRescanLoader,
+    "fda_press_releases": FdaPressReleaseDeepRescanLoader,
 }
 
 

@@ -210,3 +210,25 @@ models:
     # Composite uniqueness of (recall_event_id, firm_id, role) is now enforced
     # explicitly via the model-level dbt_utils.unique_combination_of_columns
     # test above (the SELECT DISTINCT in the model also guarantees it).
+
+  - name: recall_event_press_release
+    description: >
+      FDA press releases (Tier-3, capture-expansion (b) PR) — event-grain child of
+      recall_event, M:1 (an event can carry several). FDA-only; lookup-endpoint-only data
+      (Finding K0). One row per (event, press-release URL). Joined to recall_event via
+      recall_event_id.
+    columns:
+      - name: recall_event_press_release_id
+        tests:
+          - not_null
+          - unique
+      - name: recall_event_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('recall_event')
+                field: recall_event_id
+      - name: url
+        tests:
+          - not_null

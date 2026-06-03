@@ -1,0 +1,14 @@
+source_name: fda_press_releases
+source_type: rest_api
+# Tier-3 press-release enrichment (capture-expansion (b) PR, Part C). Plan:
+# project_scope/silver-field-capture-expansion-plan.md.
+#
+# Same iRES host as the bulk `fda` source. This extractor does NOT use base_url for a
+# bulk POST — it appends /search/pressreleaseurls/{eventid} per event (work-list sourced
+# from fda_recalls_bronze). base_url is the iRES REST root, kept identical to fda.yaml.
+base_url: https://www.accessdata.fda.gov/rest/iresapi
+timeout_seconds: 60.0
+rate_limit_rps: null
+credentials:
+  header_user: fda_authorization_user
+  header_key: fda_authorization_key

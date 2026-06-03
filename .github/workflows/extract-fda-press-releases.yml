@@ -1,0 +1,57 @@
+name: Extract FDA Press Releases
+
+# Tier-3 per-event press-release enrichment (capture-expansion (b) PR, Part C).
+# Incremental path: fetches GET /search/pressreleaseurls/{eventid} for events whose
+# recall changed since the press-release watermark (event_lmd cursor). No schedule yet
+# — Phase 7 adds the `schedule:` trigger alongside the other sources' crons.
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Dev: cap the work-list to the first N events (blank → full incremental delta)."
+        required: false
+        default: ""
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
+          [[ -n "$R2_BUCKET_NAME" ]] || (echo "::error::R2_BUCKET_NAME secret is missing" && exit 1)
+          [[ -n "$R2_ACCOUNT_ID" ]] || (echo "::error::R2_ACCOUNT_ID secret is missing" && exit 1)
+          [[ -n "$R2_ACCESS_KEY_ID" ]] || (echo "::error::R2_ACCESS_KEY_ID secret is missing" && exit 1)
+          [[ -n "$R2_SECRET_ACCESS_KEY" ]] || (echo "::error::R2_SECRET_ACCESS_KEY secret is missing" && exit 1)
+          [[ -n "$FDA_AUTHORIZATION_USER" ]] || (echo "::error::FDA_AUTHORIZATION_USER secret is missing" && exit 1)
+          [[ -n "$FDA_AUTHORIZATION_KEY" ]] || (echo "::error::FDA_AUTHORIZATION_KEY secret is missing" && exit 1)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          FDA_AUTHORIZATION_USER: ${{ secrets.FDA_AUTHORIZATION_USER }}
+          FDA_AUTHORIZATION_KEY: ${{ secrets.FDA_AUTHORIZATION_KEY }}
+
+      - name: Run FDA press-release extractor
+        run: |
+          if [[ -n "${{ github.event.inputs.limit }}" ]]; then
+            uv run recalls extract fda_press_releases --limit "${{ github.event.inputs.limit }}"
+          else
+            uv run recalls extract fda_press_releases
+          fi
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          FDA_AUTHORIZATION_USER: ${{ secrets.FDA_AUTHORIZATION_USER }}
+          FDA_AUTHORIZATION_KEY: ${{ secrets.FDA_AUTHORIZATION_KEY }}

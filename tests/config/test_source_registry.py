@@ -122,10 +122,12 @@ def test_documented_intent_fields_accepted_on_rest_config() -> None:
 # --- Registry dicts ---
 
 
-def test_extractor_registry_covers_all_eight_sources() -> None:
-    # Eight sources after Phase 5d Step 7 detail lands uscg_manufacturer_details
-    # (2026-05-30). Prior count was seven after the listing source landed; when a
-    # ninth lands, bump this test and the deep-rescan companion together.
+def test_extractor_registry_covers_all_nine_sources() -> None:
+    # Nine sources after fda_press_releases lands (2026-06-03, capture-expansion (b) PR,
+    # Tier-3 per-event press releases). Prior count was eight after
+    # uscg_manufacturer_details (2026-05-30). When a tenth lands, bump this test and the
+    # deep-rescan companion together.
+    from src.extractors.fda_press_release import FdaPressReleaseExtractor
     from src.extractors.uscg import UscgScrapingExtractor
     from src.extractors.uscg_manufacturer import UscgManufacturerExtractor
     from src.extractors.uscg_manufacturer_detail import UscgManufacturerDetailExtractor
@@ -139,6 +141,7 @@ def test_extractor_registry_covers_all_eight_sources() -> None:
         "uscg",
         "uscg_manufacturers",
         "uscg_manufacturer_details",
+        "fda_press_releases",
     }
     assert EXTRACTOR_BY_SOURCE_NAME["cpsc"] is CpscExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["fda"] is FdaExtractor
@@ -148,14 +151,15 @@ def test_extractor_registry_covers_all_eight_sources() -> None:
     assert EXTRACTOR_BY_SOURCE_NAME["uscg"] is UscgScrapingExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["uscg_manufacturers"] is UscgManufacturerExtractor
     assert EXTRACTOR_BY_SOURCE_NAME["uscg_manufacturer_details"] is UscgManufacturerDetailExtractor
+    assert EXTRACTOR_BY_SOURCE_NAME["fda_press_releases"] is FdaPressReleaseExtractor
 
 
-def test_deep_rescan_registry_covers_seven_sources() -> None:
-    # Seven after CpscDeepRescanLoader landed (2026-05-31, Phase 6a.5): the CPSC
-    # full historical seed needs a guard-bypassing fixed-floor pull. All three USCG
-    # sources also have deep-rescan loaders; the manufacturer-detail one is a full
-    # ~16.3k-row sweep (Tier-2) vs the incremental listing-delta path. Only USDA
-    # establishments has no deep-rescan path (current-state directory, no archive).
+def test_deep_rescan_registry_covers_eight_sources() -> None:
+    # Eight after fda_press_releases lands its deep-rescan loader (2026-06-03, the
+    # ~25K-event full press-release sweep). Prior count was seven (CpscDeepRescanLoader,
+    # 2026-05-31). Only USDA establishments has no deep-rescan path (current-state
+    # directory, no archive).
+    from src.extractors.fda_press_release import FdaPressReleaseDeepRescanLoader
     from src.extractors.uscg import UscgDeepRescanLoader
     from src.extractors.uscg_manufacturer import UscgManufacturerDeepRescanLoader
     from src.extractors.uscg_manufacturer_detail import UscgManufacturerDetailDeepRescanLoader
@@ -168,6 +172,7 @@ def test_deep_rescan_registry_covers_seven_sources() -> None:
         "uscg",
         "uscg_manufacturers",
         "uscg_manufacturer_details",
+        "fda_press_releases",
     }
     assert DEEP_RESCAN_BY_SOURCE_NAME["cpsc"] is CpscDeepRescanLoader
     assert DEEP_RESCAN_BY_SOURCE_NAME["fda"] is FdaDeepRescanLoader
@@ -179,6 +184,7 @@ def test_deep_rescan_registry_covers_seven_sources() -> None:
         DEEP_RESCAN_BY_SOURCE_NAME["uscg_manufacturer_details"]
         is UscgManufacturerDetailDeepRescanLoader
     )
+    assert DEEP_RESCAN_BY_SOURCE_NAME["fda_press_releases"] is FdaPressReleaseDeepRescanLoader
 
 
 def test_html_scraping_to_extractor_kwargs_returns_full_shape() -> None:
