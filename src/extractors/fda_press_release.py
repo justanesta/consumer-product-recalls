@@ -422,10 +422,15 @@ class FdaPressReleaseDeepRescanLoader(FdaPressReleaseExtractor):
                 "blow-up or upstream record-count explosion."
             )
         work = self._apply_limit(work)
+        # chunk_max_event_id is the resume cursor for the NEXT chunk: the highest
+        # recall_event_id processed here (work is ascending + limited, so work[-1]).
+        # The operator can't read this from bronze — empty events land no row — so the
+        # chunked seed reads it from this log and passes it as --resume-after-event-id.
         logger.info(
             "fda_press_releases.deep_rescan.extract",
             events=len(work),
             resume_after_event_id=self.resume_after_event_id,
+            chunk_max_event_id=(work[-1]["recall_event_id"] if work else None),
         )
         return self._fetch_all(work)
 
