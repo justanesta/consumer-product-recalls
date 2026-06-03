@@ -1,0 +1,41 @@
+version: 2
+
+models:
+  - name: stg_usda_fsis_establishments
+    description: >
+      Latest-per-establishment projection over the FSIS Establishment Listing
+      bronze (English-only, single-key identity). Applies ADR 0027 value-level
+      normalization: nullif('') on optional text, nullif('false') on
+      geolocation/county, per-element trim on activities/dbas, and the W4 Phase E
+      'N/A'/'None'/'' placeholder strip on dbas (a DBA-less establishment lands
+      as dbas = NULL, not [] or a noise-only array).
+    columns:
+      - name: source_recall_id
+        description: FSIS establishment record id (the listing's primary key; dedup key).
+        tests:
+          - not_null
+          - unique
+      - name: size
+        description: >
+          Establishment size class (→ firm_establishment_attributes.size). warn:
+          'N / A' (with spaces, 10.1% / 808 rows) is undocumented beyond the PDF's
+          Very Small / Small / Large taxonomy; '' is nullif'd to NULL in staging.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Very Small', 'Small', 'Large', 'N / A']
+              config:
+                severity: warn
+      - name: status_regulated_est
+        description: >
+          Regulatory status (→ firm_establishment_attributes.status_regulated_est).
+          '' = active (90.0%), 'Inactive' (10.0%) — the '' is a meaningful value,
+          not a missing sentinel, so it stays in the accepted set.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['', 'Inactive']
+      - name: content_hash
+        description: SHA-256 of canonicalized record payload (ADR 0007). Dedup key.
+        tests:
+          - not_null

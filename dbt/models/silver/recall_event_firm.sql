@@ -1,8 +1,9 @@
 {{ config(materialized='table') }}
 
 -- Many-to-many association between recall events and firms with role (ADR 0002).
--- CPSC: firms extracted from four JSONB arrays per event (manufacturer, retailer,
---   importer, distributor roles).
+-- CPSC: firms extracted from three JSONB arrays per event (manufacturer,
+--   importer, distributor roles). Retailers are excluded (Option B,
+--   consolidation §3) — they live in recall_event.sales_channel_narrative.
 -- FDA: single scalar firm per product row (firm_legal_nam), always
 --   'establishment' role — `firm_legal_nam` is the recalling FDA-registered
 --   establishment, analogous to USDA's establishment (relabeled per
@@ -10,10 +11,10 @@
 --   ON recall_event_id prevents duplicating the same firm across multiple
 --   products in the same event.
 -- USDA: free-text establishment (FSIS-regulated facility), role='establishment'.
--- NHTSA: single scalar firm per recall row (mfgname), always 'manufacturer' role.
---   Multiple bronze rows per campno (one per recall component); DISTINCT
---   collapses to one bridge row per (campno, mfgname) — typically one firm
---   per recall, occasionally co-recalls with multiple manufacturers.
+-- NHTSA: filer/manufacturer split (consolidation §3) — two bridge rows per
+--   recall: mfgname role 'filer' + mfgtxt role 'manufacturer'. Multiple bronze
+--   rows per campno (one per recall component); DISTINCT collapses to one
+--   bridge row per (campno, firm, role).
 -- USCG: firm anchor is coalesce(directory.company_name, recalls.company_name,
 --   recalls.mic) per Phase 5d Step 7 directory enrichment. Always
 --   'manufacturer' role. Finding S null-firm-anchor rows (~23 records, both
@@ -29,10 +30,6 @@
 with cpsc_firms as (
     select source_recall_id, 'manufacturer' as role,
            jsonb_array_elements(coalesce(manufacturers, '[]'::jsonb)) as firm_json
-    from {{ ref('stg_cpsc_recalls') }}
-    union all
-    select source_recall_id, 'retailer' as role,
-           jsonb_array_elements(coalesce(retailers, '[]'::jsonb)) as firm_json
     from {{ ref('stg_cpsc_recalls') }}
     union all
     select source_recall_id, 'importer' as role,
@@ -77,13 +74,27 @@ usda_event_firms as (
 ),
 
 nhtsa_event_firms as (
+    -- Filer/manufacturer split (consolidation §3): two bridge rows per recall —
+    -- mfgname as 'filer' (the entity that filed the recall) and mfgtxt as
+    -- 'manufacturer' (the product manufacturer); 95.9% disjoint when differing.
+    -- DISTINCT collapses the many-rows-per-campno (one per component) to one
+    -- row per (campno, firm, role). Both firm_ids resolve in firm.sql's
+    -- nhtsa_normalized (which now emits both mfgname and mfgtxt) — lockstep.
     select distinct
         md5('NHTSA' || '|' || campno)           as recall_event_id,
         md5(upper(trim(mfgname)))               as firm_id,
-        'manufacturer'                          as role
+        'filer'                                 as role
     from {{ ref('stg_nhtsa_recalls') }}
     where mfgname is not null
       and trim(mfgname) <> ''
+    union all
+    select distinct
+        md5('NHTSA' || '|' || campno)           as recall_event_id,
+        md5(upper(trim(mfgtxt)))                as firm_id,
+        'manufacturer'                          as role
+    from {{ ref('stg_nhtsa_recalls') }}
+    where mfgtxt is not null
+      and trim(mfgtxt) <> ''
 ),
 
 uscg_event_firms as (

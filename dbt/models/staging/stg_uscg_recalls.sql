@@ -57,9 +57,9 @@ select
 
     -- Details-derived fields.
     nullif(company_official, '')                            as company_official,
-    nullif(model_year, '')                                  as model_year,
+    nullif(nullif(model_year, ''), '9999')                  as model_year,  -- W4 Phase A: 9999 sentinel → NULL (2-digit/range parse deferred to 6/7)
     nullif(problem_2, '')                                   as problem_2,
-    nullif(hin, '')                                         as hin,
+    nullif(nullif(hin, ''), 'N/A')                          as hin,  -- W4 Phase A: 'N/A' sentinel → NULL
 
     -- Finding R: case-normalize disposition.
     lower(nullif(disposition, ''))                          as disposition,
@@ -74,8 +74,10 @@ select
     -- to INTEGER and lets the rest fall through as NULL.
     case when units ~ '^[0-9]+$' then units::integer end    as units,
 
-    nullif(boat_type, '')                                   as boat_type,
-    nullif(severity, '')                                    as severity,
+    -- W4 Phase A normalizations (USCG audit §9): boat_type 0/00 → lpad(2);
+    -- severity case-fold (Finding-R parallel — l/h → L/H).
+    lpad(nullif(boat_type, ''), 2, '0')                     as boat_type,
+    upper(nullif(severity, ''))                             as severity,
 
     -- Cosmetic; preserved for audit lineage but never load-bearing.
     details_url,

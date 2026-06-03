@@ -30,22 +30,50 @@ with cpsc_events as (
         announced_at,
         published_at,
         title,
-        description,
+        description                            as recall_reason,
         url,
         cast(null as text)                     as classification,
-        cast(null as text)                     as status,
+        cast(null as text)                     as lifecycle_status,
         hazards,
+        cast(null as text)                     as distribution_area_summary,
+        cast(null as boolean)                  as is_active,
+        cast(null as text)                     as recall_initiator,
+        cast(null as text)                     as initiated_by,
+        cast(null as text)                     as risk_level,
+        cast(null as text)                     as notification_method,
+        cast(null as text)                     as reason_category,
+        cast(null as text)                     as distribution_scope,
+        cast(null as text)                     as distribution_states,
+        cast(null as timestamptz)              as terminated_at,
+        cast(null as timestamptz)              as campaign_started_at,
+        cast(null as timestamptz)              as campaign_ended_at,
+        cast(null as timestamptz)              as last_editorial_date,
+        cast(null as timestamptz)              as owner_notified_at,
+        cast(null as boolean)                  as do_not_drive,
+        cast(null as boolean)                  as park_outside,
+        remedies                               as remedies,
+        remedy_options                         as remedy_options,
+        injuries                               as injuries,
+        images                                 as images,
+        consumer_contact                       as consumer_contact,
+        manufacturer_countries                 as manufacturer_countries,
+        in_conjunctions                        as coordinated_recall_urls,
+        retailers                              as sales_channel_narrative,
+        product_upcs                           as product_upcs,
+        cast(null as boolean)                  as related_to_outbreak,
+        cast(null as boolean)                  as archived,
+        cast(null as text)                     as firm_contact_block_text,
+        cast(null as text)                     as corrective_action,
+        cast(null as text)                     as consequence_of_defect,
+        cast(null as text)                     as notes,
+        cast(null as text)                     as mfgcampno,
+        cast(null as text)                     as fmvss,
+        cast(null as text)                     as firm_contact_person,
+        -- B3b: source_payload_raw now holds only genuinely-residual fields —
+        -- every mapped field was lifted to a first-class column in B1–B3, and
+        -- sold_at_label is dropped (documented-empty in the CPSC corpus).
         jsonb_build_object(
-            'recall_id',              recall_id,
-            'consumer_contact',       consumer_contact,
-            'sold_at_label',          sold_at_label,
-            'manufacturer_countries', manufacturer_countries,
-            'product_upcs',           product_upcs,
-            'remedies',               remedies,
-            'remedy_options',         remedy_options,
-            'in_conjunctions',        in_conjunctions,
-            'images',                 images,
-            'injuries',               injuries
+            'recall_id', recall_id
         )                                      as source_payload_raw,
         content_hash,
         extraction_timestamp,
@@ -58,6 +86,13 @@ fda_events as (
         md5('FDA' || '|' || recall_event_id::text)                       as recall_event_id,
         'FDA'                                                            as source,
         recall_event_id::text                                            as source_recall_id,
+        -- announced_at is the TRUE recall-initiation date, left NULLABLE by design:
+        -- 6 events (13 product rows) are early-2000s archive recalls whose
+        -- recall_initiation_dt FDA's iRES never carried forward. We do NOT fabricate
+        -- a date — their bulk-migration timestamp lives honestly in published_at
+        -- (= event_lmd) below, the hard NOT-NULL contract date downstream sorts on.
+        -- announced_at's not_null is relaxed to severity=warn (~6 archive-tail
+        -- baseline) so the count stays a visible watch-list without faking data.
         recall_initiation_dt                                             as announced_at,
         -- event_lmd is nullable as of migration 0020: ~197 un-edited records have
         -- null EVENTLMD (Finding H). Coalesce to recall_initiation_dt (mirrors the
@@ -67,22 +102,73 @@ fda_events as (
         coalesce(event_lmd, recall_initiation_dt)                        as published_at,
         coalesce(recall_num, center_cd || '-' || recall_event_id::text)
             || ' — ' || firm_legal_nam                                   as title,
-        distribution_area_summary_txt                                    as description,
+        -- Bug 1 fix: recall_reason is the defect reason (product_short_reason_txt),
+        -- NOT the geographic distribution list it was mistakenly sourced from.
+        product_short_reason_txt                                         as recall_reason,
         cast(null as text)                                               as url,
         center_classification_type_txt                                   as classification,
-        phase_txt                                                        as status,
+        phase_txt                                                        as lifecycle_status,
         cast(null as jsonb)                                              as hazards,
+        -- Bug 1's other half: the distribution list moves to its own column.
+        distribution_area_summary_txt                                    as distribution_area_summary,
+        case phase_txt
+            when 'Ongoing'    then true
+            when 'Terminated' then false
+            when 'Completed'  then false
+        end                                                              as is_active,
+        voluntary_type_txt                                               as recall_initiator,
+        case
+            when voluntary_type_txt in ('Firm Initiated', 'Voluntary: Firm Initiated') then 'firm'
+            when voluntary_type_txt in ('FDA Requested', 'FDA Mandated') then 'agency'
+        end                                                              as initiated_by,
+        cast(null as text)                                               as risk_level,
+        initial_firm_notification_txt                                    as notification_method,
+        cast(null as text)                                               as reason_category,
+        case
+            when lower(distribution_area_summary_txt) like '%nationwide%'
+              or lower(distribution_area_summary_txt) like '%all 50%'
+              or lower(distribution_area_summary_txt) like '%all states%'   then 'Nationwide'
+            when lower(distribution_area_summary_txt) like '%worldwide%'
+              or lower(distribution_area_summary_txt) like '%international%' then 'International'
+            when distribution_area_summary_txt is not null                  then 'Regional'
+        end                                                              as distribution_scope,
+        cast(null as text)                                               as distribution_states,
+        termination_dt                                                   as terminated_at,
+        cast(null as timestamptz)                                        as campaign_started_at,
+        cast(null as timestamptz)                                        as campaign_ended_at,
+        cast(null as timestamptz)                                        as last_editorial_date,
+        cast(null as timestamptz)                                        as owner_notified_at,
+        cast(null as boolean)                                            as do_not_drive,
+        cast(null as boolean)                                            as park_outside,
+        cast(null as jsonb)                                              as remedies,
+        cast(null as jsonb)                                              as remedy_options,
+        cast(null as jsonb)                                              as injuries,
+        cast(null as jsonb)                                              as images,
+        cast(null as text)                                               as consumer_contact,
+        cast(null as jsonb)                                              as manufacturer_countries,
+        cast(null as jsonb)                                              as coordinated_recall_urls,
+        cast(null as jsonb)                                              as sales_channel_narrative,
+        cast(null as jsonb)                                              as product_upcs,
+        cast(null as boolean)                                            as related_to_outbreak,
+        cast(null as boolean)                                            as archived,
+        cast(null as text)                                               as firm_contact_block_text,
+        cast(null as text)                                               as corrective_action,
+        cast(null as text)                                               as consequence_of_defect,
+        cast(null as text)                                               as notes,
+        cast(null as text)                                               as mfgcampno,
+        cast(null as text)                                               as fmvss,
+        cast(null as text)                                               as firm_contact_person,
+        -- B3b: residual fields only. termination_dt → terminated_at,
+        -- initial_firm_notification_txt → notification_method, and
+        -- voluntary_type_txt → recall_initiator are now first-class columns.
         jsonb_build_object(
-            'recall_num',                    recall_num,
-            'center_cd',                     center_cd,
-            'product_type_short',            product_type_short,
-            'firm_fei_num',                  firm_fei_num,
-            'center_classification_dt',      center_classification_dt,
-            'termination_dt',                termination_dt,
-            'enforcement_report_dt',         enforcement_report_dt,
-            'determination_dt',              determination_dt,
-            'initial_firm_notification_txt', initial_firm_notification_txt,
-            'voluntary_type_txt',            voluntary_type_txt
+            'recall_num',               recall_num,
+            'center_cd',                center_cd,
+            'product_type_short',       product_type_short,
+            'firm_fei_num',             firm_fei_num,
+            'center_classification_dt', center_classification_dt,
+            'enforcement_report_dt',    enforcement_report_dt,
+            'determination_dt',         determination_dt
         )                                                                as source_payload_raw,
         content_hash,
         extraction_timestamp,
@@ -99,28 +185,73 @@ usda_events as (
         announced_at,
         coalesce(published_at, announced_at)               as published_at,
         title,
-        summary                                            as description,
+        summary                                            as recall_reason,
         url,
         classification,
-        case
-            when active_notice is true  then 'active'
-            when active_notice is false then 'closed'
-            else null
-        end                                                as status,
+        recall_type                                        as lifecycle_status,
         cast(null as jsonb)                                as hazards,
+        cast(null as text)                                 as distribution_area_summary,
+        case recall_type
+            when 'Active Recall'        then true
+            when 'Public Health Alert'  then true
+            when 'Closed Recall'        then false
+        end                                                as is_active,
+        cast(null as text)                                 as recall_initiator,
+        cast(null as text)                                 as initiated_by,
+        -- risk_level is DERIVED 1:1 from classification (W1 Q2 proof), not lifted.
+        case classification
+            when 'Class I'              then 'High - Class I'
+            when 'Class II'             then 'Low - Class II'
+            when 'Class III'            then 'Marginal - Class III'
+            when 'Public Health Alert'  then 'Public Health Alert'
+        end                                                as risk_level,
+        cast(null as text)                                 as notification_method,
+        recall_reason                                      as reason_category,
+        case
+            when lower(states) like '%nationwide%'                       then 'Nationwide'
+            when lower(states) like '%worldwide%'
+              or lower(states) like '%international%'                     then 'International'
+            when states is not null                                      then 'Regional'
+        end                                                as distribution_scope,
+        states                                             as distribution_states,
+        closed_at                                          as terminated_at,
+        cast(null as timestamptz)                          as campaign_started_at,
+        cast(null as timestamptz)                          as campaign_ended_at,
+        cast(null as timestamptz)                          as last_editorial_date,
+        cast(null as timestamptz)                          as owner_notified_at,
+        cast(null as boolean)                              as do_not_drive,
+        cast(null as boolean)                              as park_outside,
+        cast(null as jsonb)                                as remedies,
+        cast(null as jsonb)                                as remedy_options,
+        cast(null as jsonb)                                as injuries,
+        cast(null as jsonb)                                as images,
+        cast(null as text)                                 as consumer_contact,
+        cast(null as jsonb)                                as manufacturer_countries,
+        cast(null as jsonb)                                as coordinated_recall_urls,
+        cast(null as jsonb)                                as sales_channel_narrative,
+        cast(null as jsonb)                                as product_upcs,
+        related_to_outbreak                                as related_to_outbreak,
+        archive_recall                                     as archived,
+        company_media_contact                              as firm_contact_block_text,
+        cast(null as text)                                 as corrective_action,
+        cast(null as text)                                 as consequence_of_defect,
+        cast(null as text)                                 as notes,
+        cast(null as text)                                 as mfgcampno,
+        cast(null as text)                                 as fmvss,
+        cast(null as text)                                 as firm_contact_person,
+        -- B3b: residual fields only. recall_type → lifecycle_status,
+        -- recall_reason → reason_category, states → distribution_states,
+        -- related_to_outbreak / archive_recall (→ archived) / closed_at
+        -- (→ terminated_at) are now first-class columns. risk_level is kept as
+        -- the source anchor for the classification-derived risk_level column;
+        -- processing / distro_list / labels are recall_product-grain residuals.
         jsonb_build_object(
-            'establishment',         establishment,
-            'recall_type',           recall_type,
-            'risk_level',            risk_level,
-            'recall_reason',         recall_reason,
-            'processing',            processing,
-            'states',                states,
-            'related_to_outbreak',   related_to_outbreak,
-            'archive_recall',        archive_recall,
-            'closed_at',             closed_at,
-            'distro_list',           distro_list,
-            'labels',                labels,
-            'qty_recovered',         qty_recovered
+            'establishment',  establishment,
+            'risk_level',     risk_level,
+            'processing',     processing,
+            'distro_list',    distro_list,
+            'labels',         labels,
+            'qty_recovered',  qty_recovered
         )                                                  as source_payload_raw,
         content_hash,
         extraction_timestamp,
@@ -136,29 +267,59 @@ nhtsa_events as (
         rcdate                                                         as announced_at,
         coalesce(datea, rcdate)                                        as published_at,
         campno || ' — ' || mfgname                                     as title,
-        desc_defect                                                    as description,
+        desc_defect                                                    as recall_reason,
         cast(null as text)                                             as url,
         cast(null as text)                                             as classification,
-        case
-            when do_not_drive is true then 'do_not_drive'
-            when park_outside is true then 'park_outside'
-            else null
-        end                                                            as status,
+        -- NHTSA has no lifecycle status; the old do_not_drive/park_outside "hack"
+        -- is dropped — those become first-class booleans in B2b.
+        cast(null as text)                                             as lifecycle_status,
         cast(null as jsonb)                                            as hazards,
+        cast(null as text)                                             as distribution_area_summary,
+        cast(null as boolean)                                          as is_active,
+        influenced_by                                                  as recall_initiator,
+        case
+            when influenced_by = 'MFR'                              then 'firm'
+            when influenced_by in ('ODI', 'OVSC', 'ISSUE_INVGSTN')  then 'agency'
+        end                                                            as initiated_by,
+        cast(null as text)                                             as risk_level,
+        cast(null as text)                                             as notification_method,
+        cast(null as text)                                             as reason_category,
+        cast(null as text)                                             as distribution_scope,
+        cast(null as text)                                             as distribution_states,
+        cast(null as timestamptz)                                      as terminated_at,
+        cast(null as timestamptz)                                      as campaign_started_at,
+        cast(null as timestamptz)                                      as campaign_ended_at,
+        cast(null as timestamptz)                                      as last_editorial_date,
+        odate                                                          as owner_notified_at,
+        do_not_drive                                                   as do_not_drive,
+        park_outside                                                   as park_outside,
+        cast(null as jsonb)                                            as remedies,
+        cast(null as jsonb)                                            as remedy_options,
+        cast(null as jsonb)                                            as injuries,
+        cast(null as jsonb)                                            as images,
+        cast(null as text)                                             as consumer_contact,
+        cast(null as jsonb)                                            as manufacturer_countries,
+        cast(null as jsonb)                                            as coordinated_recall_urls,
+        cast(null as jsonb)                                            as sales_channel_narrative,
+        cast(null as jsonb)                                            as product_upcs,
+        cast(null as boolean)                                          as related_to_outbreak,
+        cast(null as boolean)                                          as archived,
+        cast(null as text)                                             as firm_contact_block_text,
+        corrective_action                                              as corrective_action,
+        conequence_defect                                              as consequence_of_defect,
+        notes                                                          as notes,
+        mfgcampno                                                      as mfgcampno,
+        fmvss                                                          as fmvss,
+        cast(null as text)                                             as firm_contact_person,
+        -- B3b: residual fields only. desc_defect → recall_reason,
+        -- corrective_action / conequence_defect (→ consequence_of_defect) /
+        -- notes / mfgcampno / fmvss / do_not_drive / park_outside are now
+        -- first-class columns; influenced_by → recall_initiator; odate →
+        -- owner_notified_at. rpno is dropped (documented-empty). mfgtxt is the
+        -- firm-grain residual; potaff (potentially-affected count) is unmapped.
         jsonb_build_object(
-            'desc_defect',       desc_defect,
-            'corrective_action', corrective_action,
-            'conequence_defect', conequence_defect,
-            'mfgcampno',         mfgcampno,
-            'influenced_by',     influenced_by,
-            'mfgtxt',            mfgtxt,
-            'rpno',              rpno,
-            'fmvss',             fmvss,
-            'do_not_drive',      do_not_drive,
-            'park_outside',      park_outside,
-            'notes',             notes,
-            'potaff',            potaff,
-            'odate',             odate
+            'mfgtxt', mfgtxt,
+            'potaff', potaff
         )                                                              as source_payload_raw,
         content_hash,
         extraction_timestamp,
@@ -183,31 +344,67 @@ uscg_events as (
         coalesce(last_date, announced_at)                              as published_at,
         coalesce(company_name, mic, source_recall_id)
             || ' — ' || coalesce(model_name, '(no model)')             as title,
-        coalesce(problem_1, problem_2)                                 as description,
+        coalesce(problem_1, problem_2)                                 as recall_reason,
         details_url                                                    as url,
-        cast(null as text)                                             as classification,
-        case
-            when disposition = 'open'   then 'active'
-            when disposition = 'closed' then 'closed'
-            else null
-        end                                                            as status,
+        severity                                                       as classification,
+        initcap(disposition)                                           as lifecycle_status,
         cast(null as jsonb)                                            as hazards,
+        cast(null as text)                                             as distribution_area_summary,
+        case disposition
+            when 'open'   then true
+            when 'closed' then false
+        end                                                            as is_active,
+        cast(null as text)                                             as recall_initiator,
+        cast(null as text)                                             as initiated_by,
+        cast(null as text)                                             as risk_level,
+        cast(null as text)                                             as notification_method,
+        cast(null as text)                                             as reason_category,
+        cast(null as text)                                             as distribution_scope,
+        cast(null as text)                                             as distribution_states,
+        case_close_date                                                as terminated_at,
+        campaign_open_date                                             as campaign_started_at,
+        campaign_close_date                                            as campaign_ended_at,
+        last_date                                                      as last_editorial_date,
+        cast(null as timestamptz)                                      as owner_notified_at,
+        cast(null as boolean)                                          as do_not_drive,
+        cast(null as boolean)                                          as park_outside,
+        cast(null as jsonb)                                            as remedies,
+        cast(null as jsonb)                                            as remedy_options,
+        cast(null as jsonb)                                            as injuries,
+        cast(null as jsonb)                                            as images,
+        cast(null as text)                                             as consumer_contact,
+        cast(null as jsonb)                                            as manufacturer_countries,
+        cast(null as jsonb)                                            as coordinated_recall_urls,
+        cast(null as jsonb)                                            as sales_channel_narrative,
+        cast(null as jsonb)                                            as product_upcs,
+        cast(null as boolean)                                          as related_to_outbreak,
+        cast(null as boolean)                                          as archived,
+        cast(null as text)                                             as firm_contact_block_text,
+        cast(null as text)                                             as corrective_action,
+        cast(null as text)                                             as consequence_of_defect,
+        cast(null as text)                                             as notes,
+        cast(null as text)                                             as mfgcampno,
+        cast(null as text)                                             as fmvss,
+        company_official                                               as firm_contact_person,
+        -- B3b: residual fields only. company_official → firm_contact_person,
+        -- severity → classification, case_close_date → terminated_at,
+        -- campaign_open/close_date → campaign_started/ended_at, last_date →
+        -- last_editorial_date are now first-class columns. problem_1/problem_2
+        -- (coalesced into recall_reason) and disposition (initcap →
+        -- lifecycle_status) are kept as faithful pre-derive originals; mic is
+        -- the firm key; model_year / hin / units / boat_type are
+        -- recall_product-grain; case_open_date anchors the coalesced
+        -- announced_at.
         jsonb_build_object(
-            'mic',                  mic,
-            'company_official',     company_official,
-            'model_year',           model_year,
-            'problem_1',            problem_1,
-            'problem_2',            problem_2,
-            'hin',                  hin,
-            'disposition',          disposition,
-            'case_open_date',       case_open_date,
-            'case_close_date',      case_close_date,
-            'campaign_open_date',   campaign_open_date,
-            'campaign_close_date',  campaign_close_date,
-            'last_date',            last_date,
-            'units',                units,
-            'boat_type',            boat_type,
-            'severity',             severity
+            'mic',            mic,
+            'model_year',     model_year,
+            'problem_1',      problem_1,
+            'problem_2',      problem_2,
+            'hin',            hin,
+            'disposition',    disposition,
+            'case_open_date', case_open_date,
+            'units',          units,
+            'boat_type',      boat_type
         )                                                              as source_payload_raw,
         content_hash,
         extraction_timestamp,

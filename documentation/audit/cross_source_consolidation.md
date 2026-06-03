@@ -94,12 +94,12 @@ These all currently sit in `source_payload_raw`; W4 promotes them. Cross-source 
 | `category_id` | text | `products[].category_id` | — | — | — | — | (a) |
 | `number_of_units` 🔵D5 | text | `products[].number_of_units` | `product_distributed_quantity` | `qty_recovered` | `potaff` | `units` | (a) |
 | `unit_count` 🔵D5 | int (derive) | — *(T2)* | — *(T2)* | — *(T2)* | `potaff::int` | `units::int` | (a) |
+| `model_year` | text | — | — | — | `yeartxt` (`9999`→NULL) | `model_year` (`9999`→NULL) | (a) — *cross-source (W4 Phase A fix)* |
 
 ### §2b. Single-source product lift columns
 | Canonical column | Type | Source | Bronze field | Bucket |
 |---|---|---|---|---|
 | `hin` | text | USCG | `hin` (`'N/A'`→NULL) — the UPC analog | (a) |
-| `model_year` | text | USCG | `model_year` (`9999`→NULL) | (a) |
 | `label_artifact_name` | text | USDA | `labels` (PDF filename) | (a) |
 | `distribution_list_artifact_name` | text | USDA | `distro_list` (PDF filename) | (a) |
 | `upc` | text | — | **deferred** — cross-source `upc`/`hin`/`vin` merge → (b)/6b | (b) |
@@ -145,7 +145,8 @@ The silver models `UNION ALL` 5 source branches; **every canonical column must a
 
 Population rates: **`bronze_corpus_profile.md` §3** (do not restate). Highlights for the silver NOT-NULL contract:
 - **near-NOT NULL (warn-tripwire):** `recall_reason` (FDA 0.1% / USDA 1.2% / CPSC 0% / NHTSA 2.6% / USCG ~6% empty).
-- **NOT NULL:** `announced_at`, `classification` (where the source has it), `product_name` (CPSC warn at 3.3%).
+- **hard NOT NULL contract:** `published_at` (always coalesced-present — the downstream sort/filter key), `classification` (where the source has it), `product_name` (CPSC warn at 3.3%).
+- **nullable, warn-tripwire:** `announced_at` (the *true* initiation date; ~6 FDA archive-tail events genuinely lack it — **not fabricated**; the bulk-migration date lives in `published_at` instead). `not_null` → `severity: warn` (~6 baseline; investigate if it grows). USCG null-announced rows are still filtered (they lack a usable date entirely).
 - **`''`-sentinel sources** (FDA/USDA/NHTSA): staging `nullif(col,'')`; **NULL+named-sentinel sources** (CPSC/USCG): `nullif` + strip `N/A`/`9999`/`1970-01-01`/`UNK`/`-`/`0`≡`00`.
 - **documented-empty-by-source** (keep silent-blank, note in `_silver.yml`): CPSC `products[].description`/`.model`; FDA `firmline2adr`; USDA `press_release`; NHTSA `rpno` (dropped).
 

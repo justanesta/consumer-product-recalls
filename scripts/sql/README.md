@@ -109,6 +109,7 @@ without manual demarcation.
 | `usda_establishments/bronze/explore_rejected_failures.sql` | Diagnose `usda_fsis_establishments_rejected` after a failed extraction; Pydantic ValidationError prefix histogram, sample raw_record, schema-field mention counts | (used standalone during Phase 5b.2 first extraction) |
 | `usda_establishments/bronze/probe_recall_join_coverage.sql` | 6-query batch measuring recall→establishment join coverage; name-only and DBA-fallback rates, per-distinct-name and per-record match counts, sample of unmatched names, multi-hit popularity | `documentation/usda/establishment_join_coverage.md` |
 | `usda_establishments/bronze/list_status_flips.sql` | Enumerate establishments whose `status_regulated_est` changed in a given run (active ↔ Inactive); direction summary, per-establishment detail, geographic distribution. Phase 6 firm-resolution test-case generator | — |
+| `usda_establishments/silver/verify_dbas_placeholder_strip.sql` | W4 Phase E green-build spot-check: confirms the `'N/A'`/`'None'`/`''` dbas element-strip landed (0 placeholder rows, DBA-less → NULL not `[]`, sample survivors) | — |
 
 ### NHTSA
 

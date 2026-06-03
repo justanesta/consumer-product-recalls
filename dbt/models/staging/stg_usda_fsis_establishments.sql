@@ -52,10 +52,17 @@ select
             from jsonb_array_elements_text(activities) elem
         )
     end as activities,
+    -- W4 Phase E: element-level placeholder strip. Bronze dbas arrays carry
+    -- literal 'N/A' / 'None' / '' placeholder elements (inspect_join_key_and_dbas
+    -- Q4 — 'N/A'×94, 'None'×15 in R2); drop them per element before re-aggregating.
+    -- jsonb_agg over an all-placeholder (or empty) array returns NULL, so a
+    -- DBA-less establishment lands as dbas = NULL, not a noise-only / [] array.
     case
         when dbas is not null then (
             select jsonb_agg(trim(elem))
             from jsonb_array_elements_text(dbas) elem
+            where trim(elem) not in ('N/A', 'None')
+              and trim(elem) <> ''
         )
     end as dbas,
     content_hash,
