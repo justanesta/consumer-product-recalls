@@ -133,6 +133,45 @@ models:
         tests:
           - not_null
 
+  - name: firm_fda_attributes
+    description: >
+      FDA-registered establishment dim with address + firm-continuity metadata.
+      Capture-expansion (b) PR W1; one row per firm_fei_num (= FDA FEI, also
+      written to firm.observed_company_ids for FDA firms). No directory source —
+      reconstructed DISTINCT ON (firm_fei_num) latest from the recall feed
+      (stg_fda_recalls). Firms with a null FEI (0.4%, 2026-06-03 profile) have no
+      row here; their names still live in firm.sql. firm_fei_num is the hard key
+      (not_null + unique). firm_legal_nam / firm_city_nam / firm_country_nam /
+      firm_line1_adr are ~100% on full corpus but tested severity=warn (Q4
+      populations are rounded; a handful of nulls at FEI grain should be a
+      watch-list, not a build break). state / postal / surviving are legitimately
+      nullable (86.8% / 96.0% / 7.0%).
+    columns:
+      - name: firm_fei_num
+        tests:
+          - not_null
+          - unique
+      - name: firm_legal_nam
+        tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: firm_city_nam
+        tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: firm_country_nam
+        tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: firm_line1_adr
+        tests:
+          - not_null:
+              config:
+                severity: warn
+
   - name: recall_event_firm
     description: >
       Many-to-many between recall events and firms with role. Roles: CPSC

@@ -78,6 +78,7 @@ These all currently sit in `source_payload_raw`; W4 promotes them. Cross-source 
 | `campaign_ended_at` | timestamptz | USCG | `campaign_close_date` | (a) |
 | `last_editorial_date` | timestamptz | USCG | `last_date` | (a) |
 | `firm_contact_person` | text | USCG | `company_official` *(low priority)* | (a) |
+| `first_posted_at` | timestamptz | FDA | `posted_internet_dt` *(first public posting; blank pre-2022-10-25; distinct from `published_at`=`event_lmd`, which drifts per Finding M)* | (b) |
 | `source_payload_raw` | jsonb | all | residual unmapped fields | (a) |
 
 ---
@@ -138,6 +139,7 @@ The silver models `UNION ALL` 5 source branches; **every canonical column must a
 | `conequence_defect` (NHTSA) | `consequence_of_defect` | source-side typo fixed at silver | (a) |
 | `recall_event_firm.role` | +`filer`, −`retailer` | NHTSA split + CPSC Option B | update `accepted_values` |
 | *(new)* USDA `recall_reason` enum | **`reason_category`** 🔵D1 | avoid collision with the narrative `recall_reason` | (a) |
+| `postedinternetdt` (FDA bronze) | **`first_posted_at`** | first public-posting date, distinct from `published_at` (=`event_lmd`, which drifts per Finding M) | (b) |
 
 ---
 
