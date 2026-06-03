@@ -69,7 +69,12 @@ models:
                 values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
 
   - name: firm
-    description: Firm dimension deduped by normalized name (ADR 0002).
+    description: >
+      Conformed firm dimension, deduped by normalized name across all 5 sources
+      (ADR 0002). Role-specific structured attributes live in the
+      firm_establishment_attributes (USDA) and firm_manufacturer_attributes
+      (USCG) sidecars, joined via observed_company_ids. Cross-source fuzzy
+      name resolution is deferred to Phase 6b.
     columns:
       - name: firm_id
         tests:
@@ -129,7 +134,12 @@ models:
           - not_null
 
   - name: recall_event_firm
-    description: Many-to-many between recall events and firms with role.
+    description: >
+      Many-to-many between recall events and firms with role. Roles: CPSC
+      manufacturer/importer/distributor (retailer removed per Option B →
+      recall_event.sales_channel_narrative); FDA/USDA establishment; NHTSA
+      filer (mfgname) + manufacturer (mfgtxt) split; USCG manufacturer. Kept
+      in lockstep with firm.sql.
     tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:

@@ -1,6 +1,6 @@
 # Silver field remap — plan
 
-- **Status:** Active — in progress on `feature/silver-field-remap`. W0 (this plan + ADR 0036 stub + master-plan pointer) is the first commit; W1–W6 pending.
+- **Status:** Active — W0–W6 complete on `feature/silver-field-remap` and full-pipeline `dbt build` green (PASS=144, 3 expected WARN tripwires: `announced_at` ~6 archive-tail, USCG `severity` `'1'` outlier, pre-existing `usda_bilingual` 105). Ready for PR review + merge; flips to **Complete** on merge. W4 (silver/staging remap, Phases A–E) and W5 (dbt test suite incl. `dbt_utils` combination tests + 5 singular regression guards) landed each as a green-build increment.
 - **Owns:** the "(a) silver-remap PR" execution — corrected cross-source silver field mappings, canonical column naming, and the dbt test suite, all grounded in **full-corpus bronze profiling**. Sits in the hard chain `6a → 6a.5 → this → 6b/6c` per `phase-6-execution-plan.md` § Sequencing Constraints.
 - **Points at** (single-home — this plan does not restate any of them):
   - `documentation/audit/bronze_corpus_profile.md` (W1) — *what the full-corpus bronze looks like* (shape / null / enum / length / fragmentation / grain).

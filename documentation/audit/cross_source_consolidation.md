@@ -35,8 +35,8 @@ Dn refs appear inline in §1–§2. All landed on the recommended default; D2/D4
 | `url` | text | `url` | — *(b: lookup)* | `recall_url` | — | `details_url` | (a) |
 | `classification` 🔵D2 | text | — | `center_classification_type_txt` (1/2/3/NC) | `recall_classification` (Class I/II/III/PHA) | — | `severity` (H/L/M/S, `upper()`) | (a) |
 | `status` / `lifecycle_status` | text | — | `phase_txt` | `recall_type` *(Bug-adjacent: was `active_notice`-derived)* | — *(drop the `do_not_drive`-derived hack)* | `disposition` (`lower()`) | (a) |
-| `recall_initiator` 🔵D4 | text | — | `voluntary_type_txt` (normalize 2 variants) | — | `influenced_by` | — | (a) |
-| `initiated_by` (derive) 🔵D4 | text | — | derive `firm`/`agency` | — | derive `firm`/`agency` | — | (a) |
+| `recall_initiator` 🔵D4 | text | — | `voluntary_type_txt` *(raw, source-native — 4 corpus values incl. `Voluntary: Firm Initiated`; no value changes per D4)* | — | `influenced_by` | — | (a) |
+| `initiated_by` (derive) 🔵D4 | text | — | derive `firm`/`agency` *(both `Firm Initiated` + `Voluntary: Firm Initiated` → `firm`; `FDA Requested`/`FDA Mandated` → `agency`)* | — | derive `firm`/`agency` | — | (a) |
 | `announced_at` | timestamptz | `recall_date` | `recall_initiation_dt` | `recall_date` | `rcdate` | `case_open_date`/`opened_on` (1970→NULL) | (a) |
 | `published_at` | timestamptz | `last_publish_date` | `coalesce(event_lmd,…)` | `coalesce(last_modified,recall_date)` | `coalesce(datea,rcdate)` | `coalesce(last_date,announced_at)` | (a) |
 | `terminated_at` | timestamptz | — | `termination_dt` | `closed_date` | — | `case_close_date` | (a) |
