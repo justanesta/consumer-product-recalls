@@ -139,16 +139,16 @@ After each step, before moving to the next:
 
 **Quality gates:**
 
-- [ ] FDA depth probe complete; date window documented in this plan
-- [ ] R2 inventory sized; storage estimate within 20% of pre-flight projection
-- [ ] Neon tier upgraded; new monthly cost recorded
-- [ ] CPSC seed: bronze row count >= 9,000 (or documented reason for shortfall — e.g., archive migration still incomplete at CPSC's end)
-- [ ] NHTSA seed: bronze row count = (existing) + (~380-440k PRE_2010 + POST_2010 combined, modulo content-hash dedup of existing POST_2010)
-- [ ] NHTSA bronze 11-tuple assertion: warn-count delta documented; any new drift groups triaged
-- [ ] FDA seed: bronze row count > 5× current; no Akamai 204 blocks during seed
-- [ ] Combined quarantine rate < 5% (or each pattern's quarantine class triaged)
-- [ ] CPSC + FDA + NHTSA field audit §9 re-run; deltas folded into audit docs
-- [ ] No Phase 6a architectural surprises that require restart (Bug 1/2/3 framings + Option B still hold at corpus scale)
+- [x] FDA depth probe complete; date window documented in this plan
+- [x] R2 inventory sized; storage estimate within 20% of pre-flight projection
+- [x] Neon tier upgraded; new monthly cost recorded
+- [x] CPSC seed: bronze row count >= 9,000 (or documented reason for shortfall — e.g., archive migration still incomplete at CPSC's end)
+- [x] NHTSA seed: bronze row count = (existing) + (~380-440k PRE_2010 + POST_2010 combined, modulo content-hash dedup of existing POST_2010)
+- [x] NHTSA bronze 11-tuple assertion: warn-count delta documented; any new drift groups triaged
+- [x] FDA seed: bronze row count > 5× current; no Akamai 204 blocks during seed
+- [x] Combined quarantine rate < 5% (or each pattern's quarantine class triaged)
+- [x] CPSC + FDA + NHTSA field audit §9 re-run; deltas folded into audit docs
+- [x] No Phase 6a architectural surprises that require restart (Bug 1/2/3 framings + Option B still hold at corpus scale)
 
 **Risks + mitigations:**
 
