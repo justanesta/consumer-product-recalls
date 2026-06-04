@@ -247,7 +247,13 @@ PRs 6b.1, 6b.2, 6b.5 are largely independent after 6b.0 and could land in parall
 
 ## PR 6b.4 — RapidFuzz cross-source crosswalk (`recalls resolve-firms` + firm_id remap)
 
-**Scope.** The genuine edit-distance layer. A `recalls resolve-firms` Typer subcommand (USER-run) reads distinct cleaned firm names + the FDA FEI edges, applies RapidFuzz `token_set_ratio` with a blocking key + the FEI/succession edges as forced merges (union-find), writes `firm_crosswalk` (truncate-and-reload), and the additive `canonical_firm_id` coalesce in firm.sql/recall_event_firm.sql (already wired in 6b.0) now resolves to real cluster ids. `match_confidence` carries `fei_exact` (forced), `rapidfuzz_high` (≥ threshold), `rapidfuzz_low_ambiguous_null` (below threshold, left unmerged), `singleton`.
+**Scope.** The genuine edit-distance layer. A `recalls resolve-firms` Typer subcommand (USER-run) reads distinct cleaned firm names + the FDA FEI edges, applies RapidFuzz `token_set_ratio` with a blocking key + the FEI/succession edges as forced merges (union-find), writes `firm_crosswalk` (truncate-and-reload), and the additive `canonical_firm_id` coalesce in firm.sql/recall_event_firm.sql (wired in THIS PR per refinement R1 — NOT 6b.0; see the 6b.0 as-built note) resolves to real cluster ids. `match_confidence` carries `fei_exact` (forced), `rapidfuzz_high` (≥ threshold), `rapidfuzz_low_ambiguous_null` (below threshold, left unmerged), `singleton`.
+
+**G0 result (run 2026-06-03 against full-corpus bronze) — blocking decisions LOCKED:**
+- Universe = **29,470** distinct normalized names (= `firm_dim_rows` exactly; gate validated). Per-source: FDA 14,285 · CPSC 10,027 · NHTSA 3,940 · USCG 746 · USDA 550. Cross-source exact-name overlap is only **78** — so cross-source unification is small-volume/high-value (the Honda/Tyson rollups), and most fuzzy collapse is WITHIN-source.
+- **Brute-force = 434,225,715 pairs; first-token-blocked = 204,143 (~2,127× reduction).** Decision: **first-token blocking ON by default**; brute-force is a feasible (~10-15 min via `cdist`) but unnecessary validation-only knob.
+- **`block_key` strips a leading article (`THE`/`A`/`AN`) before taking the first token.** Q3b showed the `THE` block = 398 names / 79,003 pairs (39% of all blocked pairs) — a RECALL hole, not a speed one (`THE HOME DEPOT` vs `HOME DEPOT` land in different blocks). Strip-then-block recovers them. Next-largest blocks (`AMERICAN` 266, `NEW` 109, `SHENZHEN` 88) are genuinely distinct tokens — no action.
+- **Precision watch-item for the residual gate:** the `SHENZHEN`/`AMERICAN`/`INTERNATIONAL` blocks carry shared corporate-form boilerplate (`CO/LTD/INC/TECHNOLOGY`) → `token_set_ratio` can over-merge unrelated firms. Strip corporate-form stopwords before scoring; eyeball a `SHENZHEN` cluster before locking `rapidfuzz_high`.
 
 **Corpus gate (run FIRST).** Re-confirm G0 scale (from 6b.0) now that deterministic strip has landed; plus a residual-after-strip count.
 - Script: `scripts/sql/cross_source/silver/residual_after_deterministic_strip.sql` (NEW). How many firm_ids deterministic strip + FEI edges already collapse vs how many additional merges RapidFuzz produces at the candidate threshold.
@@ -348,7 +354,7 @@ Run order: per-PR, BEFORE the build. `psql "$NEON_DATABASE_URL" -f <path>`. Tag 
 
 | Gate | Script (NEW unless noted) | PR | Tag | Gating decision |
 |---|---|---|---|---|
-| G0 | `scripts/sql/cross_source/silver/count_distinct_normalized_names_and_overlap.sql` | 6b.0, 6b.4 | needs-requery | brute-force vs blocking; re-key magnitude |
+| G0 ✓RUN 2026-06-03 | `scripts/sql/cross_source/silver/count_distinct_normalized_names_and_overlap.sql` | 6b.0, 6b.4 | confirmed-full-corpus | 29,470 names (=firm dim); 78 cross-source; 434M→204K pairs blocked (~2,127×) → first-token blocking ON, strip leading THE; SHENZHEN/CO/LTD boilerplate = precision watch for residual gate |
 | G1 | `scripts/sql/cpsc/bronze/measure_comma_optional_of_strip.sql` | 6b.1 | needs-requery | comma-optional vs comma-required `of` |
 | G1b | `scripts/sql/cpsc/bronze/inspect_firm_name_fragmentation.sql` (EXTEND) | 6b.1 | needs-requery | keep/drop `d/b/a` branch |
 | G1c | `scripts/sql/cpsc/bronze/inspect_firm_name_fragmentation.sql` (EXISTS) | 6b.1 | confirm-in-doc | bronze single-shot 9,828; add dedup CTE if not |

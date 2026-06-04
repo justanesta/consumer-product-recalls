@@ -27,7 +27,12 @@
 
 -- Per-source normalized firm names (one row per (source, normalized_name)
 -- occurrence; dedup happens in the queries below). Reconstructs firm.sql.
-create temporary table _src_names on commit drop as
+-- NOTE: session-scoped temp table, NOT `on commit drop` — psql autocommits each
+-- statement, so `on commit drop` would drop the table before the next query reads
+-- it. It is auto-dropped when the psql -f session ends; the guard makes a re-run
+-- in the same interactive session safe.
+drop table if exists _src_names;
+create temporary table _src_names as
 with cpsc_arrays as (
     select 'CPSC' as source, jsonb_array_elements(coalesce(manufacturers, '[]'::jsonb)) as firm_json from stg_cpsc_recalls
     union all
