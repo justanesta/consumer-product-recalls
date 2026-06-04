@@ -81,17 +81,24 @@ models:
           - not_null
           - unique
       - name: normalized_name
+        description: >
+          Representative cleaned name for the canonical firm. As of Phase 6b PR 6b.1
+          the firm grain is canonical_firm_id (clean → cluster), so normalized_name is
+          a display representative of that grain, NOT the key — its `unique` test was
+          dropped (critic C5; two raw spellings can clean to one canonical, and the
+          representative is derived across the Python/SQL upper() boundary). firm_id
+          (= canonical_firm_id) carries uniqueness.
         tests:
           - not_null
-          - unique
       - name: canonical_name
         tests:
           - not_null
       - name: alternate_names
         description: >
           JSONB array of surface-form aliases (DBA brands, etc.) preserved for
-          search + RapidFuzz match-explanation (Phase 6b). Empty placeholder until
-          PR 6b.1 populates it from CPSC extracted DBAs. Nullable, untested.
+          search + RapidFuzz match-explanation (Phase 6b). Populated from the
+          firm_crosswalk extracted_dba (CPSC in 6b.1; later sources add theirs).
+          Nullable, untested.
 
   - name: firm_establishment_attributes
     description: >
@@ -243,6 +250,11 @@ models:
                   - rapidfuzz_medium
                   - rapidfuzz_low_ambiguous_null
                   - singleton
+      - name: establishment_number
+        description: >
+          FSIS establishment number resolved for USDA establishment bridge rows (Phase 6b 6b.2,
+          from recall_event_establishment_resolution joined on recall_event_id). NULL for non-USDA
+          rows and for USDA fan-outs that stayed usda_ambiguous_null. Nullable, untested.
     # Composite uniqueness of (recall_event_id, firm_id, role) is now enforced
     # explicitly via the model-level dbt_utils.unique_combination_of_columns
     # test above (the SELECT DISTINCT in the model also guarantees it).
@@ -268,3 +280,32 @@ models:
       - name: url
         tests:
           - not_null
+
+  - name: recall_event_establishment_resolution
+    description: >
+      USDA recall -> FSIS establishment disambiguation (Phase 6b PR 6b.2). One row per USDA
+      recall_event_id with >=1 name-matched establishment, resolving the free-text establishment
+      name to a single establishment_number via a precision-first signal hierarchy
+      (unambiguous > embedded establishment number > field_states match > ambiguous_null).
+      recall_event_firm joins this on recall_event_id to stamp establishment_number +
+      match_confidence on USDA bridge rows. ~688/786 name-matched recalls resolve; the ~12.5%
+      ambiguous_null are mostly multi-plant producers with no stated number (correctly NULL).
+    columns:
+      - name: recall_event_id
+        tests:
+          - not_null
+          - unique
+      - name: establishment_number
+        description: >
+          Resolved FSIS establishment_number (the '+'-composite id), or NULL when the fan-out is
+          unresolved (precision-over-recall — a wrong attribution is worse than none).
+      - name: match_confidence
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - usda_unambiguous
+                  - usda_product_items_extract
+                  - usda_state_match
+                  - usda_ambiguous_null

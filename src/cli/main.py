@@ -21,6 +21,7 @@ from src.config.source_registry import (
     EXTRACTOR_BY_SOURCE_NAME,
     build_extractor_kwargs,
 )
+from src.enrichment.crosswalk_writer import resolve_firm_crosswalk
 
 if TYPE_CHECKING:
     from src.extractors._base import Extractor
@@ -538,6 +539,33 @@ def recover_rejected(
             f"  ({result.candidates - result.inserted} already present — content-hash dedup "
             "skipped them; re-running is idempotent.)"
         )
+
+
+@app.command(name="resolve-firms")
+def resolve_firms(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report the row counts without writing firm_crosswalk."),
+    ] = False,
+) -> None:
+    """Rebuild firm_crosswalk from CPSC bronze firm names (Phase 6b clean stage).
+
+    Maps each distinct CPSC firm name through ``src.enrichment.firm_normalization``
+    (geo suffix-strip + DBA-extract) and truncate-reloads ``firm_crosswalk``, keyed by
+    ``md5(upper(trim(name)))`` so the silver firm models join it for
+    ``canonical_firm_id`` / ``clean_name`` / ``extracted_dba``. Deterministic +
+    idempotent; no API or watermark side effects. PR 6b.4 overlays RapidFuzz here.
+    """
+    configure_logging()
+    settings = Settings()  # type: ignore[call-arg]
+    engine = make_engine(settings.neon_database_url.get_secret_value())
+    summary = resolve_firm_crosswalk(engine, dry_run=dry_run)
+    dry = " [dry-run]" if summary.dry_run else ""
+    typer.echo(
+        f"resolve-firms{dry}: distinct_names={summary.distinct_names} "
+        f"written={summary.rows_written} suffix_cleaned={summary.cleaned_count} "
+        f"dba_extracted={summary.dba_count}"
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

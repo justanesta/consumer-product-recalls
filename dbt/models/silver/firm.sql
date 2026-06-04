@@ -168,19 +168,37 @@ all_normalized as (
     select * from nhtsa_normalized
     union all
     select * from uscg_normalized
+),
+
+-- Phase 6b PR 6b.1 (Increment B): resolve each raw firm to its canonical (cleaned —
+-- later clustered) id via enrichment.firm_crosswalk, keyed by md5(normalized_name).
+-- Firms with no crosswalk row are their own canonical (the coalesce — non-CPSC today).
+-- KEEP IN LOCKSTEP with recall_event_firm.sql's `mapped` CTE: both map the raw firm_id
+-- -> canonical_firm_id via the SAME crosswalk join, or recall_event_firm.firm_id
+-- orphans against firm.firm_id (the relationships test).
+resolved as (
+    select
+        an.raw_name,
+        an.normalized_name,
+        an.company_id,
+        coalesce(x.canonical_firm_id, md5(an.normalized_name)) as canonical_firm_id,
+        coalesce(x.canonical_name, an.raw_name)                as resolved_name,
+        x.extracted_dba
+    from all_normalized an
+    left join {{ source('enrichment', 'firm_crosswalk') }} x
+        on x.firm_id = md5(an.normalized_name)
 )
 
 select
-    md5(normalized_name)                      as firm_id,
-    normalized_name,
-    (array_agg(raw_name order by raw_name))[1] as canonical_name,
-    jsonb_agg(distinct raw_name)              as observed_names,
+    canonical_firm_id                                                 as firm_id,
+    upper(trim((array_agg(resolved_name order by resolved_name))[1])) as normalized_name,
+    (array_agg(resolved_name order by resolved_name))[1]             as canonical_name,
+    jsonb_agg(distinct raw_name)                                     as observed_names,
     jsonb_agg(distinct company_id)
-        filter (where company_id is not null) as observed_company_ids,
-    -- alternate_names (Phase 6b substrate, PR 6b.0): surface-form aliases (DBA
-    -- brands, etc.) preserved for search + match-explanation. Empty placeholder
-    -- here; PR 6b.1 populates it from CPSC extracted DBAs (extract_firm_dba),
-    -- later PRs add other sources' aliases.
-    cast(null as jsonb)                       as alternate_names
-from all_normalized
-group by normalized_name
+        filter (where company_id is not null)                       as observed_company_ids,
+    -- alternate_names (Phase 6b): DBA brands / surface-form aliases from the crosswalk
+    -- (CPSC extracted_dba today; later sources add theirs). NULL when none.
+    jsonb_agg(distinct extracted_dba)
+        filter (where extracted_dba is not null)                    as alternate_names
+from resolved
+group by canonical_firm_id
