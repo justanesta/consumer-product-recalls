@@ -235,3 +235,32 @@ from mid_elements
 where raw_name <> stripped_name
 order by 1
 limit 20;
+
+\echo ''
+\echo '=== Q7: DBA form breakdown — dba vs d/b/a vs doing business as (gate G1b) ==='
+-- Splits Q4's grouped dba_any_form into its three surface forms so PR 6b.1 can decide whether
+-- the clean_firm_name/extract_firm_dba macro must carry the "d/b/a" alternation branch or can
+-- drop it as dead. Word-boundary-aware (\y) so "dba" glued inside a word does not false-match;
+-- the three forms are mutually exclusive ("d/b/a" has no "dba" substring — slashes separate).
+-- Counts are M/I/D elements (a name carrying two forms — rare — counts under each).
+-- EXPECTED SIGNAL: keep the d/b/a alternation in the macro IFF form_slash > 0; drop it otherwise.
+with mid_names as (
+  select m.value->>'name' as name
+  from cpsc_recalls_bronze, jsonb_array_elements(coalesce(manufacturers, '[]'::jsonb)) m
+  where nullif(trim(m.value->>'name'), '') is not null
+  union all
+  select m.value->>'name'
+  from cpsc_recalls_bronze, jsonb_array_elements(coalesce(importers, '[]'::jsonb)) m
+  where nullif(trim(m.value->>'name'), '') is not null
+  union all
+  select m.value->>'name'
+  from cpsc_recalls_bronze, jsonb_array_elements(coalesce(distributors, '[]'::jsonb)) m
+  where nullif(trim(m.value->>'name'), '') is not null
+)
+select
+  count(*) filter (where name ~* '\ydba\y')                          as form_dba,
+  count(*) filter (where name ~* 'd/b/a')                            as form_slash,
+  count(*) filter (where name ~* 'doing business as')                as form_doing_business_as,
+  count(*) filter (where name ~* '\y(dba|d/b/a|doing business as)\y') as any_dba_form_elements,
+  count(distinct name) filter (where name ~* '\y(dba|d/b/a|doing business as)\y') as any_dba_form_distinct
+from mid_names;
