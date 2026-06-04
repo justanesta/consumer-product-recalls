@@ -24,7 +24,15 @@ with ranked as (
         *,
         row_number() over (
             partition by
-                campno, maketxt, modeltxt, yeartxt, compname,
+                -- ADR 0033 Normalization class (Phase 6b 6b.3): canonicalize maketxt via the
+                -- normalize_maketxt macro IN the identity grain so the 'AC DELCO' -> 'ACDELCO'
+                -- normalization-drift class is ONE identity (latest-wins), not two. The macro is
+                -- the SINGLE source of truth — recall_product.sql's md5 + the drift monitor call
+                -- the same macro, so the sites can't diverge (no silent re-fragmentation). The
+                -- maketxt column SELECTed below stays RAW (survivor's spelling is displayed).
+                campno,
+                {{ normalize_maketxt('maketxt') }},
+                modeltxt, yeartxt, compname,
                 rcl_cmpt_id, mfr_comp_ptno, mfr_comp_desc, mfr_comp_name,
                 endman, bgman
             order by extraction_timestamp desc

@@ -1,13 +1,18 @@
-"""Unit tests for CPSC firm-name normalization (Phase 6b PR 6b.1).
+"""Unit tests for CPSC + NHTSA firm-name normalization (Phase 6b PRs 6b.1 + 6b.3).
 
-Fixtures are REAL corpus strings from data/exploratory/cpsc/g1_comma_less_cohort.csv
-and the gate measure_comma_optional_of_strip.sql, so the regression surface is the
-actual data the macro decision was validated against (2026-06-03).
+Fixtures are REAL corpus strings: CPSC from data/exploratory/cpsc/g1_comma_less_cohort.csv
++ measure_comma_optional_of_strip.sql; NHTSA from
+data/exploratory/nhtsa/name_normalization_features.csv. So the regression surface is the
+actual data each cleaning decision was validated against (2026-06-03).
 """
 
 import pytest
 
-from src.enrichment.firm_normalization import clean_firm_name, extract_firm_dba
+from src.enrichment.firm_normalization import (
+    clean_firm_name,
+    clean_nhtsa_firm_name,
+    extract_firm_dba,
+)
 
 # Trailing geographic suffix -> stripped to the canonical legal name.
 _STRIP = [
@@ -131,3 +136,94 @@ def test_clean_is_idempotent(raw):
 )
 def test_clean_edges(raw, expected):
     assert clean_firm_name(raw) == expected
+
+
+# ── NHTSA parenthetical cleaning (PR 6b.3) ──────────────────────────────────────
+# Fixtures from data/exploratory/nhtsa/name_normalization_features.csv (2026-06-03):
+# 41 parenthetical names, 0 over-strips, 10 merge clusters (21 names -> 10).
+
+# Balanced (parenthetical) annotation removed -> canonical name.
+_NHTSA_STRIP = [
+    ("CHRYSLER (FCA US, LLC) (STELLANTIS)", "CHRYSLER"),
+    ("CHRYSLER (FCA US, LLC)", "CHRYSLER"),
+    ("CHRYSLER (FCA US LLC)", "CHRYSLER"),
+    ("TAKATA (TK GLOBAL, LLC)", "TAKATA"),
+    ("HONDA (AMERICAN HONDA MOTOR CO.)", "HONDA"),
+    ("ALUMINUM TRAILER COMPANY (ATC)", "ALUMINUM TRAILER COMPANY"),
+    ("DIONO (FORMERLY SUNSHINE KIDS JUVENILE)", "DIONO"),
+    ("APOLLO TIRES (US) INC.", "APOLLO TIRES INC."),
+    ("NOVA BUS (US) INC.", "NOVA BUS INC."),
+    ("SEMPERIT, A.G.(AUSTRIA)", "SEMPERIT, A.G."),  # no space before paren
+    ("HINO DIESEL TRUCKS(USA)", "HINO DIESEL TRUCKS"),  # no space before paren
+    ("GENERAL RUBBER (THAILAND) CO., LTD", "GENERAL RUBBER CO., LTD"),
+    ("MAZDA (NORTH AMERICA),INC", "MAZDA,INC"),
+    ("KEY SAFETY SYSTEMS, INC. - (DBA JOYSON)", "KEY SAFETY SYSTEMS, INC."),
+]
+
+
+@pytest.mark.parametrize("raw,expected", _NHTSA_STRIP)
+def test_clean_nhtsa_strips_parentheticals(raw, expected):
+    assert clean_nhtsa_firm_name(raw) == expected
+
+
+# Truncated open paren (CHAR(40) cut-off) or no paren -> left WHOLE.
+_NHTSA_KEEP = [
+    "AMERICAN PACIFIC INDUSTRIES, INC (A.P.I.",  # truncated open paren
+    "TOMY INTERNATIONAL (LEARNING CURVE BRAND",  # truncated open paren
+    "FORD MOTOR COMPANY",
+    "TOYOTA MOTOR ENGINEERING & MANUFACTURING",
+]
+
+
+@pytest.mark.parametrize("raw", _NHTSA_KEEP)
+def test_clean_nhtsa_keeps_whole(raw):
+    assert clean_nhtsa_firm_name(raw) == raw
+
+
+def test_clean_nhtsa_chrysler_variants_collapse():
+    # 3 paren spellings -> ONE canonical (the cluster the truncated sample missed).
+    forms = [
+        "CHRYSLER (FCA US LLC)",
+        "CHRYSLER (FCA US, LLC)",
+        "CHRYSLER (FCA US, LLC) (STELLANTIS)",
+    ]
+    assert {clean_nhtsa_firm_name(f) for f in forms} == {"CHRYSLER"}
+
+
+def test_clean_nhtsa_key_safety_variants_collapse():
+    # The "- (DBA JOYSON)" trailing-hyphen form must tidy to merge with the rest.
+    forms = [
+        "KEY SAFETY SYSTEMS, INC.",
+        "KEY SAFETY SYSTEMS, INC. (DBA JOYSON)",
+        "KEY SAFETY SYSTEMS, INC. - (DBA JOYSON)",
+    ]
+    assert {clean_nhtsa_firm_name(f) for f in forms} == {"KEY SAFETY SYSTEMS, INC."}
+
+
+@pytest.mark.parametrize("raw", ["(SOMETHING)", "(X)", "()"])
+def test_clean_nhtsa_never_over_strips(raw):
+    # Stripping to < 2 chars would destroy the name -> keep the original (precision-first).
+    assert clean_nhtsa_firm_name(raw) == raw
+
+
+@pytest.mark.parametrize("raw,expected", [("", ""), ("   ", ""), ("  NOVA BUS  (US) ", "NOVA BUS")])
+def test_clean_nhtsa_edges(raw, expected):
+    assert clean_nhtsa_firm_name(raw) == expected
+
+
+@pytest.mark.parametrize("raw", [r for r, _ in _NHTSA_STRIP] + _NHTSA_KEEP)
+def test_clean_nhtsa_is_idempotent(raw):
+    once = clean_nhtsa_firm_name(raw)
+    assert clean_nhtsa_firm_name(once) == once
+
+
+# DBA brand still captured from the NHTSA paren form (extract_firm_dba unchanged).
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("KEY SAFETY SYSTEMS, INC. (DBA JOYSON)", "JOYSON"),
+        ("ITR USA, INC. (DBA ITA)", "ITA"),
+    ],
+)
+def test_extract_dba_nhtsa_paren(raw, expected):
+    assert extract_firm_dba(raw) == expected

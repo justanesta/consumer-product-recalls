@@ -1,6 +1,6 @@
 # 0031 — Silver-row fragmentation strategy: per-source surrogate keys, drift detection, and reconciliation tiers
 
-- **Status:** Accepted (amended 2026-05-12 — Tier 2 per-path-value-set refactor; amended 2026-05-13 — silver-grain migration evaluation tracking added; amended 2026-05-15 — tracking cadence revised from monthly/6-month-window to daily/few-week-window; amended 2026-05-15 (later same day) — migration tracking subsection sunset after Pierce 26V217000 mfr_comp_desc population event triggered Stop criterion #1; baselines refreshed and "What to do now" cadence corrected)
+- **Status:** Accepted (amended 2026-05-12 — Tier 2 per-path-value-set refactor; amended 2026-05-13 — silver-grain migration evaluation tracking added; amended 2026-05-15 — tracking cadence revised from monthly/6-month-window to daily/few-week-window; amended 2026-05-15 (later same day) — migration tracking subsection sunset after Pierce 26V217000 mfr_comp_desc population event triggered Stop criterion #1; baselines refreshed and "What to do now" cadence corrected; amended 2026-06-03 — Phase 6b PR 6b.3 lands the deterministic `maketxt` anchor-canonicalization (`normalize_maketxt` macro at the staging identity partition + the `recall_product_id` md5) plus a forward drift monitor for the AC DELCO Normalization class; substance in ADR 0033's 2026-06-03 amendment)
 - **Date:** 2026-05-08
 - **Supersedes:** —
 - **Superseded by:** —

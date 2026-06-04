@@ -1,4 +1,4 @@
-"""CPSC firm-name normalization (Phase 6b, PR 6b.1).
+"""CPSC + NHTSA firm-name normalization (Phase 6b, PRs 6b.1 + 6b.3).
 
 Deterministic cleaning of CPSC firm-role names (manufacturers / importers /
 distributors) before they enter the silver firm dimension and the 6b.4 RapidFuzz
@@ -280,6 +280,12 @@ _DBA_PAREN = re.compile(r"\s*\(\s*" + _DBA_MARK + r"\s*([^)]*?)\s*\)", re.IGNORE
 _DBA_INLINE_CAPTURE = re.compile(r",?\s*" + _DBA_MARK + r"\s+(.+)$", re.IGNORECASE)
 _DBA_INLINE_STRIP = re.compile(r",?\s*" + _DBA_MARK + r"\s+.*$", re.IGNORECASE)
 
+# NHTSA (PR 6b.3): a BALANCED (parenthetical) annotation — parent-corp / regional /
+# alias / DBA / "formerly". Balanced-only, so a CHAR(40)-truncated open paren is kept.
+_PAREN = re.compile(r"\s*\([^)]*\)")
+# Trailing junk a paren-strip can leave ("KEY SAFETY SYSTEMS, INC. -").
+_TIDY_TRAIL = ",;- "
+
 
 def _tail_has_geo(tail: str) -> bool:
     """True if the trailing clause (after an 'of') carries a geographic token.
@@ -340,3 +346,51 @@ def extract_firm_dba(raw: str) -> str | None:
         brand = brand.strip().rstrip(",; ")
         return brand or None
     return None
+
+
+def _strip_parentheticals(name: str) -> str:
+    """Remove every balanced (parenthetical) group, then tidy trailing punctuation.
+
+    Balanced-only: a CHAR(40)-truncated open paren (no closing ``)``) is left in
+    place. The trailing tidy reclaims merges a bare strip would miss
+    ("KEY SAFETY SYSTEMS, INC. -" -> "KEY SAFETY SYSTEMS, INC."). Callers apply the
+    precision (min-length) guard.
+    """
+    stripped = _PAREN.sub("", name)
+    return _WS.sub(" ", stripped).strip().rstrip(_TIDY_TRAIL)
+
+
+def clean_nhtsa_firm_name(raw: str) -> str:
+    """Return the NHTSA firm name with all balanced (parenthetical) annotations gone.
+
+    NHTSA mfgname/mfgtxt carry parent-company ("CHRYSLER (FCA US, LLC) (STELLANTIS)"),
+    regional ("APOLLO TIRES (US) INC."), alias ("ALUMINUM TRAILER COMPANY (ATC)"),
+    DBA ("(DBA JOYSON)"), and "(FORMERLY ...)" parentheticals — all identity noise.
+    Validated on the full 3,940-name corpus
+    (data/exploratory/nhtsa/name_normalization_features.csv, 2026-06-03): 0 over-strips;
+    10 merge clusters collapse 21 names -> 10 canonical. Precision-first:
+
+    - only BALANCED ``(...)`` strip, so a CHAR(40)-truncated open paren
+      ("AMERICAN PACIFIC INDUSTRIES, INC (A.P.I.") is left WHOLE;
+    - trailing ",;- " a strip leaves is tidied so de-parenthesized forms merge;
+    - if stripping would leave < 2 chars, the original is kept (never destroy a name).
+
+    Idempotent; preserves case. DBA brands ("JOYSON", "ITA") are captured separately
+    by ``extract_firm_dba`` (-> firm.alternate_names), unchanged from CPSC.
+
+    DEFERRED WIRING (C-lite, 2026-06-03): this is deterministic PREP only — it is NOT
+    yet applied to any firm_id. PR 6b.4 consumes it when it assembles the cross-source
+    crosswalk: union the distinct CPSC + NHTSA names through ONE unified cleaner
+    (``_strip_parentheticals`` wrapped around the UNTOUCHED CPSC ``clean_firm_name``),
+    stamp a source-agnostic cleaning-based match_confidence, run the CPSC non-DBA-paren
+    blast-radius probe, then RapidFuzz. Corporate-form (69.5%) + regional (5.7%) tokens
+    are NOT cleaned here — they become 6b.4 RapidFuzz stopwords (the G0 decision). See
+    project_scope/phase-6b-execution-plan.md PR 6b.3 (as-built) + PR 6b.4.
+    """
+    if not raw:
+        return ""
+    name = _WS.sub(" ", raw).strip()
+    stripped = _strip_parentheticals(name)
+    if len(stripped) < 2:
+        return name
+    return stripped

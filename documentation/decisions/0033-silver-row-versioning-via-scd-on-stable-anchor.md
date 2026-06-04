@@ -1,6 +1,6 @@
 # 0033 — Silver row versioning via SCD on stable anchor (NHTSA `recall_product_id` migration to 6-tuple + Type 2 snapshot)
 
-- **Status:** Proposed (2026-05-15)
+- **Status:** Proposed (2026-05-15; amended 2026-06-03 — Phase 6b PR 6b.3 deterministic discharge of the Normalization class for the whitespace/case sub-case, see "Amendment 2026-06-03" below)
 - **Date:** 2026-05-15
 - **Supersedes:** —
 - **Superseded by:** —
@@ -137,6 +137,15 @@ Across Sections H/I/K/M of `documentation/nhtsa/incremental_delta_findings.md`, 
 **Why this matters for v1.5 architecture:** the first three classes (Population, Depopulation, Value edit) are **handled transparently by the Type 1 + Type 2 mechanism above** — the snapshot collapses pre- and post-amendment versions into one canonical current row plus a Type 2 history entry. The fourth class (Normalization on a 6-tuple anchor field) is the **only known class that v1.5 does NOT solve** and remains a Phase 6b deliverable. This is the precise scope boundary this ADR commits to: the "~99% of observed fragmentation" addressed claim (per the "Empirical evidence" section below) refers to the first three classes; the remaining ~1% is the Normalization class needing fuzzy reconciliation.
 
 **Forward integration with Phase 6c `recall_event_history`:** when Phase 6c implements the event-grain history model, the `event_type` enum should include the four values in this table. The model's source data should be the dbt snapshot table (Layer 2 deliverable per `project_scope/silver_v15_migration_plan.md`), which exposes pre/post values per attribute change as Type 2 versions. Phase 6c's classifier then maps each version transition to its `event_type` per this table's "Reconciliation rule" column. This is open question #3 in the migration plan ("`recall_event_history` integration mode") — answering "snapshot directly" cleanly slots into this taxonomy without rework.
+
+### Amendment 2026-06-03 (Phase 6b PR 6b.3) — deterministic discharge of the Normalization class (whitespace/case sub-case)
+
+The Normalization row above pencils in "v1: manual review. ML-assisted later." for the AC DELCO-class anchor drift, and the body frames the class as the "only known class v1.5 does NOT solve." Phase 6b PR 6b.3 refines that rule by SPLITTING the class:
+
+- **Whitespace/case sub-case (incl. the founding `AC DELCO`↔`ACDELCO` exemplar) is discharged DETERMINISTICALLY — not by fuzzy match.** A single `normalize_maketxt(col)` dbt macro (`regexp_replace(upper(trim(coalesce(col,''))),'\s+','','g')`) canonicalizes the `maketxt` ANCHOR value, applied byte-identically at (a) the `stg_nhtsa_recalls` identity-grain `DISTINCT ON` partition and (b) the `recall_product_id` md5. The two spellings fold to one logical product; bronze retains both (audit-quality, unchanged). This is anchor-VALUE canonicalization — a third option this ADR's body did not enumerate (it jumped from "cannot Type-1 an anchor" straight to "fuzzy/manual/ML"). It is **over-merge-safe by construction** (nothing genuinely distinct differs only by whitespace/case → precision-over-recall holds) and **forward-compatible**: `maketxt` is a 6-tuple anchor, so the same macro carries into the future `stg_nhtsa_recalls_current` `DISTINCT ON` and the snapshot `unique_key`, removing the last drift source *from the anchor itself*. The md5-only fix the 6b plan originally specified was insufficient — it would have left two staging rows sharing one `recall_product_id` (a `unique`-test break); normalizing at BOTH the partition and the md5 is the correct, consistent fix.
+- **Genuinely-fuzzy residual (abbreviation/synonym, e.g. `VW`↔`VOLKSWAGEN`) + any NEW unhandled drift stays deferred — but DETECTED, not silently accepted.** `dbt/tests/assert_nhtsa_maketxt_drift_caught.sql` (severity=warn, ADR 0031 Tier-2) trips when one logical product (identical on all 10 non-`maketxt` identity fields) carries >1 distinct `normalize_maketxt(maketxt)` value in bronze. The Phase 6a.5 full historical seed (1966-present) is expected to surface more classes here; the monitor is how we SEE them and decide per-class (extend the macro, add a targeted alias, or send to the 6b.4 fuzzy layer) rather than re-fragment blind.
+
+Net: "the only class v1.5 does NOT solve" shrinks to "the *fuzzy residual* of that class." The common whitespace/case case is solved deterministically on the anchor; the rest is defensively detected. The dbt-snapshot `unique_key` in this ADR's body should adopt `normalize_maketxt(maketxt)` when Layer 2 builds, for the same anchor-stability reason. ADR 0031's per-source NHTSA row stays current (recipe unchanged in spirit — `maketxt` is now canonicalized before hashing, not raw).
 
 ### Silver consumer surfaces
 

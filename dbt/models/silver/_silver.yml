@@ -309,3 +309,28 @@ models:
                   - usda_product_items_extract
                   - usda_state_match
                   - usda_ambiguous_null
+
+  - name: firm_fei_edges
+    description: >
+      FDA shared-FEI + surviving-FEI succession edges (Phase 6b PR 6b.3) — the
+      deterministic forced-merge constraints the 6b.4 RapidFuzz clusterer consumes
+      (union-find) so the 12.4% of FEIs mapping to >1 legal name collapse without fuzzy.
+      One row per distinct (firm_id, normalized_name, firm_fei_num, firm_surviving_fei)
+      from stg_fda_recalls where firm_fei_num is not null. NOT yet consumed by firm.sql /
+      recall_event_firm.sql (6b.4 wires it) — additive, no lockstep impact. firm_id is the
+      pre-clustering raw md5(upper(trim(firm_legal_nam))); intentionally NOT relationship-
+      tested against firm.firm_id (it feeds the pass that makes firm.firm_id canonical).
+    columns:
+      - name: firm_id
+        description: md5(upper(trim(firm_legal_nam))) — mirrors firm.sql's fda_normalized firm_id.
+        tests:
+          - not_null
+      - name: firm_fei_num
+        description: FDA FEI (government establishment id). Shared firm_fei_num across rows = a forced merge.
+        tests:
+          - not_null
+      - name: firm_surviving_fei
+        description: >
+          FDA's own successor-FEI pointer for renamed/merged firms (NULL for most). A live
+          (firm_fei_num -> firm_surviving_fei) pair is a directed succession edge; 6b.4's
+          clusterer interprets it (ignores null/self/dangling, guards cycles). Nullable, untested.
