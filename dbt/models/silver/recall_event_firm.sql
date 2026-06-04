@@ -27,6 +27,14 @@
 --   against firm.firm_id (1549 orphans observed 2026-05-30 before this
 --   alignment was applied).
 
+-- match_confidence (Phase 6b substrate, PR 6b.0): the firm-resolution path/quality
+-- for each bridge row. Defaults to 'exact_name'; per-source PRs overwrite it —
+-- 6b.1 (CPSC suffix-strip / DBA-extract), 6b.2 (USDA disambiguation signals),
+-- 6b.4 (RapidFuzz tiers), 6b.5 (USCG MIC time-sensitivity). The shared
+-- accepted_values vocabulary (severity=warn) is single-homed in _silver.yml. Keep
+-- the column in EVERY branch so the union stays width-aligned — lockstep with
+-- firm.sql applies to the whole column SET, not just firm_id.
+
 with cpsc_firms as (
     select source_recall_id, 'manufacturer' as role,
            jsonb_array_elements(coalesce(manufacturers, '[]'::jsonb)) as firm_json
@@ -45,7 +53,8 @@ cpsc_event_firms as (
     select distinct
         md5('CPSC' || '|' || source_recall_id)  as recall_event_id,
         md5(upper(trim(firm_json ->> 'name')))  as firm_id,
-        role
+        role,
+        'exact_name'                            as match_confidence
     from cpsc_firms
     where (firm_json ->> 'name') is not null
       and trim(firm_json ->> 'name') <> ''
@@ -57,7 +66,8 @@ fda_event_firms as (
     select distinct
         md5('FDA' || '|' || recall_event_id::text) as recall_event_id,
         md5(upper(trim(firm_legal_nam)))            as firm_id,
-        'establishment'                             as role
+        'establishment'                             as role,
+        'exact_name'                                as match_confidence
     from {{ ref('stg_fda_recalls') }}
     where firm_legal_nam is not null
       and trim(firm_legal_nam) <> ''
@@ -67,7 +77,8 @@ usda_event_firms as (
     select distinct
         md5('USDA' || '|' || source_recall_id)  as recall_event_id,
         md5(upper(trim(establishment)))         as firm_id,
-        'establishment'                         as role
+        'establishment'                         as role,
+        'exact_name'                            as match_confidence
     from {{ ref('stg_usda_fsis_recalls') }}
     where establishment is not null
       and trim(establishment) <> ''
@@ -83,7 +94,8 @@ nhtsa_event_firms as (
     select distinct
         md5('NHTSA' || '|' || campno)           as recall_event_id,
         md5(upper(trim(mfgname)))               as firm_id,
-        'filer'                                 as role
+        'filer'                                 as role,
+        'exact_name'                            as match_confidence
     from {{ ref('stg_nhtsa_recalls') }}
     where mfgname is not null
       and trim(mfgname) <> ''
@@ -91,7 +103,8 @@ nhtsa_event_firms as (
     select distinct
         md5('NHTSA' || '|' || campno)           as recall_event_id,
         md5(upper(trim(mfgtxt)))                as firm_id,
-        'manufacturer'                          as role
+        'manufacturer'                          as role,
+        'exact_name'                            as match_confidence
     from {{ ref('stg_nhtsa_recalls') }}
     where mfgtxt is not null
       and trim(mfgtxt) <> ''
@@ -110,7 +123,8 @@ uscg_event_firms as (
     select distinct
         md5('USCG' || '|' || r.source_recall_id)                                   as recall_event_id,
         md5(upper(trim(coalesce(m.company_name, r.company_name, r.mic))))          as firm_id,
-        'manufacturer'                                                             as role
+        'manufacturer'                                                             as role,
+        'exact_name'                                                               as match_confidence
     from {{ ref('stg_uscg_recalls') }} r
     left join {{ ref('stg_uscg_manufacturers') }} m
         on upper(trim(r.mic)) = upper(trim(m.mic))

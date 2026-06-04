@@ -318,3 +318,39 @@ sources:
       - name: uscg_manufacturer_details_rejected
         description: Quarantine table for USCG manufacturer-detail records that failed validation or invariant checks (ADR 0013).
         loaded_at_field: rejected_at
+
+  - name: enrichment
+    description: >
+      Derived (non-bronze) tables written by Python enrichment steps, not by an
+      extractor. Phase 6b firm entity resolution. schema=public matches the
+      alembic-created table (migration 0024); the silver firm / recall_event_firm
+      models LEFT JOIN firm_crosswalk for the additive canonical_firm_id (PR 6b.4).
+    schema: public
+    tables:
+      - name: firm_crosswalk
+        description: >
+          Cross-source firm-resolution crosswalk: one row per firm_id
+          (= md5(normalized_name) from silver firm.sql) mapping it to its cluster
+          representative canonical_firm_id. Written by the `recalls resolve-firms`
+          CLI (PR 6b.4, USER-run): deterministic FEI/succession forced-merges +
+          RapidFuzz edit-distance clustering. Created empty by migration 0024;
+          0 rows until 6b.4 runs the resolver. No freshness block — it is rebuilt
+          on demand, not on a cron cadence.
+        columns:
+          - name: firm_id
+            description: md5(normalized_name) — the per-name firm key from firm.sql. Natural PK.
+            tests:
+              - not_null
+              - unique
+          - name: canonical_firm_id
+            description: The cluster representative's firm_id; equals firm_id for singletons.
+            tests:
+              - not_null
+          - name: match_confidence
+            description: Resolution path (e.g. 'fei_exact', 'rapidfuzz_high', 'singleton').
+            tests:
+              - not_null
+          - name: resolver_version
+            description: Blocking-key + threshold config the CLI used, for auditable rebuilds.
+            tests:
+              - not_null

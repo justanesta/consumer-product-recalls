@@ -176,6 +176,11 @@ select
     (array_agg(raw_name order by raw_name))[1] as canonical_name,
     jsonb_agg(distinct raw_name)              as observed_names,
     jsonb_agg(distinct company_id)
-        filter (where company_id is not null) as observed_company_ids
+        filter (where company_id is not null) as observed_company_ids,
+    -- alternate_names (Phase 6b substrate, PR 6b.0): surface-form aliases (DBA
+    -- brands, etc.) preserved for search + match-explanation. Empty placeholder
+    -- here; PR 6b.1 populates it from CPSC extracted DBAs (extract_firm_dba),
+    -- later PRs add other sources' aliases.
+    cast(null as jsonb)                       as alternate_names
 from all_normalized
 group by normalized_name

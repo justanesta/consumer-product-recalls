@@ -87,6 +87,11 @@ models:
       - name: canonical_name
         tests:
           - not_null
+      - name: alternate_names
+        description: >
+          JSONB array of surface-form aliases (DBA brands, etc.) preserved for
+          search + RapidFuzz match-explanation (Phase 6b). Empty placeholder until
+          PR 6b.1 populates it from CPSC extracted DBAs. Nullable, untested.
 
   - name: firm_establishment_attributes
     description: >
@@ -207,6 +212,37 @@ models:
           - accepted_values:
               arguments:
                 values: ['manufacturer', 'importer', 'distributor', 'establishment', 'filer']
+      - name: match_confidence
+        description: >
+          Firm-resolution path/quality for this bridge row (Phase 6b). Defaults to
+          'exact_name'; per-source PRs overwrite it (6b.1 CPSC, 6b.2 USDA, 6b.4
+          RapidFuzz, 6b.5 USCG MIC time-sensitivity). The full namespaced
+          vocabulary is single-homed below at severity=warn so PRs can populate
+          their values incrementally without breaking the build; 6b.6 promotes it
+          to error once every source's value set has landed.
+        tests:
+          - accepted_values:
+              config:
+                severity: warn
+              arguments:
+                values:
+                  - exact_name
+                  - cpsc_suffix_strip_exact
+                  - cpsc_dba_extract_exact
+                  - usda_unambiguous
+                  - usda_product_items_extract
+                  - usda_state_match
+                  - usda_processing_match
+                  - usda_multi_signal
+                  - usda_ambiguous_null
+                  - uscg_mic_unambiguous
+                  - uscg_mic_time_sensitive_unresolved
+                  - uscg_mic_build_date_resolved
+                  - fei_exact
+                  - rapidfuzz_high
+                  - rapidfuzz_medium
+                  - rapidfuzz_low_ambiguous_null
+                  - singleton
     # Composite uniqueness of (recall_event_id, firm_id, role) is now enforced
     # explicitly via the model-level dbt_utils.unique_combination_of_columns
     # test above (the SELECT DISTINCT in the model also guarantees it).

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "consumer-product-recalls"
-version = "0.13.0"
+version = "0.14.0"
 description = "EtLT medallion pipeline for US federal consumer product recall data"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -25,6 +25,10 @@ dependencies = [
     # BeautifulSoup parser backend; both are required at runtime.
     "beautifulsoup4>=4.12,<5",
     "lxml>=6.1.1,<7",
+    # Phase 6b — cross-source firm entity resolution. RapidFuzz powers the
+    # edit-distance clustering in `recalls resolve-firms` (PR 6b.4); deterministic
+    # name-cleaning stays in dbt-SQL macros (no in-DB fuzzy extension needed).
+    "rapidfuzz>=3.10,<4",
 ]
 
 [project.scripts]
