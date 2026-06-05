@@ -52,6 +52,8 @@ def test_place_words_cover_the_observed_hub_tokens():
 
 
 # ── Tier 0: fei_resolve (current-FEI grouping + fan-out gate) ─────────────────────
+### These tests for the FEI grouping and resolution are not used and can be deprecated due to
+### the FDA FEI number being an attribute and not a merge key
 def test_fei_resolve_groups_by_current_fei():
     rows = [("ida", "100", "A"), ("idb", "100", "B"), ("idc", "200", "C")]
     clean = {"ida": "FIRM A", "idb": "FIRM B", "idc": "FIRM C"}

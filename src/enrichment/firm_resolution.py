@@ -178,6 +178,8 @@ def pick_canonical(members: list[str]) -> str:
     return min(members, key=lambda n: (len(n.split()), len(n), n))
 
 
+### This function is not used and can be deprecated due to the FDA FEI not being
+### a merge key but an attribute
 def fei_resolve(
     fei_rows: Sequence[tuple[str, str, str]],
     clean_of: dict[str, str],
