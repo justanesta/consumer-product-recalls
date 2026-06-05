@@ -34,7 +34,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0032 — USDA establishment `latest_mpi_active_date` hash exclusion (upstream heartbeat fields)](0032-usda-establishment-heartbeat-field-hash-exclusion.md) — third category of `hash_exclude_fields` use; suppresses weekly ~7k phantom re-versions
 - [0033 — Silver row versioning via SCD on stable anchor](0033-silver-row-versioning-via-scd-on-stable-anchor.md) — NHTSA `recall_product` 6-tuple stable anchor + Type-1 latest-wins + Type-2 dbt snapshot; framework generalizes cross-source
 - [0034 — NHTSA silver v1.5 — Layer 3 migration cutover](0034-nhtsa-silver-v15-migration.md) *(Proposed — stub; design in `project_scope/silver_v15_migration_plan.md`)*
-- [0035 — Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) *(Proposed — SCD-applicability verdict written 2026-06-02 W3; build architecture still deferred to Phase 6)*
+- [0035 — Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) — cross-source policy = Policy C (latest-wins current view + first-class snapshot history) via dbt snapshot `strategy='check'` on a stable anchor; only the USCG `firm_manufacturer_attributes` instance (the measured Type-2 NEED, 221/718 OOB-recycled / 365 prior) is built in 6b.5, FDA/CPSC/USDA deferred *(Proposed — decision recorded 2026-06-05 on the A scope; ratifies at PR 6b.5 merge)*
 - [0036 — Cross-source canonical silver column naming](0036-cross-source-canonical-silver-naming.md) *(Proposed — naming policy + D1–D7 written 2026-06-02 W3; ratifies at `feature/silver-field-remap` merge)*
 
 ### Pipeline, extraction, and transformation

@@ -167,7 +167,7 @@ Population rates: **`bronze_corpus_profile.md` §3** (do not restate). Highlight
 ## §8. SCD verdict
 
 Full per-field designations + monitors: **`scd_field_designations.md`**. Per-source shape: `bronze_corpus_profile.md` §5. Summary for ADR 0035/0036:
-- **2 measured anchors:** NHTSA 11-tuple (Type-2, ADR 0033, 0 core drift) · USCG `mic` (Type-2-NEED, reassignment — monitor-confirmed 205 OOB-recycled of 718 recalled MICs).
+- **2 measured anchors:** NHTSA 11-tuple (Type-2, ADR 0033, 0 core drift) · USCG `mic` (Type-2-NEED, reassignment — monitor-confirmed 221 OOB-recycled / 365 with any prior holder of 718 recalled MICs; OOB regex broadened paren→word-boundary 2026-06-05, was 205).
 - **3 snapshot-hypotheses** (FDA/CPSC/USDA): NEED low (stable keys, 0 edit-versions); revisit when incrementals re-bank history.
 - **Type-2-BENEFIT, monitors seeded (measure-forward):** `classification`/`severity` + `lifecycle_status` (amendments suspected, unmeasured).
 - **Type-1 (+ bronze audit trail):** `recall_reason` narrative + firm `normalized_name` (corrections; fragmentation → 6b normalization, not SCD).

@@ -131,11 +131,16 @@ models:
 
   - name: firm_manufacturer_attributes
     description: >
-      USCG-registered boat-manufacturer dim with directory metadata.
-      Phase 5d Step 7 Step 5; one row per mic (= USCG Manufacturer
-      Identification Code, also written to firm.observed_company_ids for
-      USCG firms via the recalls-side join). Listing-only extraction;
-      address is truncated at ~30 chars at source per Step 1 Finding F.1.
+      USCG-registered boat-manufacturer dim — the CURRENT view (dbt_valid_to is null)
+      over the SCD-2 snapshot uscg_manufacturer_attributes_snapshot (ADR 0035). One row
+      per mic (= USCG Manufacturer Identification Code, also written to
+      firm.observed_company_ids for USCG firms via the recalls-side join). Source switched
+      from the listing view to the detail-page snapshot, so the address is now the FULL
+      untruncated value (fixes the ~30-char Finding F.1 truncation) and the succession
+      lineage (past_company_1/2/3, parent_*) is present. mic_has_prior_holder /
+      mic_oob_recycled flag the MIC-recycle NEED (mirror assert_mic_holder_stable.sql:
+      all three Past Company slots, `\(OOB` marker); recall_event_firm stamps
+      uscg_mic_time_sensitive_unresolved from them. SCD-2 history is the snapshot (Policy C).
     columns:
       - name: mic
         tests:
@@ -144,6 +149,20 @@ models:
       - name: detail_url
         tests:
           - not_null
+      - name: mic_has_prior_holder
+        description: True when any Past Company slot is populated (the ~365 set).
+        tests:
+          - not_null
+      - name: mic_oob_recycled
+        description: >
+          True when a Past Company is marked out-of-business in ANY source notation — `(OOB)`,
+          `(OOB 1991)`, or the dash form `- OOB` (word-boundary `\yOOB\y`; `(previous name)` renames
+          are excluded). A subset of mic_has_prior_holder. NB: assert_mic_holder_stable.sql's
+          published "205" counts the paren form only and undercounts the true recycle set.
+        tests:
+          - not_null
+      - name: prior_holders
+        description: jsonb array of the non-null Past Company names, for inspection.
 
   - name: firm_fda_attributes
     description: >

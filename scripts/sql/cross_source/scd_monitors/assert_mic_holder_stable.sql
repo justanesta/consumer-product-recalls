@@ -21,6 +21,13 @@
 --
 -- Feeds: documentation/audit/scd_field_designations.md (the USCG firm-anchor row).
 -- Run with: psql ... -f scripts/sql/cross_source/scd_monitors/assert_mic_holder_stable.sql
+--
+-- 2026-06-05 — OOB DETECTION BROADENED. The source marks out-of-business priors in TWO notations:
+-- `(OOB)` / `(OOB 1991)` AND a dash form `- OOB` ("ARLINGTON BOAT WORKS - OOB"), surfaced by
+-- probe_mic_prior_holder_not_oob.sql. The original paren-only `~ '\(OOB'` undercounted; this now
+-- matches word-boundary `~ '\yOOB\y'` (excludes `(previous name)` renames). Recalled OOB-recycled
+-- accordingly rises 205 -> 221 (the +16 dash-form); has-any-prior-holder is unchanged at 365 of 718.
+-- The silver flag firm_manufacturer_attributes.mic_oob_recycled uses the same `\yOOB\y`.
 
 \set ON_ERROR_STOP on
 \pset null '<NULL>'
@@ -63,7 +70,8 @@ order by n desc;
 \echo ''
 \echo '=== Q2: STATIC — reassignment lineage in the current detail snapshot (survives the re-seed) ==='
 -- The source-native Type-3 lineage. has_prior_holder = ≥1 Past Company on the detail page (the
--- recycle signal); oob_marked_prior = Past Company carries an (OOB) marker (high-confidence recycle);
+-- recycle signal); oob_marked_prior = Past Company marked out-of-business in ANY notation — `(OOB)`
+-- or the dash form `- OOB`, word-boundary `\yOOB\y` (high-confidence recycle; see the 2026-06-05 header note);
 -- current_holder_defunct = top-level Out of Business (the CURRENT holder ceased — an SCD valid_to,
 -- distinct from reassignment). This is the corpus-wide §M.6 measurement, read statically.
 -- NOTE: the source's past_company_1/2/3 slots are NOT filled sequentially (W1 found
@@ -84,17 +92,18 @@ select
                                                  nullif(trim(past_company_2), ''),
                                                  nullif(trim(past_company_3), '')) is not null)
     / nullif(count(*), 0), 1)                                                     as pct_with_prior_holder,
-  count(*) filter (where past_company_1 ~ '\(OOB'
-                      or past_company_2 ~ '\(OOB'
-                      or past_company_3 ~ '\(OOB')                                as oob_marked_prior,
+  count(*) filter (where past_company_1 ~ '\yOOB\y'
+                      or past_company_2 ~ '\yOOB\y'
+                      or past_company_3 ~ '\yOOB\y')                                as oob_marked_prior,
   count(*) filter (where out_of_business is not null)                             as current_holder_defunct
 from latest;
 
 \echo ''
 \echo '=== Q3: the MISATTRIBUTION SURFACE — recalled MICs that carry a prior holder ==='
 -- Of the MICs actually referenced by recalls, how many have a recycle lineage → the set where a
--- Type-1 "current holder" silver risks attributing the recall to the wrong (current) firm. §M.6
--- measured 28.7% on the recall-directed probe; this is the corpus-wide standing number.
+-- Type-1 "current holder" silver risks attributing the recall to the wrong (current) firm.
+-- With word-boundary OOB (2026-06-05): ~30.8% (221 of 718) recalled MICs are OOB-recycled — the
+-- paren-only read was 28.6% / 205, the dash form `- OOB` adds 16. 51% (365) carry ANY prior holder.
 with recall_mics as (
   select distinct upper(trim(mic)) as mic
   from uscg_recalls_bronze
@@ -111,12 +120,12 @@ select
   count(*) filter (where coalesce(nullif(trim(d.past_company_1), ''),
                                   nullif(trim(d.past_company_2), ''),
                                   nullif(trim(d.past_company_3), '')) is not null) as recalled_with_prior_holder,
-  count(*) filter (where d.past_company_1 ~ '\(OOB'
-                      or d.past_company_2 ~ '\(OOB'
-                      or d.past_company_3 ~ '\(OOB')                             as recalled_oob_recycled,
-  round(100.0 * count(*) filter (where d.past_company_1 ~ '\(OOB'
-                                    or d.past_company_2 ~ '\(OOB'
-                                    or d.past_company_3 ~ '\(OOB')
+  count(*) filter (where d.past_company_1 ~ '\yOOB\y'
+                      or d.past_company_2 ~ '\yOOB\y'
+                      or d.past_company_3 ~ '\yOOB\y')                             as recalled_oob_recycled,
+  round(100.0 * count(*) filter (where d.past_company_1 ~ '\yOOB\y'
+                                    or d.past_company_2 ~ '\yOOB\y'
+                                    or d.past_company_3 ~ '\yOOB\y')
     / nullif(count(*), 0), 1)                                                    as pct_recalled_recycled
 from recall_mics rm
 left join det d on d.mic = rm.mic;
@@ -139,8 +148,8 @@ det as (
 select d.mic, d.company_name as current_holder, d.past_company_1, d.past_company_2, d.past_company_3
 from det d
 join recall_mics rm on upper(trim(d.mic)) = rm.mic
-where d.past_company_1 ~ '\(OOB'
-   or d.past_company_2 ~ '\(OOB'
-   or d.past_company_3 ~ '\(OOB'
+where d.past_company_1 ~ '\yOOB\y'
+   or d.past_company_2 ~ '\yOOB\y'
+   or d.past_company_3 ~ '\yOOB\y'
 order by d.mic
 limit 30;

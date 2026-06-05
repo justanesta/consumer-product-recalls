@@ -136,11 +136,23 @@ uscg_event_firms as (
         md5('USCG' || '|' || r.source_recall_id)                                   as recall_event_id,
         md5(upper(trim(coalesce(m.company_name, r.company_name, r.mic))))          as firm_id,
         'manufacturer'                                                             as role,
-        'exact_name'                                                               as match_confidence,
+        -- ADR 0035: stamp MIC time-sensitivity from firm_manufacturer_attributes (the
+        -- SCD-2 current view). A recycled / prior-held MIC means a Type-1 "current holder"
+        -- could misattribute a pre-reassignment recall, so flag it rather than silently
+        -- (wrongly) attribute. firm_id is byte-identical to firm.sql's uscg_normalized
+        -- (lockstep preserved); the fma LEFT JOIN is 1:1 on mic (no fan-out) and only feeds
+        -- match_confidence, which the `mapped` precedence below carries (non-'exact_name' wins).
+        case
+            when fma.mic_oob_recycled or fma.mic_has_prior_holder
+                then 'uscg_mic_time_sensitive_unresolved'
+            else 'uscg_mic_unambiguous'
+        end                                                                        as match_confidence,
         cast(null as text)                                                         as establishment_number
     from {{ ref('stg_uscg_recalls') }} r
     left join {{ ref('stg_uscg_manufacturers') }} m
         on upper(trim(r.mic)) = upper(trim(m.mic))
+    left join {{ ref('firm_manufacturer_attributes') }} fma
+        on upper(trim(r.mic)) = upper(trim(fma.mic))
     where coalesce(m.company_name, r.company_name, r.mic) is not null
       and trim(coalesce(m.company_name, r.company_name, r.mic)) <> ''
       and r.announced_at is not null
