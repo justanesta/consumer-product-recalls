@@ -32,6 +32,39 @@
 > source resolves to geo-off (structured-id source wins), so there is no cross-source PK
 > conflict; the rare demoted within-source merge (the "Pfizer class") is recovered by
 > RapidFuzz. DBA-strip stays universal; paren-strip stays nowhere.
+>
+> **Amendment 2026-06-04 (tiered resolution + FEI reframe — replaces the first clusterer):** the
+> initial clusterer (single rule: `token_set_ratio` subset ⇒ merge, guarded by a document-
+> frequency hub cutoff, plus an *any-shared-FEI* + surviving-FEI must-link) **catastrophically
+> over-merged** on a real resolve and is replaced. Two root causes, both empirically reproduced
+> on the 28,599-name corpus: (1) **DF cannot separate a brand from a common word at the same
+> frequency** (`KAWASAKI` df 18 ≈ `TRUE` df 20), so the subset rule + DF guard chained dozens of
+> hubs (`TRUE`/`SUN`/`York`/`ATLAS`/single-letter `K&B`); (2) **an FEI is an *establishment*
+> (facility) id, not a firm id** — permanent per physical location, reassigned on ownership/
+> operational change — so an unconditional shared-FEI/succession merge welded unrelated firms
+> (`Whole Foods` = `Stryker`, `Teva` = `Bayer`) via shared registrants / sentinels / succession
+> chains. The replacement is **three tiers** (`src/enrichment/firm_resolution.py`):
+>
+> - **Tier 0 — FEI (deterministic).** Group FDA names by `current_fei = coalesce(firm_surviving_fei,
+>   firm_fei_num)` (FDA's own rename resolution; `firmsurvivingfei` is the current FEI "if changed
+>   since the recall"). A current-FEI fanning out past `FEI_FANOUT_CAP` (6) distinct names is a
+>   registrant/facility/sentinel → gated. FEI stays an *attribute* + resolution input, never a key.
+> - **Tier 1 — name repair (always on).** Merge identical distinctive-token sets (corp-forms
+>   dropped, **content words kept** — `Sun Valley Foods` ≠ `Sun`) or `token_sort_ratio` typos.
+> - **Tier 2 — entity rollup (optional, `--rollup`).** Merge ≥2 shared distinctive multi-char
+>   tokens above `token_set_ratio` threshold, **refused when every shared token is a place /
+>   common compound** (`src/enrichment/place_words.py`). A **place denylist beats a brand
+>   allowlist** here: the residual false-merge mode is geographic 2-token coincidence
+>   (`San Antonio Bakery` + `…Eye Bank`), a finite, gazetteer-seeded, *proactive* vocabulary that
+>   does not balloon — whereas an allowlist is large and reactive (rejected).
+>
+> Load-bearing subtlety: **two stop-sets** — blocking + Tier-2 scoring drop high-DF boilerplate;
+> Tier-1's identical-set test drops corp-forms only (else common nouns dropped as "generic"
+> re-introduce the hub class). Measured: Tier 0+1 → ~6,000 names consolidated, 17 clusters ≥6 (all
+> legit); Tier 2 adds ~1,300 more (recognizable brand families: Coca-Cola, Kawasaki, P&G…), ~90%
+> precise pre-denylist. The match_confidence vocabulary is now `fei_exact` / `name_variant_exact`
+> / `name_typo_high` / `rapidfuzz_rollup` / `singleton`. The Python-stage + additive-canonical
+> decision below is UNCHANGED; only the in-stage algorithm changed.
 
 ## Context
 
@@ -77,10 +110,11 @@ user-run CLI that writes a table registered back as a dbt source:
 - `src/enrichment/firm_normalization.py` — pure cleaning (`clean_firm_name` = geo-suffix +
   DBA strip, applied cross-source; `extract_firm_dba` / `extract_paren_aliases` lift brand
   aliases). No parenthetical strip (see the 2026-06-04 amendment above).
-- `src/enrichment/firm_resolution.py` — pure clustering (first-token blocking, RapidFuzz
-  `token_set_ratio`, union-find with the FEI edges as must-link constraints + a cycle
-  guard). *(RapidFuzz clustering lands in PR 6b.4; the deterministic-clean floor is live
-  from 6b.1.)*
+- `src/enrichment/firm_resolution.py` — pure **tiered** resolution over a blocking index (see the
+  2026-06-04 tiered-resolution amendment above): Tier 0 FDA current-FEI grouping (fan-out gated),
+  Tier 1 identical-distinctive-set / `token_sort_ratio` name repair, Tier 2 optional `token_set_ratio`
+  entity rollup with a place-word guard (`place_words.py`). Tier 2's residual is reviewed/tuned via
+  `verify_fuzzy_clusters.sql`; Tier 0+1 are precision-safe and always on.
 - `src/enrichment/crosswalk_writer.py` — the I/O boundary (pure `build_crosswalk_rows`
   separated from `resolve_firm_crosswalk`, mirroring the extractor `_parse_*` split).
 - `recalls resolve-firms` (Typer CLI, USER-run) — reads the all-source distinct names from

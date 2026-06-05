@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
+from src.enrichment import firm_resolution as fr
 from src.enrichment.firm_normalization import (
     clean_firm_name,
     extract_firm_dba,
@@ -130,6 +131,12 @@ _DISTINCT_FIRM_NAMES = sa.text(
     """
 )
 
+# FDA FEI identity rows (silver firm_fei_edges, built by dbt). current_fei =
+# coalesce(surviving_fei, fei) is FDA's own post-rename establishment id; firm_id mirrors this
+# resolver's md5(upper(trim(name))) so the Tier-0 current-FEI groups land on crosswalk rows.
+# Prerequisite: `dbt build --select firm_fei_edges` before resolve-firms.
+_FEI_EDGES = sa.text("select firm_id, current_fei, current_name from firm_fei_edges")
+
 # SQLAlchemy Core table for the BATCHED insert. A Core Table.insert() construct (NOT a
 # raw text() INSERT) lets SQLAlchemy rewrite the executemany into multi-row VALUES
 # batches (psycopg2 insertmanyvalues). A raw text() INSERT falls back to one network
@@ -165,6 +172,9 @@ class ResolveSummary:
     rows_written: int
     cleaned_count: int
     alias_count: int
+    fei_merged: int
+    fuzzy_merged: int
+    fei_gated: int
     dry_run: bool
 
 
@@ -217,19 +227,89 @@ def build_crosswalk_rows(triples: Sequence[tuple[str, str, str]]) -> list[dict[s
     return rows
 
 
-def resolve_firm_crosswalk(engine: Engine, *, dry_run: bool = False) -> ResolveSummary:
-    """Rebuild firm_crosswalk from the current all-source staging names (truncate-reload).
+def apply_clustering(
+    rows: list[dict[str, object]],
+    fei_rows: Sequence[tuple[str, str, str]],
+    *,
+    rollup: bool = True,
+    typo_threshold: float = fr.TYPO_THRESHOLD,
+    rollup_threshold: float = fr.ROLLUP_THRESHOLD,
+) -> tuple[int, int, int]:
+    """Overlay the tiered name/FEI resolution onto the deterministic rows (pure).
 
-    Requires the ``stg_*`` views to be built (run after ``dbt build`` of staging).
+    The clustering universe is the DISTINCT clean names (the nodes ``firm.sql`` regroups on).
+    Tier 0 = FDA current-FEI groups (``fr.fei_resolve``, fan-out gated); Tier 1 = name-variant /
+    typo repair; Tier 2 (``rollup``) = >=2-token entity rollup. For every row whose clean name
+    lands in a multi-member cluster, repoints ``canonical_firm_id`` to the representative and
+    stamps the tier's ``match_confidence`` (+ ``match_score`` for the score-based tiers);
+    singletons keep their deterministic canonical + confidence. Mutates ``rows`` in place;
+    returns ``(fei_merged, fuzzy_merged, fei_gated)`` counts.
+    """
+
+    def node_of(row: dict[str, object]) -> str:
+        return str(row["clean_name"]).upper().strip()
+
+    clean_of_firm_id: dict[str, str] = {}
+    display_of: dict[str, str] = {}
+    for r in rows:
+        cn = node_of(r)
+        clean_of_firm_id[str(r["firm_id"])] = cn
+        disp = str(r["clean_name"])
+        if cn not in display_of or disp < display_of[cn]:
+            display_of[cn] = disp  # stable original-case representative for the canonical_name
+
+    must_link, fei_gated = fr.fei_resolve(fei_rows, clean_of_firm_id)
+    assignment = fr.cluster_names(
+        sorted(display_of),
+        must_link,
+        rollup=rollup,
+        typo_threshold=typo_threshold,
+        rollup_threshold=rollup_threshold,
+    )
+
+    version = f"allsrc-tier{'012' if rollup else '01'}-roll{int(rollup_threshold)}-v2"
+    fei_merged = fuzzy_merged = 0
+    for r in rows:
+        r["resolver_version"] = version
+        a = assignment.get(node_of(r))
+        if a is None or a.method == "singleton":
+            continue  # keep the deterministic canonical + confidence
+        r["canonical_firm_id"] = _md5(a.canonical)
+        r["canonical_name"] = display_of.get(a.canonical, a.canonical)
+        r["match_confidence"] = a.method
+        r["match_score"] = round(a.score, 1) if a.score is not None else None
+        if a.method == "fei_exact":
+            fei_merged += 1
+        else:
+            fuzzy_merged += 1
+    return fei_merged, fuzzy_merged, fei_gated
+
+
+def resolve_firm_crosswalk(
+    engine: Engine,
+    *,
+    dry_run: bool = False,
+    rollup: bool = True,
+    rollup_threshold: float = fr.ROLLUP_THRESHOLD,
+) -> ResolveSummary:
+    """Rebuild firm_crosswalk: deterministic clean + tiered name/FEI resolution (reload).
+
+    Requires the ``stg_*`` views AND ``firm_fei_edges`` to be built (run after ``dbt build``).
+    ``rollup`` toggles Tier 2 (entity rollup); Tier 0 (FEI) + Tier 1 (name repair) always run.
     """
     with engine.connect() as conn:
         triples = [
             (row.firm_norm, row.rep_raw, row.sources) for row in conn.execute(_DISTINCT_FIRM_NAMES)
         ]
+        fei_rows = [
+            (row.firm_id, row.current_fei, row.current_name) for row in conn.execute(_FEI_EDGES)
+        ]
 
     rows = build_crosswalk_rows(triples)
-    # cleaned = names whose canonical differs from their own firm_id, i.e. cleaning merged
-    # them into another name's canonical (the deterministic-floor collapse count).
+    fei_merged, fuzzy_merged, fei_gated = apply_clustering(
+        rows, fei_rows, rollup=rollup, rollup_threshold=rollup_threshold
+    )
+    # cleaned = rows whose canonical differs from their own firm_id (cleaning + clustering).
     cleaned = sum(1 for r in rows if r["canonical_firm_id"] != r["firm_id"])
     aliased = sum(1 for r in rows if r["alternate_names"])
 
@@ -244,5 +324,8 @@ def resolve_firm_crosswalk(engine: Engine, *, dry_run: bool = False) -> ResolveS
         rows_written=0 if dry_run else len(rows),
         cleaned_count=cleaned,
         alias_count=aliased,
+        fei_merged=fei_merged,
+        fuzzy_merged=fuzzy_merged,
+        fei_gated=fei_gated,
         dry_run=dry_run,
     )

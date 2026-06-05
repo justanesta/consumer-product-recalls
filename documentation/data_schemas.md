@@ -59,6 +59,14 @@ Bronze tables follow the [ADR 0027](decisions/0027-bronze-storage-forced-transfo
 | `silver/recall_event_firm` | `recall_event_firm.sql` | `_silver.yml` | [`silver_design_notes.md`](silver_design_notes.md) |
 | `silver/recall_event_history` | (Phase 6 — not yet shipped) | (TBD) | per [ADR 0022](decisions/0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) |
 
+### Enrichment (Python-written, dbt source)
+
+| Table | Written by | Alembic migration | dbt source |
+|---|---|---|---|
+| `firm_crosswalk` | `recalls resolve-firms` (`src/enrichment/crosswalk_writer.py`) — a *derived* table, truncate-and-reloaded; **not** Pydantic-validated (it is computed from silver, not ingested) | `0024_firm_crosswalk.py`, `0025_*_clean_name.py`, `0026_*_alternate_names.py` | `enrichment.firm_crosswalk` |
+
+The resolution *method* that populates it is in [`architecture.md`](architecture.md#srcenrichment--firm-resolution-stage-adr-0037); the *why* (a Python stage, not in-warehouse SQL) is [ADR 0037](decisions/0037-firm-resolution-python-stage-not-sql-fuzzy.md); the operator runbook is [`operations.md`](operations.md#firm-resolution-recalls-resolve-firms). Column contract = the DDL in the three migrations + the `build_crosswalk_rows` row dict in `crosswalk_writer.py`. Key columns: `firm_id` (PK, `md5(upper(trim(name)))`), `canonical_firm_id`, `canonical_name`, `clean_name`, `alternate_names` (jsonb), `match_confidence`, `match_score`, `resolver_version`, `resolved_at`. See the **Firm resolution** glossary section below for what each means.
+
 ### Gold (denormalized, dbt-managed)
 
 | Model | dbt SQL | Tests |
@@ -79,6 +87,17 @@ Domain-specific terms used across this project. When in doubt, this is the canon
 - **Firm.** A company involved in a recall in some role. Deduplicated by normalized name (`UPPER(TRIM(firm_name))`). See [ADR 0002](decisions/0002-unit-of-analysis-header-line-firm.md).
 - **Role.** The relationship of a firm to a recall event. Allowed values: `manufacturer`, `retailer`, `importer`, `distributor`, `establishment`. The `establishment` value is USDA-specific (FSIS-regulated facility). Per [ADR 0002](decisions/0002-unit-of-analysis-header-line-firm.md).
 - **Event type.** Forward-compatibility column on `recall_event` (`event_type` defaults to `'RECALL'`). See [ADR 0003](decisions/0003-event-type-discriminator.md). Reserved for future non-recall regulatory actions (e.g., enforcement actions, market withdrawals).
+
+### Firm resolution
+
+Terms for the cross-source firm entity-resolution overlay (Phase 6b, [ADR 0037](decisions/0037-firm-resolution-python-stage-not-sql-fuzzy.md)). The *method* (blocking, document frequency, hubs) is explained in [`architecture.md`](architecture.md#srcenrichment--firm-resolution-stage-adr-0037); these are the schema-level terms.
+
+- **`firm_id` (resolution key).** `md5(upper(trim(firm_name)))` — the global natural key of one *raw* firm name; the PK of `firm_crosswalk`. **Caution:** the silver `firm` model's output column *also* named `firm_id` carries the **canonical** id, not this raw key (see `canonical_firm_id`).
+- **`canonical_firm_id`.** The id of a cluster's representative — every name that resolves to the same real-world company shares it. **Additive** ([ADR 0002](decisions/0002-unit-of-analysis-header-line-firm.md)): silver computes `coalesce(crosswalk.canonical_firm_id, md5(normalized_name))`, so a missing/empty crosswalk degrades to "each name is its own canonical." It is the grain of the silver `firm` dimension (emitted there as the `firm_id` column) and the firm key of the `recall_event_firm` bridge.
+- **`match_confidence`.** The resolution path/quality (tier), stamped per `firm_crosswalk` row and carried onto each `recall_event_firm` bridge row. The accepted-values vocabulary is single-homed in `dbt/models/silver/_silver.yml` (severity `warn` until 6b.6). Firm-resolution values: `exact_name` (no merge), `geo_suffix_strip_exact` / `dba_extract_exact` (deterministic cleaning); **Tier 0** `fei_exact` (FDA current-FEI group — establishment-grain, authoritative); **Tier 1** `name_variant_exact` (identical distinctive-token set) / `name_typo_high` (`token_sort_ratio` typo); **Tier 2** `rapidfuzz_rollup` (≥2 shared distinctive tokens — the reviewable rollup tier); `singleton` (unmerged). USDA (`usda_*`) and USCG (`uscg_*`) values come from PRs 6b.2 / 6b.5.
+- **`match_score`.** The RapidFuzz `token_set_ratio` (0–100) for a `rapidfuzz_*` merge; NULL for deterministic / FEI / unmerged rows. Lives on `firm_crosswalk` only — not projected into silver.
+- **`alternate_names`.** JSONB array of brand / surface-form aliases for a firm — the DBA brand plus brand-bearing parentheticals (`extract_paren_aliases`), **captured instead of stripped** (ADR 0037). `firm.sql` flattens + de-dupes them per canonical firm; intended as a search/alias field.
+- **`observed_names` / `observed_company_ids`.** On the silver `firm` row: JSONB arrays of every raw spelling, and every structured government ID (FDA FEI / FSIS establishment number / USCG MIC), that folded into the canonical firm — the audit trail of a merge.
 
 ### Pipeline mechanics
 
@@ -103,7 +122,7 @@ Domain-specific terms used across this project. When in doubt, this is the canon
 
 - **Bilingual pair (USDA).** A USDA recall published in both English and Spanish. Each language is a separate row in the FSIS API response with the same `field_recall_number` and a different `langcode`. See [ADR 0006](decisions/0006-usda-bilingual-record-deduplication.md). **Empirical note:** ~13.3% of bilingual pairs do not update atomically — silver lifecycle logic must treat each language independently per [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md).
 - **Establishment (USDA).** An FSIS-regulated facility (`establishment_id` is the FSIS primary key). Distinct from "manufacturer" — an establishment is the *recalling* facility, often co-incident with the manufacturer but legally a separate role. Used in `recall_event_firm.role='establishment'`.
-- **FEI number (FDA).** FDA Establishment Identifier (`firmfeinum`). Globally unique facility ID across FDA-regulated firms; the strongest cross-source firm anchor available. See [ADR 0002](decisions/0002-unit-of-analysis-header-line-firm.md).
+- **FEI number (FDA).** FDA Establishment Identifier (`firmfeinum`). A permanent id for a physical **establishment (facility)**, *not* a firm — one firm has many FEIs, and a firm's FEI is reassigned on ownership/operational change. It is therefore **temporal**: the recall feed gives the FEI *at the time of the recall* plus `firmsurvivingfei`/`firmsurvivingnam` (the **current** FEI/name if changed). Firm resolution (Tier 0) groups by `current_fei = coalesce(firm_surviving_fei, firm_fei_num)` — FDA's own rename resolution — and gates high-fan-out FEIs (shared registrants / facilities). The `firm_fei_edges` model surfaces `firm_fei_num`, `firm_surviving_fei`, `current_fei`, `current_name`; the latest-wins address attributes live in `firm_fda_attributes` (SCD-2 history deferred to 6c, [ADR 0035](decisions/0035-cross-source-scd2-silver-dimensions.md)-class, like USCG MIC). See [ADR 0002](decisions/0002-unit-of-analysis-header-line-firm.md), [ADR 0037](decisions/0037-firm-resolution-python-stage-not-sql-fuzzy.md).
 - **Archive migration (CPSC, FDA).** Upstream re-processing where the agency touches old records wholesale, advancing their `LastPublishDate` / `eventlmd` without an editorial change. Inflates incremental-query result sets without producing real edits. See [ADR 0023](decisions/0023-fda-deep-rescan-required-archive-migration-detected.md), `documentation/cpsc/last_publish_date_semantics.md`.
 - **Historical seed.** A one-time deep rescan over a multi-year window to populate records that the incremental strategy will never reach (e.g., CPSC's 20-year 2005–2024 gap). Marked `change_type='historical_seed'`. See [ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md) Mechanism A.
 
@@ -135,3 +154,6 @@ Domain-specific terms used across this project. When in doubt, this is the canon
 | Where is the FDA `RECALLEVENTID` mapped to silver? | `dbt/models/staging/stg_fda_recalls.sql`, then [`silver_design_notes.md`](silver_design_notes.md) "Column mapping" table |
 | What's the watermark column for source X? | `source_watermarks` row + the per-source extractor in `src/extractors/<source>.py` (look for `WATERMARK_FIELD`-style class constants) |
 | What are the allowed values of `recall_event_firm.role`? | `dbt/models/silver/_silver.yml` (`accepted_values` test) — currently `['manufacturer', 'retailer', 'importer', 'distributor', 'establishment']` |
+| What columns does `firm_crosswalk` have? | DDL in `migrations/versions/0024_firm_crosswalk.py` (+ `0025`/`0026`); the row dict in `src/enrichment/crosswalk_writer.py` (`build_crosswalk_rows`). Term-by-term in this file's "Firm resolution" glossary |
+| What are the allowed `match_confidence` values? | `dbt/models/silver/_silver.yml` (`accepted_values`, severity `warn`); explained in the "Firm resolution" glossary above |
+| How are firm name variants collapsed (the fuzzy resolver)? | [`architecture.md`](architecture.md#srcenrichment--firm-resolution-stage-adr-0037) firm-resolution section; method in `src/enrichment/firm_resolution.py`; operator runbook in [`operations.md`](operations.md#firm-resolution-recalls-resolve-firms) |

@@ -547,27 +547,47 @@ def resolve_firms(
         bool,
         typer.Option("--dry-run", help="Report the row counts without writing firm_crosswalk."),
     ] = False,
+    rollup: Annotated[
+        bool,
+        typer.Option(
+            "--rollup/--no-rollup",
+            help="Tier 2 entity rollup (>=2 shared distinctive tokens). On by default; "
+            "--no-rollup ships Tier 0+1 only (FEI + near-identical name repair).",
+        ),
+    ] = True,
+    rollup_threshold: Annotated[
+        float,
+        typer.Option(
+            "--rollup-threshold",
+            help="Tier 2 token_set_ratio merge threshold 0-100 (default 90; higher = stricter).",
+        ),
+    ] = 90.0,
 ) -> None:
-    """Rebuild firm_crosswalk from all-source staging firm names (Phase 6b clean stage).
+    """Rebuild firm_crosswalk from all-source staging firm names (Phase 6b firm resolution).
 
     Maps each distinct firm name (CPSC / FDA / USDA / NHTSA / USCG staging views) through
     ``src.enrichment.firm_normalization`` (``clean_firm_name`` geo-suffix + DBA strip;
     ``extract_firm_dba`` / ``extract_paren_aliases`` for alternate names — no parenthetical
     strip, that proved too blunt cross-source, ADR 0037) and truncate-reloads
     ``firm_crosswalk``, keyed by ``md5(upper(trim(name)))`` so the silver firm models join it
-    for ``canonical_firm_id`` / ``clean_name`` / ``alternate_names``. Deterministic +
-    idempotent; no API or watermark side effects. Run AFTER ``dbt build`` of staging (it
-    reads the ``stg_*`` views). PR 6b.4 Increment 2 overlays RapidFuzz clustering here.
+    for ``canonical_firm_id`` / ``clean_name`` / ``alternate_names``. Then overlays the tiered
+    ``src.enrichment.firm_resolution``: Tier 0 = FDA current-FEI groups (``firm_fei_edges``,
+    fan-out gated), Tier 1 = name-variant / typo repair, Tier 2 (``--rollup``) = >=2-token entity
+    rollup with a place/compound guard. Idempotent; no API/watermark side effects. Run AFTER
+    ``dbt build --select staging firm_fei_edges`` (it reads the ``stg_*`` views + that table).
     """
     configure_logging()
     settings = Settings()  # type: ignore[call-arg]
     engine = make_engine(settings.neon_database_url.get_secret_value())
-    summary = resolve_firm_crosswalk(engine, dry_run=dry_run)
+    summary = resolve_firm_crosswalk(
+        engine, dry_run=dry_run, rollup=rollup, rollup_threshold=rollup_threshold
+    )
     dry = " [dry-run]" if summary.dry_run else ""
     typer.echo(
         f"resolve-firms{dry}: distinct_names={summary.distinct_names} "
         f"written={summary.rows_written} cleaned={summary.cleaned_count} "
-        f"aliased={summary.alias_count}"
+        f"aliased={summary.alias_count} fei_merged={summary.fei_merged} "
+        f"fuzzy_merged={summary.fuzzy_merged} fei_gated={summary.fei_gated}"
     )
 
 

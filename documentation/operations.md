@@ -225,6 +225,58 @@ The steady-state invariant is: **local `.env` always points at `dev`; only GitHu
 
 ---
 
+## Firm resolution (`recalls resolve-firms`)
+
+Cross-source firm entity resolution runs as a **manual transformation stage**, not a cron workflow — the operator runs it on the `dev` branch, eyeballs the fuzzy clusters, then rebuilds the silver firm models. Architecture + method: [`architecture.md`](architecture.md#srcenrichment--firm-resolution-stage-adr-0037); the *why* is [ADR 0037](decisions/0037-firm-resolution-python-stage-not-sql-fuzzy.md); table/column shapes are in [`data_schemas.md`](data_schemas.md#firm-resolution).
+
+The stage is **additive and idempotent**: it truncate-and-reloads `firm_crosswalk`, and silver coalesces a missing/empty crosswalk back to "every firm is its own canonical," so a bad run never corrupts correctness (worst case is no merges). Re-run freely.
+
+### Procedure
+
+1. **Build the inputs.** The resolver reads the `stg_*` views and the `firm_fei_edges` model (the FDA FEI forced-merge edges), so build staging first:
+   ```bash
+   dbt build --select staging firm_fei_edges
+   ```
+2. **Preview** (no writes) and sanity-check the merge counts:
+   ```bash
+   recalls resolve-firms --dry-run
+   ```
+   The summary prints `distinct_names`, `cleaned_count`, `fei_merged`, `fuzzy_merged`, `fei_gated` (current-FEIs dropped for fanning out past `FEI_FANOUT_CAP`). A `fuzzy_merged` or `fei_gated` that jumped sharply from the prior run is the signal a hub may have formed (see the troubleshooting entry). Use `--no-rollup` to ship Tier 0+1 only (FEI + near-identical repair, no entity rollup).
+3. **Write** the crosswalk:
+   ```bash
+   recalls resolve-firms
+   ```
+4. **Eyeball the clusters** before trusting the merges — the gate dumps every multi-member cluster, largest first:
+   ```bash
+   psql "$NEON_DATABASE_URL" -f scripts/sql/cross_source/silver/verify_fuzzy_clusters.sql
+   # then review data/exploratory/cross_source/fuzzy_clusters.csv
+   ```
+   Q3 lists the 30 largest clusters inline; scan for one that mixes genuinely-unrelated firms. `fei_exact` clusters are authoritative — don't second-guess those.
+5. **Rebuild silver** so the new canonical grouping flows into the dimension + bridge:
+   ```bash
+   dbt build --select firm recall_event_firm
+   dbt test  --select firm recall_event_firm
+   ```
+
+### The tiers, and which knob moves which
+
+The resolver runs three tiers (full method in [architecture.md](architecture.md#srcenrichment--firm-resolution-stage-adr-0037)). **Tier 0 (FEI)** and **Tier 1 (name repair)** are precision-safe and always on. **Tier 2 (entity rollup)** is the reviewable one, toggled by `--rollup` / `--no-rollup` and tuned by `--rollup-threshold` (default 90; higher = stricter). The active config is stamped into `resolver_version` (e.g. `allsrc-tier012-roll90-v2`).
+
+- A **place/compound false-merge** (e.g. two unrelated `San Antonio …` firms) → add the offending modifier to `src/enrichment/place_words.py` (the gazetteer-seeded denylist), then re-run. This is the normal Tier-2 maintenance lever — it is small, finite, and auditable; it does **not** balloon into an English-dictionary denylist (that failure mode was removed with the old subset clusterer).
+- An **FEI mega-cluster** (a `current_fei` welding unrelated firms) → run `scripts/sql/cross_source/silver/diagnose_fei_fanout.sql`; if a current-FEI maps to many dissimilar names, lower `FEI_FANOUT_CAP` in `firm_resolution.py` (it gates that FEI).
+- Too many borderline rollups generally → raise `--rollup-threshold`, or ship `--no-rollup` for the safe core and revisit.
+
+### Review loop & cadence
+
+Tier 2 is not self-healing — a new ingest can introduce a new place coincidence — so review on a cadence, but only the **incremental change**:
+
+1. **When:** after any `resolve-firms` that follows a real data add (monthly in steady state; after a deep-rescan/seed otherwise).
+2. **What:** the `verify_fuzzy_clusters.sql` dump, focused on the largest **new or grown** clusters since the last review (`match_confidence = 'rapidfuzz_rollup'` is the reviewable tier; `fei_exact` / `name_variant_exact` are authoritative/safe). Nothing silently corrupts — `match_confidence` is `warn`-severity, the raw `firm_id` is preserved on every row, and a re-run is idempotent, so a bad merge is visible and reversible.
+3. **Refine:** place hub → `place_words.py`; FEI hub → `FEI_FANOUT_CAP`; a real brand that failed to roll up → a cleaner/normalization fix. Re-run, re-verify.
+4. **Escalation path:** if list maintenance ever outgrows the corpus (millions of firms), graduate Tier 2 to a probabilistic linkage library (Splink) using name **+ address + source** — overkill at federal-recall scale.
+
+---
+
 ## Re-recording VCR cassettes
 
 Per [ADR 0015](decisions/0015-testing-strategy.md), cassettes are the authoritative archive of historical API responses. Re-record when:
@@ -450,6 +502,24 @@ If an extractor failed, the [Auth error](#extractor-failing-with-401--403-auth-e
 **Fix:** Add a one-row seed migration for the new source (model on `0008_seed_usda_establishments_watermark.py`). Long-term fix is documented as a Phase 7 prerequisite in `project_scope/implementation_plan.md` "Architectural follow-ups."
 
 **Also required:** Add a `config/sources/<new_source>.yaml` file matching the discriminated union schema (`RestApiSourceConfig` or `FlatFileSourceConfig` — see `src/config/source_registry.py`). Without it, `load_source_config(source_name)` raises `FileNotFoundError` at CLI startup, before any extraction work begins. The `EXTRACTOR_BY_SOURCE_NAME` dict in `src/config/source_registry.py` also needs the new entry.
+
+### A firm groups unrelated companies (a fuzzy-resolution hub)
+
+**Symptom:** A silver `firm` row's `observed_names` array (or a firm view downstream) lists clearly-unrelated companies in one cluster.
+
+**Diagnose:** Re-dump the clusters and read the largest, and check the FEI fan-out:
+```bash
+psql "$NEON_DATABASE_URL" -f scripts/sql/cross_source/silver/verify_fuzzy_clusters.sql
+psql "$NEON_DATABASE_URL" -f scripts/sql/cross_source/silver/diagnose_fei_fanout.sql
+```
+Q2 reports the largest cluster size; the cluster's `match_confidence` tells you which tier to fix.
+
+**Most likely cause + fix** (precision-over-recall; the raw `firm_id` is preserved on every row, `match_confidence` is `warn`-severity, and a re-run is idempotent, so over-merges are visible and reversible — never silent corruption):
+- **`rapidfuzz_rollup` cluster of `… <place> …` firms** (e.g. unrelated `San Antonio …`) → a Tier-2 place coincidence. Add the modifier to `src/enrichment/place_words.py` and re-run. (Or ship `--no-rollup` to drop Tier 2 entirely.)
+- **`fei_exact` cluster welding unrelated firms** → a `current_fei` with high fan-out (shared registrant / sentinel). Confirm with `diagnose_fei_fanout.sql`; lower `FEI_FANOUT_CAP` in `firm_resolution.py`.
+- **`rapidfuzz_rollup` from borderline similarity** → raise `--rollup-threshold`.
+
+These are config/code changes, not crosswalk edits — file them; hand-editing `firm_crosswalk` is overwritten by the next run.
 
 ---
 

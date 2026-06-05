@@ -13,6 +13,7 @@ import pytest
 from src.enrichment.crosswalk_writer import (
     RESOLVER_VERSION,
     _geo_mode_for,
+    apply_clustering,
     build_crosswalk_rows,
 )
 
@@ -136,3 +137,60 @@ def test_cpsc_geo_variants_collapse_to_one_canonical():
 
 def test_empty_input():
     assert build_crosswalk_rows([]) == []
+
+
+# ── apply_clustering: tiered overlay (Tier 0 FEI / Tier 1 variant / Tier 2 rollup) ──
+def test_apply_clustering_across_tiers():
+    rows = build_crosswalk_rows(
+        [
+            ("GRACO", "Graco", "cpsc"),
+            ("GRACO INC", "Graco Inc", "cpsc"),  # Tier 1: identical distinctive set
+            ("KAWASAKI MOTORS CORP USA", "Kawasaki Motors Corp USA", "cpsc"),
+            ("KAWASAKI MOTORS CORP", "Kawasaki Motors Corp", "cpsc"),  # Tier 2: >=2-token rollup
+            ("BLOODCENTER OF WISCONSIN", "BloodCenter of Wisconsin", "fda"),
+            ("BLOOD CTR WISC", "Blood Ctr Wisc", "fda"),  # Tier 0: shared current-FEI
+            ("ZZZ UNIQUE FIRM", "Zzz Unique Firm", "cpsc"),  # singleton
+        ]
+    )
+    # current-FEI 555 force-merges the two blood-center spellings (name-blind, FDA-authoritative)
+    fei_rows = [
+        (_md5("BLOODCENTER OF WISCONSIN"), "555", "BloodCenter of Wisconsin"),
+        (_md5("BLOOD CTR WISC"), "555", "BloodCenter of Wisconsin"),
+    ]
+    fei_merged, fuzzy_merged, fei_gated = apply_clustering(rows, fei_rows, rollup=True)
+    by = {r["clean_name"]: r for r in rows}
+    assert (fei_merged, fuzzy_merged, fei_gated) == (2, 4, 0)
+    # Tier 1: identical distinctive set -> name_variant_exact
+    assert by["Graco"]["canonical_firm_id"] == by["Graco Inc"]["canonical_firm_id"]
+    assert by["Graco"]["match_confidence"] == "name_variant_exact"
+    assert by["Graco"]["canonical_name"] == "Graco"  # shortest -> representative
+    # Tier 2: >=2 shared distinctive tokens -> rapidfuzz_rollup (+ score)
+    assert (
+        by["Kawasaki Motors Corp"]["canonical_firm_id"]
+        == by["Kawasaki Motors Corp USA"]["canonical_firm_id"]
+    )
+    assert by["Kawasaki Motors Corp"]["match_confidence"] == "rapidfuzz_rollup"
+    assert by["Kawasaki Motors Corp"]["match_score"] is not None
+    # Tier 0: shared current-FEI despite different spellings
+    assert (
+        by["BloodCenter of Wisconsin"]["canonical_firm_id"]
+        == by["Blood Ctr Wisc"]["canonical_firm_id"]
+    )
+    assert by["BloodCenter of Wisconsin"]["match_confidence"] == "fei_exact"
+    # singleton keeps its deterministic firm_id + confidence
+    assert by["Zzz Unique Firm"]["firm_id"] == by["Zzz Unique Firm"]["canonical_firm_id"]
+    assert by["Zzz Unique Firm"]["match_confidence"] == "exact_name"
+    assert all(r["resolver_version"] == "allsrc-tier012-roll90-v2" for r in rows)
+
+
+def test_apply_clustering_no_rollup_keeps_entity_rollup_split():
+    rows = build_crosswalk_rows(
+        [
+            ("KAWASAKI MOTORS CORP USA", "Kawasaki Motors Corp USA", "cpsc"),
+            ("KAWASAKI MOTORS CORP", "Kawasaki Motors Corp", "cpsc"),
+        ]
+    )
+    apply_clustering(rows, [], rollup=False)  # Tier 2 off
+    assert rows[0]["canonical_firm_id"] != rows[1]["canonical_firm_id"]
+    assert all(r["resolver_version"] == "allsrc-tier01-roll90-v2" for r in rows)
+    assert rows[0]["match_confidence"] == "exact_name"

@@ -1,20 +1,18 @@
 {{ config(materialized='table') }}
 
--- FDA FEI deterministic merge edges (Phase 6b PR 6b.3).
+-- FDA FEI identity rows (Phase 6b PR 6b.3; current-FEI resolution added in 6b.4).
 --
--- A thin, additive artifact: the deterministic forced-merge CONSTRAINTS the 6b.4
--- RapidFuzz clusterer consumes (union-find) so the 12.4% of FEIs that map to >1
--- distinct legal name (full-corpus profile 2026-06-03,
--- scripts/sql/fda/bronze/profile_firm_fei_for_sidecar.sql) collapse to one firm
--- WITHOUT fuzzy matching. The FEI is FDA's government-assigned establishment id, so a
--- shared FEI is an authoritative same-firm signal — exact, not edit-distance.
+-- A thin, additive artifact feeding the 6b.4 Tier-0 resolver. An FEI is FDA's government-
+-- assigned **establishment (facility)** id, NOT a firm id (one firm has many FEIs; FDA
+-- reassigns a firm's FEI on ownership/operational change). So the resolver does NOT merge on
+-- the raw at-recall firm_fei_num. Instead it groups names by **current_fei** = FDA's own
+-- post-rename id (``coalesce(firm_surviving_fei, firm_fei_num)``), which collapses renames
+-- deterministically, and gates any current_fei that fans out to many distinct names (a shared
+-- registrant / contract facility / sentinel — not one firm). See ADR 0037 + fei_resolve().
 --
--- Two edge kinds the clusterer derives from these rows:
---   1. SHARED-FEI  — every firm_id carrying the same firm_fei_num is the same firm
---      (one establishment, several name spellings across recalls).
---   2. SUCCESSION  — firm_surviving_fei is FDA's own "this firm was renamed/merged
---      into FEI Y" pointer; (firm_fei_num -> firm_surviving_fei) is a directed merge
---      edge. 6b.4 OWNS the interpretation (ignores null/self/dangling, guards cycles).
+-- The 12.4%-of-FEIs-map-to->1-name figure (full-corpus profile 2026-06-03,
+-- scripts/sql/fda/bronze/profile_firm_fei_for_sidecar.sql) are mostly rename/variant spellings;
+-- scripts/sql/cross_source/silver/diagnose_fei_fanout.sql sizes the high-fan-out tail to gate.
 --
 -- NOT consumed by firm.sql / recall_event_firm.sql in 6b.3 — this PR only MATERIALIZES
 -- the edges (deterministic, separately testable). 6b.4 ref()s it. Additive: no firm_id
@@ -27,9 +25,15 @@ select distinct
     md5(upper(trim(firm_legal_nam)))      as firm_id,
     upper(trim(firm_legal_nam))           as normalized_name,
     firm_fei_num::text                    as firm_fei_num,
-    -- '' / self / dangling sentinels are passed through as-is here; 6b.4 decides which
-    -- surviving-FEI pointers are live succession edges. nullif normalizes the blank case.
-    nullif(firm_surviving_fei::text, '')  as firm_surviving_fei
+    nullif(firm_surviving_fei::text, '')  as firm_surviving_fei,
+    -- current_fei = FDA's own post-rename establishment id (firmsurvivingfei is the CURRENT FEI
+    -- "if changed since the recall" — a single hop; FDA resolves the full chain). The 6b.4
+    -- Tier-0 resolver groups names by current_fei (same establishment, fan-out gated), NOT by
+    -- the raw at-recall firm_fei_num — this collapses renames deterministically.
+    coalesce(nullif(firm_surviving_fei::text, ''), firm_fei_num::text)   as current_fei,
+    -- current_name = the surviving (current) firm name if renamed, else the legal name — the
+    -- canonical-display hint for the establishment's cluster.
+    coalesce(nullif(trim(firm_surviving_nam), ''), trim(firm_legal_nam)) as current_name
 from {{ ref('stg_fda_recalls') }}
 where firm_fei_num is not null
   -- firm_id must be non-null (the _silver.yml not_null test) — exclude the handful of

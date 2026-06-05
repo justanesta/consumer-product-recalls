@@ -249,10 +249,14 @@ models:
                   - uscg_mic_unambiguous
                   - uscg_mic_time_sensitive_unresolved
                   - uscg_mic_build_date_resolved
+                  # Tiered name/FEI resolution (6b.4, ADR 0037). Tier 0 = fei_exact (FDA
+                  # current-FEI group). Tier 1 = name_variant_exact (identical distinctive set)
+                  # / name_typo_high (token_sort_ratio typo). Tier 2 = rapidfuzz_rollup (>=2
+                  # shared distinctive tokens; the reviewable tier). singleton = unmerged.
                   - fei_exact
-                  - rapidfuzz_high
-                  - rapidfuzz_medium
-                  - rapidfuzz_low_ambiguous_null
+                  - name_variant_exact
+                  - name_typo_high
+                  - rapidfuzz_rollup
                   - singleton
       - name: establishment_number
         description: >
