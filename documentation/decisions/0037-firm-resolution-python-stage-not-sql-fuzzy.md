@@ -65,6 +65,29 @@
 > precise pre-denylist. The match_confidence vocabulary is now `fei_exact` / `name_variant_exact`
 > / `name_typo_high` / `rapidfuzz_rollup` / `singleton`. The Python-stage + additive-canonical
 > decision below is UNCHANGED; only the in-stage algorithm changed.
+>
+> **Amendment 2026-06-05 (FEI is attribute-only — firm ships at name/brand grain):** the Tier-0
+> FEI tier above is **pulled out of the firm merge path** (now opt-in `--fei-merge`, default off).
+> On a real resolve it produced cross-corporate **blobs** (one cluster = `Biomat USA` + `CSL` +
+> `Takeda/BioLife` + `Octapharma` — four competing plasma firms). Mechanism (traced in the data):
+> an FEI is an *establishment* (a building) and is location-bound + permanent, so when a facility
+> is bought/sold its recall history accumulates BOTH owners' names; a defunct ancestor / DBA name
+> (`AVENTIS BIO-SERVICES` across 11 FEIs, `CSL PLASMA` across 34) then sits on dozens of FEIs now
+> owned by different firms, and union-find chains them. It is NOT a single shared FEI (max
+> name-fan-out is 9) — it is name-bridging across many FEIs, and the per-FEI fan-out gate cannot
+> see it. The hoped-for auto-split via FDA's surviving (current) name is **dead**: coverage is 7%
+> of rows / 12% of names and **0% on every bridge name**, so `coalesce(surviving, legal)` doesn't
+> collapse the blob. FEI's *unique* value (renames/acquisitions with no string overlap — Sepracor→
+> Sunovion, Hospira→ICU) is real but only ~790 FDA-only merges at ~80% precision (a contract-
+> manufacturer/co-packer tail, e.g. a brand fused to its co-packer's FEI). **The deciding
+> observation: FEI was the ONLY source id used as a merge key** — CPSC `company_id`, USDA
+> `establishment_number`, USCG `MIC` are all *attributes*. USCG MIC has the identical
+> recycling hazard and never blobs *because* it's an attribute. **Decision:** treat FEI like the
+> others — an attribute on `firm.observed_company_ids` (already the case in `firm.sql`), not a
+> merge key. `firm` ships at **name/brand grain**, uniform across all five sources (one row = one
+> brand/name cluster); 28,599 FDA-inclusive names → 24,204 firms, no blobs, a one-sentence grain.
+> Tier 0 (`fei_resolve`) is retained + tested but off, for a future *establishment* dimension
+> (keyed on FEI directly) + the FDA FEI portal API. resolver_version → `allsrc-tier{12|1|012}-v3`.
 
 ## Context
 

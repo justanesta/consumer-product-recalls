@@ -232,18 +232,22 @@ def apply_clustering(
     fei_rows: Sequence[tuple[str, str, str]],
     *,
     rollup: bool = True,
+    fei_merge: bool = False,
     typo_threshold: float = fr.TYPO_THRESHOLD,
     rollup_threshold: float = fr.ROLLUP_THRESHOLD,
 ) -> tuple[int, int, int]:
-    """Overlay the tiered name/FEI resolution onto the deterministic rows (pure).
+    """Overlay the name-grain resolution onto the deterministic rows (pure).
 
     The clustering universe is the DISTINCT clean names (the nodes ``firm.sql`` regroups on).
-    Tier 0 = FDA current-FEI groups (``fr.fei_resolve``, fan-out gated); Tier 1 = name-variant /
-    typo repair; Tier 2 (``rollup``) = >=2-token entity rollup. For every row whose clean name
-    lands in a multi-member cluster, repoints ``canonical_firm_id`` to the representative and
-    stamps the tier's ``match_confidence`` (+ ``match_score`` for the score-based tiers);
-    singletons keep their deterministic canonical + confidence. Mutates ``rows`` in place;
-    returns ``(fei_merged, fuzzy_merged, fei_gated)`` counts.
+    Tier 1 = name-variant / typo repair; Tier 2 (``rollup``) = >=2-token entity rollup. This is the
+    SHIPPED firm grain: name/brand cluster, uniform with the other four sources (whose structured
+    ids are attributes, not merge keys). Tier 0 = FDA FEI grouping is **opt-in** (``fei_merge``,
+    default OFF) and DEFERRED — establishment-grain FEI chains unrelated firms across owner changes
+    (ADR 0037); FEI rides on ``firm.observed_company_ids`` as an attribute regardless. For every row
+    whose clean name lands in a multi-member cluster, repoints ``canonical_firm_id`` and stamps the
+    tier's ``match_confidence`` (+ ``match_score`` for score-based tiers); singletons keep their
+    deterministic canonical + confidence. Mutates ``rows`` in place; returns
+    ``(fei_merged, fuzzy_merged, fei_gated)`` counts (the FEI ones are 0 unless ``fei_merge``).
     """
 
     def node_of(row: dict[str, object]) -> str:
@@ -258,7 +262,10 @@ def apply_clustering(
         if cn not in display_of or disp < display_of[cn]:
             display_of[cn] = disp  # stable original-case representative for the canonical_name
 
-    must_link, fei_gated = fr.fei_resolve(fei_rows, clean_of_firm_id)
+    if fei_merge:
+        must_link, fei_gated = fr.fei_resolve(fei_rows, clean_of_firm_id)
+    else:
+        must_link, fei_gated = [], 0  # Tier 0 deferred: FEI is an attribute, not a merge key
     assignment = fr.cluster_names(
         sorted(display_of),
         must_link,
@@ -267,7 +274,8 @@ def apply_clustering(
         rollup_threshold=rollup_threshold,
     )
 
-    version = f"allsrc-tier{'012' if rollup else '01'}-roll{int(rollup_threshold)}-v2"
+    tiers = ("0" if fei_merge else "") + "1" + ("2" if rollup else "")
+    version = f"allsrc-tier{tiers}-roll{int(rollup_threshold)}-v3"
     fei_merged = fuzzy_merged = 0
     for r in rows:
         r["resolver_version"] = version
@@ -290,24 +298,29 @@ def resolve_firm_crosswalk(
     *,
     dry_run: bool = False,
     rollup: bool = True,
+    fei_merge: bool = False,
     rollup_threshold: float = fr.ROLLUP_THRESHOLD,
 ) -> ResolveSummary:
-    """Rebuild firm_crosswalk: deterministic clean + tiered name/FEI resolution (reload).
+    """Rebuild firm_crosswalk: deterministic clean + name-grain resolution (truncate-reload).
 
-    Requires the ``stg_*`` views AND ``firm_fei_edges`` to be built (run after ``dbt build``).
-    ``rollup`` toggles Tier 2 (entity rollup); Tier 0 (FEI) + Tier 1 (name repair) always run.
+    Requires the ``stg_*`` views (run after ``dbt build --select staging``). ``rollup`` toggles
+    Tier 2 (entity rollup, default on); Tier 1 (name repair) always runs. ``fei_merge`` (default
+    OFF, deferred — ADR 0037) opts into Tier 0 FDA FEI grouping and additionally requires
+    ``firm_fei_edges``; the shipped name/brand grain does not read it.
     """
     with engine.connect() as conn:
         triples = [
             (row.firm_norm, row.rep_raw, row.sources) for row in conn.execute(_DISTINCT_FIRM_NAMES)
         ]
-        fei_rows = [
-            (row.firm_id, row.current_fei, row.current_name) for row in conn.execute(_FEI_EDGES)
-        ]
+        fei_rows = (
+            [(row.firm_id, row.current_fei, row.current_name) for row in conn.execute(_FEI_EDGES)]
+            if fei_merge
+            else []
+        )
 
     rows = build_crosswalk_rows(triples)
     fei_merged, fuzzy_merged, fei_gated = apply_clustering(
-        rows, fei_rows, rollup=rollup, rollup_threshold=rollup_threshold
+        rows, fei_rows, rollup=rollup, fei_merge=fei_merge, rollup_threshold=rollup_threshold
     )
     # cleaned = rows whose canonical differs from their own firm_id (cleaning + clustering).
     cleaned = sum(1 for r in rows if r["canonical_firm_id"] != r["firm_id"])

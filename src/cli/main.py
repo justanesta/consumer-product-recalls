@@ -552,9 +552,18 @@ def resolve_firms(
         typer.Option(
             "--rollup/--no-rollup",
             help="Tier 2 entity rollup (>=2 shared distinctive tokens). On by default; "
-            "--no-rollup ships Tier 0+1 only (FEI + near-identical name repair).",
+            "--no-rollup ships Tier 1 only (near-identical name repair).",
         ),
     ] = True,
+    fei_merge: Annotated[
+        bool,
+        typer.Option(
+            "--fei-merge/--no-fei-merge",
+            help="DEFERRED (default off, ADR 0037): opt into Tier 0 FDA-FEI merging. Establishment-"
+            "grain FEI chains unrelated firms across owner changes; FEI is an attribute, not a "
+            "merge key. Requires firm_fei_edges if enabled.",
+        ),
+    ] = False,
     rollup_threshold: Annotated[
         float,
         typer.Option(
@@ -570,17 +579,23 @@ def resolve_firms(
     ``extract_firm_dba`` / ``extract_paren_aliases`` for alternate names — no parenthetical
     strip, that proved too blunt cross-source, ADR 0037) and truncate-reloads
     ``firm_crosswalk``, keyed by ``md5(upper(trim(name)))`` so the silver firm models join it
-    for ``canonical_firm_id`` / ``clean_name`` / ``alternate_names``. Then overlays the tiered
-    ``src.enrichment.firm_resolution``: Tier 0 = FDA current-FEI groups (``firm_fei_edges``,
-    fan-out gated), Tier 1 = name-variant / typo repair, Tier 2 (``--rollup``) = >=2-token entity
-    rollup with a place/compound guard. Idempotent; no API/watermark side effects. Run AFTER
-    ``dbt build --select staging firm_fei_edges`` (it reads the ``stg_*`` views + that table).
+    for ``canonical_firm_id`` / ``clean_name`` / ``alternate_names``. Then overlays the name-grain
+    ``src.enrichment.firm_resolution``: Tier 1 = name-variant / typo repair, Tier 2 (``--rollup``)
+    = >=2-token entity rollup with a place/compound guard. The result is a name/brand-grain firm
+    dimension, uniform with the other four sources (whose structured ids are attributes, not merge
+    keys); FDA's FEI rides on ``firm.observed_company_ids`` likewise. Tier 0 FEI merging is opt-in
+    and deferred (``--fei-merge``). Idempotent; no API/watermark side effects. Run AFTER
+    ``dbt build --select staging`` (it reads the ``stg_*`` views).
     """
     configure_logging()
     settings = Settings()  # type: ignore[call-arg]
     engine = make_engine(settings.neon_database_url.get_secret_value())
     summary = resolve_firm_crosswalk(
-        engine, dry_run=dry_run, rollup=rollup, rollup_threshold=rollup_threshold
+        engine,
+        dry_run=dry_run,
+        rollup=rollup,
+        fei_merge=fei_merge,
+        rollup_threshold=rollup_threshold,
     )
     dry = " [dry-run]" if summary.dry_run else ""
     typer.echo(

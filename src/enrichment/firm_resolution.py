@@ -1,17 +1,18 @@
-"""Tiered firm-name resolution (Phase 6b PR 6b.4) — the name-similarity + FEI layer.
+"""Name-grain firm resolution (Phase 6b PR 6b.4) — the name-similarity layer (FEI tier deferred).
 
 The deterministic floor (``firm_normalization`` + ``crosswalk_writer.build_crosswalk_rows``)
 collapses raw variants that CLEAN to the same string (case / geo-suffix / DBA). This module
-overlays the residual it cannot do, in three tiers of decreasing safety (ADR 0037). All pure
-(no I/O): ``crosswalk_writer.apply_clustering`` supplies the distinct clean names + the FDA FEI
-rows, gets back one ``ClusterAssignment`` per name, and repoints ``canonical_firm_id``.
+overlays the residual it cannot do. The SHIPPED grain is **name/brand** (Tier 1 + 2), uniform with
+the other four sources whose structured ids are attributes, not merge keys (ADR 0037). All pure
+(no I/O): ``crosswalk_writer.apply_clustering`` supplies the distinct clean names, gets back one
+``ClusterAssignment`` per name, and repoints ``canonical_firm_id``.
 
-  Tier 0  FEI (``fei_exact``)        — group FDA names by their *current* establishment id
-                                       (``coalesce(surviving_fei, fei)``), which is FDA's own
-                                       authoritative rename/succession resolution. An FEI is a
-                                       FACILITY id, not a firm id, so a current-FEI that fans out
-                                       to MANY distinct names is a shared registrant / sentinel,
-                                       NOT one firm -> gated (``FEI_FANOUT_CAP``). Deterministic.
+  Tier 0  FEI (``fei_exact``)        — DEFERRED / OPT-IN (``fei_merge``, default off): group FDA
+                                       names by current establishment id. An FEI is a FACILITY id,
+                                       not a firm id, and facilities change corporate hands, so
+                                       FEI-merging chains UNRELATED firms across owner changes (the
+                                       plasma/blood blobs — ADR 0037). FEI rides on
+                                       ``firm.observed_company_ids`` as an attribute instead.
   Tier 1  name repair                — within a distinctive-token block, merge names that are
               ``name_variant_exact``   essentially the SAME string: identical distinctive-token
               ``name_typo_high``       set (punctuation / case / spacing / corp-form), or a high
@@ -183,15 +184,20 @@ def fei_resolve(
     *,
     fanout_cap: int = FEI_FANOUT_CAP,
 ) -> tuple[list[tuple[str, str]], int]:
-    """Tier 0 — resolve FDA names sharing a *current* establishment id into must-link pairs.
+    """Tier 0 (DEFERRED, opt-in) — FDA names sharing a *current* establishment id, into pairs.
 
-    ``fei_rows`` are ``(firm_id, current_fei, current_name)`` from ``firm_fei_edges``, where
-    ``current_fei = coalesce(firm_surviving_fei, firm_fei_num)`` is FDA's own post-rename identity
-    (a single hop — the surviving FEI is already the final current one). ``clean_of`` maps a
-    ``firm_id`` to its clean name. Names under one current-FEI are the SAME establishment (renames
-    + spelling variants) and merge; but a current-FEI fanning out to MORE than ``fanout_cap``
-    distinct names is a shared registrant / sentinel facility, not one firm -> dropped (those names
-    resolve by name instead). Returns ``(star-shaped pairs, n_gated)``.
+    Retained, tested, and callable, but OFF in the shipped resolver (``fei_merge=False``): a per-FEI
+    fan-out gate stops one FEI from over-merging, but it does NOT stop the cross-FEI failure mode —
+    a parent / DBA / defunct-ancestor name sits on dozens of establishment-FEIs now owned by
+    DIFFERENT firms, and union-find chains them into cross-corporate blobs (the plasma/blood
+    clusters). FDA leaves ``firm_surviving_nam`` ~7% populated and 0% on the bridge names, so there
+    is no FDA-internal signal to untangle it (ADR 0037). FEI is therefore an attribute, not a merge
+    key. Kept for a future establishment dimension (+ the FEI portal API).
+
+    ``fei_rows`` are ``(firm_id, current_fei, current_name)`` from ``firm_fei_edges``;
+    ``current_fei = coalesce(firm_surviving_fei, firm_fei_num)``. ``clean_of`` maps a ``firm_id`` to
+    its clean name. Names under one current-FEI merge; a current-FEI past ``fanout_cap`` distinct
+    names is gated. Returns ``(star-shaped pairs, n_gated)``.
     """
     by_fei: dict[str, set[str]] = defaultdict(set)
     for firm_id, current_fei, _current_name in fei_rows:

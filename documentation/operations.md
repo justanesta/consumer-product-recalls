@@ -233,15 +233,15 @@ The stage is **additive and idempotent**: it truncate-and-reloads `firm_crosswal
 
 ### Procedure
 
-1. **Build the inputs.** The resolver reads the `stg_*` views and the `firm_fei_edges` model (the FDA FEI forced-merge edges), so build staging first:
+1. **Build the inputs.** The resolver reads the `stg_*` views, so build staging first. (The default needs nothing else; `firm_fei_edges` is required only if you opt into the deferred `--fei-merge`.)
    ```bash
-   dbt build --select staging firm_fei_edges
+   dbt build --select staging
    ```
 2. **Preview** (no writes) and sanity-check the merge counts:
    ```bash
    recalls resolve-firms --dry-run
    ```
-   The summary prints `distinct_names`, `cleaned_count`, `fei_merged`, `fuzzy_merged`, `fei_gated` (current-FEIs dropped for fanning out past `FEI_FANOUT_CAP`). A `fuzzy_merged` or `fei_gated` that jumped sharply from the prior run is the signal a hub may have formed (see the troubleshooting entry). Use `--no-rollup` to ship Tier 0+1 only (FEI + near-identical repair, no entity rollup).
+   The summary prints `distinct_names`, `cleaned_count`, `fuzzy_merged`, and `fei_merged`/`fei_gated` (both **0** in the default run — FEI is attribute-only, ADR 0037). A `fuzzy_merged` that jumped sharply from the prior run is the signal a place hub may have formed (see the troubleshooting entry). `--no-rollup` ships Tier 1 only; `--fei-merge` opts into the deferred FEI tier (not for the firm grain).
 3. **Write** the crosswalk:
    ```bash
    recalls resolve-firms
@@ -260,10 +260,10 @@ The stage is **additive and idempotent**: it truncate-and-reloads `firm_crosswal
 
 ### The tiers, and which knob moves which
 
-The resolver runs three tiers (full method in [architecture.md](architecture.md#srcenrichment--firm-resolution-stage-adr-0037)). **Tier 0 (FEI)** and **Tier 1 (name repair)** are precision-safe and always on. **Tier 2 (entity rollup)** is the reviewable one, toggled by `--rollup` / `--no-rollup` and tuned by `--rollup-threshold` (default 90; higher = stricter). The active config is stamped into `resolver_version` (e.g. `allsrc-tier012-roll90-v2`).
+The resolver ships **two name tiers** (full method in [architecture.md](architecture.md#srcenrichment--firm-resolution-stage-adr-0037)). **Tier 1 (name repair)** is always on; **Tier 2 (entity rollup)** is the reviewable one, toggled by `--rollup` / `--no-rollup` and tuned by `--rollup-threshold` (default 90; higher = stricter). **Tier 0 (FDA FEI)** is deferred/opt-in (`--fei-merge`, default off) — FEI is an *attribute*, not a merge key, because establishment-grain FEIs chain unrelated firms across owner changes (ADR 0037). The active config is stamped into `resolver_version` (e.g. `allsrc-tier12-roll90-v3`).
 
 - A **place/compound false-merge** (e.g. two unrelated `San Antonio …` firms) → add the offending modifier to `src/enrichment/place_words.py` (the gazetteer-seeded denylist), then re-run. This is the normal Tier-2 maintenance lever — it is small, finite, and auditable; it does **not** balloon into an English-dictionary denylist (that failure mode was removed with the old subset clusterer).
-- An **FEI mega-cluster** (a `current_fei` welding unrelated firms) → run `scripts/sql/cross_source/silver/diagnose_fei_fanout.sql`; if a current-FEI maps to many dissimilar names, lower `FEI_FANOUT_CAP` in `firm_resolution.py` (it gates that FEI).
+- An **FEI mega-cluster / cross-corporate blob** → only possible with `--fei-merge`; the blobs are exactly why FEI is attribute-only by default. Don't use `--fei-merge` for the firm grain. (`diagnose_fei_fanout.sql` / `measure_surviving_coverage.sql` size the FEI tangle if you're exploring the deferred tier or a future establishment dimension.)
 - Too many borderline rollups generally → raise `--rollup-threshold`, or ship `--no-rollup` for the safe core and revisit.
 
 ### Review loop & cadence
@@ -516,7 +516,7 @@ Q2 reports the largest cluster size; the cluster's `match_confidence` tells you 
 
 **Most likely cause + fix** (precision-over-recall; the raw `firm_id` is preserved on every row, `match_confidence` is `warn`-severity, and a re-run is idempotent, so over-merges are visible and reversible — never silent corruption):
 - **`rapidfuzz_rollup` cluster of `… <place> …` firms** (e.g. unrelated `San Antonio …`) → a Tier-2 place coincidence. Add the modifier to `src/enrichment/place_words.py` and re-run. (Or ship `--no-rollup` to drop Tier 2 entirely.)
-- **`fei_exact` cluster welding unrelated firms** → a `current_fei` with high fan-out (shared registrant / sentinel). Confirm with `diagnose_fei_fanout.sql`; lower `FEI_FANOUT_CAP` in `firm_resolution.py`.
+- **`fei_exact` cluster welding unrelated firms** → only appears with `--fei-merge` (deferred). Drop `--fei-merge`; FEI is attribute-only by default (ADR 0037), so the shipped crosswalk has no `fei_exact` rows.
 - **`rapidfuzz_rollup` from borderline similarity** → raise `--rollup-threshold`.
 
 These are config/code changes, not crosswalk edits — file them; hand-editing `firm_crosswalk` is overwritten by the next run.
