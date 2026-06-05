@@ -47,6 +47,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0014 — Schema evolution policy](0014-schema-evolution-policy.md) — `extra='forbid'` + `strict=True` + required-by-default
 - [0020 — Pipeline state tracking](0020-pipeline-state-tracking.md) — Neon watermark + run-metadata tables; Prefect Cloud as future overlay; Dagster deferred
 - [0028 — Backfill and historical re-extraction semantics](0028-backfill-historical-reextraction-semantics.md) — three named mechanisms (deep rescan, R2 replay, manifest backfill) with idempotency and silver-layer rules
+- [0037 — Firm resolution runs as a Python stage, not in-warehouse SQL/pg_trgm](0037-firm-resolution-python-stage-not-sql-fuzzy.md) — scoped exception to ADR 0011; RapidFuzz clustering + FEI forced-merges in `src/enrichment/` → `firm_crosswalk` dbt source; rejects pg_trgm/fuzzystrmatch with reasoning
 
 ### Tooling and development
 
@@ -98,6 +99,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 34. [NHTSA silver v1.5 — Layer 3 migration cutover](0034-nhtsa-silver-v15-migration.md) *(Proposed — stub)*
 35. [Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) *(Proposed — W3 verdict written; build deferred to Phase 6)*
 36. [Cross-source canonical silver column naming](0036-cross-source-canonical-silver-naming.md) *(Proposed — W3 policy written; ratifies at merge)*
+37. [Firm resolution runs as a Python stage, not in-warehouse SQL/pg_trgm](0037-firm-resolution-python-stage-not-sql-fuzzy.md)
 
 ---
 
@@ -105,7 +107,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 When adding a new ADR:
 
-1. Pick the next sequential number. Current state: **0001–0033 filed (Accepted); 0034 a `Proposed` stub; 0035 + 0036 `Proposed` with their W3 content written 2026-06-02** (0035 = the SCD-applicability verdict, build architecture still deferred to Phase 6; 0036 = the canonical-naming policy + D1–D7, ratifies at `feature/silver-field-remap` merge). **0024 and 0025 remain reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). **The next free number is 0037.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
+1. Pick the next sequential number. Current state: **0001–0033 filed (Accepted); 0034 a `Proposed` stub; 0035 + 0036 `Proposed` with their W3 content written 2026-06-02** (0035 = the SCD-applicability verdict, build architecture still deferred to Phase 6; 0036 = the canonical-naming policy + D1–D7, ratifies at `feature/silver-field-remap` merge); **0037 filed (Accepted) 2026-06-04** (firm resolution as a Python stage). **0024 and 0025 remain reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). **The next free number is 0038.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
 2. File name: `NNNN-kebab-case-title.md`.
 3. Use the standard template (see any existing ADR as a model).
 4. Add an entry under the appropriate topic above **and** in the numeric index.

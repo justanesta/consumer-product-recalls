@@ -21,7 +21,7 @@ select
   count(distinct firm_id)                    as distinct_firm_id,
   count(distinct canonical_firm_id)          as distinct_canonical_firm_id,
   count(*) - count(distinct canonical_firm_id) as merges,
-  count(*) filter (where extracted_dba is not null) as dba_rows
+  count(*) filter (where alternate_names is not null) as alias_rows
 from firm_crosswalk;
 
 \echo ''
@@ -43,18 +43,22 @@ order by n_raw_variants desc, clean_name
 limit 30;
 
 \echo ''
-\echo '=== Q3: sample DBA extractions (clean_name + extracted brand) ==='
-select left(clean_name, 55) as clean_name, left(extracted_dba, 35) as extracted_dba
+\echo '=== Q3: sample aliases (clean_name + alternate_names: DBA brand + paren brands) ==='
+select left(clean_name, 55) as clean_name, left(alternate_names::text, 45) as alternate_names
 from firm_crosswalk
-where extracted_dba is not null
+where alternate_names is not null
 order by clean_name
 limit 30;
 
 \echo ''
-\echo '=== Q4: SANITY — clean_names that still carry an unstripped suffix (expect 0 rows) ==='
--- A ", of <X>" tail or a standalone " dba " in clean_name means the cleaner missed a
--- comma-anchored geo / DBA clause. Blocklist keeps ("Bank of America") have " of " but
--- NOT ", of ", so they are correctly NOT flagged here.
+\echo '=== Q4: REVIEW — clean_names that still carry a ", of" / " dba " tail ==='
+-- The " dba " rows SHOULD be ~0 (DBA strip is universal + always on). The ", of <X>" rows
+-- are EXPECTED, not failures, since the geo-strip is precision-first + source-gated (ADR
+-- 0037 amend): geo-OFF sources (FDA/USDA/USCG) keep integral "X of <State>" names; CPSC
+-- city-only tails ("of San Francisco", no state token) and out-of-vocab countries
+-- ("of Dhaka, Bangladesh") are deliberate misses; "a division/subsidiary of" are blocklist
+-- keeps. All are "miss fragments, RapidFuzz recovers" cases — eyeball for genuine over-keeps,
+-- do not expect zero.
 select left(clean_name, 80) as clean_name, match_confidence
 from firm_crosswalk
 where clean_name ~* ',\s*of\s'
@@ -98,3 +102,22 @@ from joined j
 join multi m on m.canonical_firm_id = j.canonical_firm_id
 order by j.clean_name, raw_variant
 limit 60;
+
+\echo ''
+\echo '=== Full crosswalk dump -> data/exploratory/cross_source/firm_crosswalk_full.csv ==='
+\echo '   (Every row + column, ordered so merge members are adjacent — grep/analyze merges,'
+\echo '    aliases, residual suffixes offline at full scale, no LIMIT.)'
+\pset format csv
+\o data/exploratory/cross_source/firm_crosswalk_full.csv
+select
+  canonical_firm_id,
+  firm_id,
+  canonical_name,
+  clean_name,
+  alternate_names,
+  match_confidence
+from firm_crosswalk
+order by canonical_firm_id, clean_name;
+\o
+\pset format aligned
+\echo '   done — Read data/exploratory/cross_source/firm_crosswalk_full.csv'

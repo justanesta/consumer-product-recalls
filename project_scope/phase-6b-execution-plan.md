@@ -41,6 +41,8 @@ All of Phase 6b is greenfield ON TOP of the #58 shape, EXCEPT the two existing s
 
 ## 2. Normalization-engine architecture decision (the spine)
 
+> **Canonical decision record: [ADR 0037](../documentation/decisions/0037-firm-resolution-python-stage-not-sql-fuzzy.md)** (Accepted 2026-06-04). The "why a Python stage, not pg_trgm/SQL" rationale + rejected alternatives are single-homed there; this section is the execution-level elaboration. System-shape view: `documentation/architecture.md` → "`src/enrichment/` — firm-resolution stage."
+
 **DECISION: HYBRID (Lane F / D1).** Three layers, each in the venue that fits it:
 
 1. **Deterministic name cleaning** (CPSC suffix-strip + DBA-extract, NHTSA corporate-form/regional-suffix cleanup, AC DELCO trivial alias) runs **in dbt-SQL** via a single reusable macro `clean_firm_name()` (plus `extract_firm_dba()`), called from the **silver firm models** so the cleaning is single-homed. Per ADR 0027, deterministic value-normalization belongs in dbt-SQL, not bronze, not Python. Uses stock Postgres `regexp_replace`/`regexp_match` — **no `CREATE EXTENSION`** (pg_trgm/fuzzystrmatch are absent from all project code and Neon has no dbt-python runtime — confirmed-in-doc).
@@ -254,6 +256,13 @@ PRs 6b.1, 6b.2, 6b.5 are largely independent after 6b.0 and could land in parall
 ---
 
 ## PR 6b.4 — RapidFuzz cross-source crosswalk (`recalls resolve-firms` + firm_id remap)
+
+> **As-built — Increment 1 (deterministic floor) BUILT GREEN 2026-06-04. Decision home: [ADR 0037](../documentation/decisions/0037-firm-resolution-python-stage-not-sql-fuzzy.md) (amended 2026-06-04).** The "Deferred from PR 6b.3 (C-lite)" block below is **SUPERSEDED** — a per-source empirical + adversarial Workflow (10 agents over the dumped corpus) showed the unified paren-strip over-reaches. The deterministic floor was scoped to only the unambiguously-safe transforms; the rest defers to RapidFuzz:
+> - **Paren-strip dropped ENTIRELY** (fuzzy `token_set_ratio=100` recovers bare-vs-paren for free; blanket strip over-truncates + wrong-merges). Brand parens → `extract_paren_aliases` → `firm.alternate_names`.
+> - **Geo-strip SOURCE-GATED** (the owner's "tie cleaning to whether the source has a better id than its name" intuition, validated): ON for name-only `{cpsc, nhtsa}`, OFF for id-backed `{fda, usda, uscg}` (FEI/establishment_number/MIC carry within-source identity; geo over-strips their integral "X of <State>" names). NHTSA geo is *guarded* (never to a bare single token: WINNEBAGO OF INDIANA stays; AUTO TRIM DESIGN OF TEXAS strips). DBA-strip universal + a `(DBA)`-marker parse fix.
+> - **Global `md5(raw_name)` key KEPT** (source-aware composite key REJECTED — fragments the Honda/Tyson rollups). geo-mode derived one-per-name in `crosswalk_writer._geo_mode_for` (precedence off>guarded>full → no PK conflict). `validate_geo_gate_conflicts.sql` = **0 demotions** (16 straddlers all clean brands).
+> - Deleted dead code (`clean_nhtsa_firm_name`/`_strip_parentheticals`/`clean_firm_name_unified`); migration **0026** `extracted_dba text`→`alternate_names jsonb` (firm.sql flattens; `none_as_null=True` bug fixed). Resolver `allsrc-clean-v4`: firm=28,522, recall_event_firm=128,999, 17 build + 15 test PASS.
+> - **Increment 2 (RapidFuzz clusterer) is the remaining 6b.4 work** — `firm_resolution.py` + the crosswalk overlay + FEI forced-merge edges. **Version bump 0.14.1→0.15.0 pending.**
 
 **Scope.** The genuine edit-distance layer. A `recalls resolve-firms` Typer subcommand (USER-run) reads distinct cleaned firm names + the FDA FEI edges, applies RapidFuzz `token_set_ratio` with a blocking key + the FEI/succession edges as forced merges (union-find), writes `firm_crosswalk` (truncate-and-reload), and the additive `canonical_firm_id` coalesce in firm.sql/recall_event_firm.sql (wired in THIS PR per refinement R1 — NOT 6b.0; see the 6b.0 as-built note) resolves to real cluster ids. `match_confidence` carries `fei_exact` (forced), `rapidfuzz_high` (≥ threshold), `rapidfuzz_low_ambiguous_null` (below threshold, left unmerged), `singleton`.
 

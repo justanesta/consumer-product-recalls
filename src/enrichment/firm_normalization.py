@@ -1,12 +1,14 @@
-"""CPSC + NHTSA firm-name normalization (Phase 6b, PRs 6b.1 + 6b.3).
+"""Cross-source firm-name normalization (Phase 6b, PRs 6b.1 + 6b.4).
 
-Deterministic cleaning of CPSC firm-role names (manufacturers / importers /
-distributors) before they enter the silver firm dimension and the 6b.4 RapidFuzz
-clustering. Validated against the full 9,828-record corpus (gate
-``scripts/sql/cpsc/bronze/measure_comma_optional_of_strip.sql`` + the
-``data/exploratory/cpsc/g1_comma_less_cohort.csv`` dump, 2026-06-03).
+Deterministic cleaning of firm-role names from all five sources before they enter the
+silver firm dimension and the 6b.4 RapidFuzz clustering. The geo/DBA strip was validated
+against the full CPSC corpus (gate ``scripts/sql/cpsc/bronze/measure_comma_optional_of_strip.sql``
++ the ``data/exploratory/cpsc/g1_comma_less_cohort.csv`` dump, 2026-06-03); the
+cross-source blast-radius review (``probe_cleaning_blast_radius_by_source.sql``, 2026-06-04)
+established that a blanket parenthetical strip is too blunt cross-source, so paren-VARIANTS
+are left to RapidFuzz (ADR 0037) and only paren-BRANDS are captured as aliases.
 
-Two pure operations:
+Three pure operations:
 
 - ``clean_firm_name`` — strip a trailing DBA clause and a trailing geographic
   suffix ("Fisher-Price of East Aurora, N.Y." -> "Fisher-Price"), returning the
@@ -20,7 +22,10 @@ Two pure operations:
   prevents the greedy-leftmost bug ("Fireworks of Alabama, Inc. of Adamsville,
   Ala." correctly -> "Fireworks of Alabama, Inc.", not "Fireworks").
 - ``extract_firm_dba`` — capture the DBA brand ("dba" / "d/b/a" / "d.b.a." /
-  "doing business as", incl. the parenthetical form) as an alternate name.
+  "doing business as", incl. the parenthetical and marker-alone "(DBA) Brand" forms) as
+  an alternate name.
+- ``extract_paren_aliases`` — capture a non-DBA parenthetical that holds a brand / alternate
+  company name ("Deere & Company (John Deere)") as an alternate name, dropping noise parens.
 
 No I/O. The caller (a ``recalls`` CLI step, PR 6b.1) maps distinct raw names through
 these and persists the result so silver ``firm.sql`` and ``recall_event_firm.sql``
@@ -279,12 +284,45 @@ _DBA_MARK = r"(?:doing\s+business\s+as|\bd[./]?b[./]?a[./]?)"
 _DBA_PAREN = re.compile(r"\s*\(\s*" + _DBA_MARK + r"\s*([^)]*?)\s*\)", re.IGNORECASE)
 _DBA_INLINE_CAPTURE = re.compile(r",?\s*" + _DBA_MARK + r"\s+(.+)$", re.IGNORECASE)
 _DBA_INLINE_STRIP = re.compile(r",?\s*" + _DBA_MARK + r"\s+.*$", re.IGNORECASE)
+# Marker-alone-in-parens form with the brand OUTSIDE the parens:
+# "Annona Company, LLC (DBA) Honest Foods" -> clean "Annona Company, LLC", dba "Honest Foods".
+_DBA_PAREN_MARKER_CAPTURE = re.compile(r"\(\s*" + _DBA_MARK + r"\s*\)\s*(.+)$", re.IGNORECASE)
+_DBA_PAREN_MARKER_STRIP = re.compile(r"\s*\(\s*" + _DBA_MARK + r"\s*\)\s*.*$", re.IGNORECASE)
 
-# NHTSA (PR 6b.3): a BALANCED (parenthetical) annotation — parent-corp / regional /
-# alias / DBA / "formerly". Balanced-only, so a CHAR(40)-truncated open paren is kept.
-_PAREN = re.compile(r"\s*\([^)]*\)")
-# Trailing junk a paren-strip can leave ("KEY SAFETY SYSTEMS, INC. -").
-_TIDY_TRAIL = ",;- "
+# ── Parenthetical-alias capture (PR 6b.4) ───────────────────────────────────────
+# The deterministic cleaner deliberately does NOT strip parentheticals: the cross-source
+# blast-radius review (2026-06-04) showed a blanket strip is too blunt — abbreviation-prefix
+# over-truncation ("FENGM (Hong Kong Fengmang International Co. Ltd.)" -> "FENGM"), brand
+# loss, and (DBA) mashups. RapidFuzz handles paren-variants instead (ADR 0037). But a paren
+# that holds a BRAND / alternate company name ("Deere & Company (John Deere)") is worth
+# keeping as a search + fuzzy-match alias -> firm.alternate_names. extract_paren_aliases
+# keeps those and drops the noise (status / succession / facility / location / date) parens.
+_DBA_CONTENT = re.compile(r"^\s*" + _DBA_MARK, re.IGNORECASE)
+_CORP_FORM = re.compile(
+    r"\b(?:inc|incorporated|llc|l\.l\.c|corp|corporation|co|company|ltd|limited"
+    r"|gmbh|a\.?g|s\.?a|pvt|plc|lp|l\.p|kg|bhd|sdn)\b",
+    re.IGNORECASE,
+)
+# Parenthetical content that is never an alternate name (status / succession / corporate
+# narrative / facility-or-org-unit tag / a year or date). Locations are handled separately.
+_ALIAS_NOISE = re.compile(
+    r"\b(?:formerly|f\.?/?k\.?/?a|n\.?/?k\.?/?a|now\s+known|previously|no\s+longer"
+    r"|out\s+of\s+business|ceased|owner\s+of|under\s+license|licensee|subsidiary"
+    r"|division\s+of|a\s+division|wholly.owned|in\s+turn|trademark|brand\s+name"
+    r"|also\s+known\s+as|also\s+does\s+business|conducting\s+this\s+recall"
+    r"|located\s+in|department\s+of|authorized\b|note\b|plant\b|unit\b|site\b|facility"
+    r"|\bmfg\b|corporate|headquarters|\bhq\b|production|department|branch|region\b"
+    r"|warehouse|distribution|service\s+center|blood\s+bank|commissary|kitchen|office\b"
+    r"|present\b|prior\s+to|\bafter\b|\bbefore\b|\bthrough\b|\bsince\b)\b"
+    r"|\b(?:19|20)\d{2}\b|\d{1,2}/\d",
+    re.IGNORECASE,
+)
+# Regional parentheticals not covered by the single-token geo vocabulary (drop as alias).
+_ALIAS_REGION = re.compile(
+    r"^(?:u\.?s\.?a?\.?|uk|u\.?k\.?|north\s+america|n\.?\s*america|america"
+    r"|united\s+states|hong\s+kong)$",
+    re.IGNORECASE,
+)
 
 
 def _tail_has_geo(tail: str) -> bool:
@@ -309,22 +347,41 @@ def _strip_trailing_geo(name: str) -> str:
     return name[: last.start()].rstrip(",; ")
 
 
-def clean_firm_name(raw: str) -> str:
-    """Return the canonical legal name: DBA clause + trailing geographic suffix removed.
+def clean_firm_name(raw: str, *, geo_mode: str = "full") -> str:
+    """Return the canonical legal name: DBA clause removed + (source-gated) trailing geo suffix.
 
-    Precision-first — integral/narrative/place-internal "of" and non-geographic
-    tails are left whole (see module docstring). Idempotent; preserves case.
+    ``geo_mode`` gates the geographic-suffix strip per the ADR 0037 amendment (tie geo-strip
+    intensity to whether the source has a better identity signal than its name):
+
+    - ``'full'``    — strip the geo suffix (CPSC: the name is the only identity signal, and
+      the "<Firm> of <City>, <State>"/"of <Country>" tail is reliably a location decoration).
+    - ``'guarded'`` — strip, but NEVER reduce the name to a bare single token (the NHTSA
+      integral-name guard: "WINNEBAGO OF INDIANA" -> "WINNEBAGO" would collide with the
+      distinct "WINNEBAGO INDUSTRIES INC."). A multi-token base still strips (the dealer
+      cohort "AUTO TRIM DESIGN OF TEXAS" -> "AUTO TRIM DESIGN").
+    - ``'off'``     — no geo strip (FDA/USDA/USCG: FEI / establishment_number / MIC carry the
+      authoritative within-source identity, and the geo-strip over-strips integral
+      "X of <State>" establishment names, e.g. "BLOODCENTER OF WISCONSIN").
+
+    The DBA-clause strip is source-agnostic (always applied — an explicit labeled marker).
+    Precision-first — integral/narrative/place-internal "of" and non-geographic tails are
+    left whole (see module docstring). Idempotent; preserves case.
     """
     if not raw:
         return ""
     name = _WS.sub(" ", raw).strip()
-    # 1. Remove DBA clauses (parenthetical, then inline-to-end).
+    # 1. Remove DBA clauses (always): marker-then-brand "(dba) Brand..." (brand outside the
+    #    parens), parenthetical "(dba Brand)", then inline-to-end "dba Brand ...".
+    name = _DBA_PAREN_MARKER_STRIP.sub("", name)
     name = _DBA_PAREN.sub("", name)
     name = _DBA_INLINE_STRIP.sub("", name)
     name = _WS.sub(" ", name).strip().rstrip(",; ")
-    # 2. Geographic suffix strip — skipped when the "of" is integral/narrative.
-    if not _BLOCKLIST.search(name):
-        name = _strip_trailing_geo(name)
+    # 2. Geographic suffix strip — GATED by geo_mode + the integral/narrative blocklist.
+    if geo_mode != "off" and not _BLOCKLIST.search(name):
+        stripped = _strip_trailing_geo(name)
+        if geo_mode == "guarded" and stripped != name and len(stripped.split()) <= 1:
+            stripped = name  # integral-name guard: never strip down to a bare single token
+        name = stripped
     return _WS.sub(" ", name).strip().rstrip(",; ")
 
 
@@ -337,6 +394,11 @@ def extract_firm_dba(raw: str) -> str | None:
     if not raw:
         return None
     name = _WS.sub(" ", raw).strip()
+    # Marker-alone-in-parens, brand outside: "...LLC (DBA) Honest Foods" -> "Honest Foods".
+    marker = _DBA_PAREN_MARKER_CAPTURE.search(name)
+    if marker:
+        brand = _OF.split(marker.group(1), maxsplit=1)[0].strip().rstrip(",; ")
+        return brand or None
     paren = _DBA_PAREN.search(name)
     if paren and paren.group(1).strip():
         return paren.group(1).strip().rstrip(",; ") or None
@@ -348,49 +410,43 @@ def extract_firm_dba(raw: str) -> str | None:
     return None
 
 
-def _strip_parentheticals(name: str) -> str:
-    """Remove every balanced (parenthetical) group, then tidy trailing punctuation.
+def extract_paren_aliases(raw: str) -> list[str]:
+    """Return parenthetical contents that are alternate NAMES, for firm.alternate_names.
 
-    Balanced-only: a CHAR(40)-truncated open paren (no closing ``)``) is left in
-    place. The trailing tidy reclaims merges a bare strip would miss
-    ("KEY SAFETY SYSTEMS, INC. -" -> "KEY SAFETY SYSTEMS, INC."). Callers apply the
-    precision (min-length) guard.
+    Keeps a paren that "looks like it names the firm" — multiword, carries a corporate
+    form, or shares a >=4-char token with the surrounding name ("National Presto Industries
+    Inc. (Presto)" -> ["Presto"]; "Deere & Company (John Deere)" -> ["John Deere"]). Drops
+    the noise: DBA markers (``extract_firm_dba`` owns those), status / succession / facility
+    / date parens, and pure locations.
+
+    Precision-first on the NOISE side (a wrong alias is worse than a missing one in a search
+    field), so two documented gaps are accepted: a truly unrelated single-word brand with no
+    shared token ("(Texsport)") is skipped, and a bare multiword facility city
+    ("(Hot Springs)") can leak. Order-preserving, de-duplicated, case-preserving.
     """
-    stripped = _PAREN.sub("", name)
-    return _WS.sub(" ", stripped).strip().rstrip(_TIDY_TRAIL)
-
-
-def clean_nhtsa_firm_name(raw: str) -> str:
-    """Return the NHTSA firm name with all balanced (parenthetical) annotations gone.
-
-    NHTSA mfgname/mfgtxt carry parent-company ("CHRYSLER (FCA US, LLC) (STELLANTIS)"),
-    regional ("APOLLO TIRES (US) INC."), alias ("ALUMINUM TRAILER COMPANY (ATC)"),
-    DBA ("(DBA JOYSON)"), and "(FORMERLY ...)" parentheticals — all identity noise.
-    Validated on the full 3,940-name corpus
-    (data/exploratory/nhtsa/name_normalization_features.csv, 2026-06-03): 0 over-strips;
-    10 merge clusters collapse 21 names -> 10 canonical. Precision-first:
-
-    - only BALANCED ``(...)`` strip, so a CHAR(40)-truncated open paren
-      ("AMERICAN PACIFIC INDUSTRIES, INC (A.P.I.") is left WHOLE;
-    - trailing ",;- " a strip leaves is tidied so de-parenthesized forms merge;
-    - if stripping would leave < 2 chars, the original is kept (never destroy a name).
-
-    Idempotent; preserves case. DBA brands ("JOYSON", "ITA") are captured separately
-    by ``extract_firm_dba`` (-> firm.alternate_names), unchanged from CPSC.
-
-    DEFERRED WIRING (C-lite, 2026-06-03): this is deterministic PREP only — it is NOT
-    yet applied to any firm_id. PR 6b.4 consumes it when it assembles the cross-source
-    crosswalk: union the distinct CPSC + NHTSA names through ONE unified cleaner
-    (``_strip_parentheticals`` wrapped around the UNTOUCHED CPSC ``clean_firm_name``),
-    stamp a source-agnostic cleaning-based match_confidence, run the CPSC non-DBA-paren
-    blast-radius probe, then RapidFuzz. Corporate-form (69.5%) + regional (5.7%) tokens
-    are NOT cleaned here — they become 6b.4 RapidFuzz stopwords (the G0 decision). See
-    project_scope/phase-6b-execution-plan.md PR 6b.3 (as-built) + PR 6b.4.
-    """
-    if not raw:
-        return ""
-    name = _WS.sub(" ", raw).strip()
-    stripped = _strip_parentheticals(name)
-    if len(stripped) < 2:
-        return name
-    return stripped
+    if not raw or "(" not in raw:
+        return []
+    base_tokens = set(re.findall(r"[A-Za-z0-9]{4,}", re.sub(r"\([^)]*\)", " ", raw).upper()))
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for content in re.findall(r"\(([^)]*)\)", raw):
+        alias = _WS.sub(" ", content).strip().rstrip(",;. ")
+        if len(alias) < 2 or _DBA_CONTENT.match(alias) or _ALIAS_NOISE.search(alias):
+            continue
+        if _norm(alias) in _GEO_TERMS or _ALIAS_REGION.fullmatch(alias):
+            continue
+        if _norm(alias.rsplit(",", 1)[-1]) in _GEO_TERMS:  # trailing "City, State" location
+            continue
+        tokens = re.findall(r"[A-Za-z0-9]{4,}", alias.upper())
+        looks_like_name = (
+            bool(re.search(r"[ ,/&]", alias))
+            or bool(_CORP_FORM.search(alias))
+            or any(t in base_tokens for t in tokens)
+        )
+        if not looks_like_name:
+            continue
+        key = alias.upper()
+        if key not in seen:
+            seen.add(key)
+            aliases.append(alias)
+    return aliases

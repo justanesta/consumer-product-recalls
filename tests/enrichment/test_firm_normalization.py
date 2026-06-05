@@ -1,17 +1,17 @@
-"""Unit tests for CPSC + NHTSA firm-name normalization (Phase 6b PRs 6b.1 + 6b.3).
+"""Unit tests for cross-source firm-name normalization (Phase 6b PRs 6b.1 + 6b.4).
 
 Fixtures are REAL corpus strings: CPSC from data/exploratory/cpsc/g1_comma_less_cohort.csv
-+ measure_comma_optional_of_strip.sql; NHTSA from
-data/exploratory/nhtsa/name_normalization_features.csv. So the regression surface is the
-actual data each cleaning decision was validated against (2026-06-03).
++ measure_comma_optional_of_strip.sql; the cross-source paren cases from
+data/exploratory/cross_source/cleaning_blast_radius_by_source.csv. So the regression
+surface is the actual data each cleaning decision was validated against (2026-06-03/04).
 """
 
 import pytest
 
 from src.enrichment.firm_normalization import (
     clean_firm_name,
-    clean_nhtsa_firm_name,
     extract_firm_dba,
+    extract_paren_aliases,
 )
 
 # Trailing geographic suffix -> stripped to the canonical legal name.
@@ -66,6 +66,57 @@ def test_clean_fixes_greedy_internal_geo():
     assert (
         clean_firm_name("Fireworks of Alabama, Inc. of Adamsville, Ala.")
         == "Fireworks of Alabama, Inc."
+    )
+
+
+# ── geo_mode gate (ADR 0037 amendment): on for CPSC/NHTSA, off for FEI/estab/MIC sources ──
+# 'off' (FDA/USDA/USCG) — never strip a geo suffix; integral "X of <State>" names stay whole.
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "BLOODCENTER OF WISCONSIN, INC.",  # FDA integral name geo-strip would corrupt
+        "Fisher-Price of East Aurora, N.Y.",  # would strip under 'full', kept under 'off'
+        "BAKERY EXPRESS OF CENTRAL FLORIDA, INC.",
+        "PACIFIC FOODS OF OREGON, INC",
+    ],
+)
+def test_geo_off_keeps_what_full_strips(raw):
+    # geo OFF must NOT strip the geo tail that geo FULL would (the over-strip these sources avoid).
+    off = clean_firm_name(raw, geo_mode="off")
+    assert off != clean_firm_name(raw, geo_mode="full")
+    assert clean_firm_name(off, geo_mode="off") == off  # idempotent
+
+
+# 'guarded' (NHTSA) — strip a multi-token base, but NEVER reduce to a bare single token.
+_GUARDED_BLOCK = [
+    "WINNEBAGO OF INDIANA, LLC",  # -> WINNEBAGO would collide with WINNEBAGO INDUSTRIES INC.
+    "CAPACITY OF TEXAS",
+    "IDEAL OF IDAHO, INC.",
+    "CAREFREE OF COLORADO",
+]
+_GUARDED_STRIP = [
+    ("AUTO TRIM DESIGN OF TEXAS", "AUTO TRIM DESIGN"),  # multi-token dealer cohort still strips
+    ("BEALL TRAILERS OF OREGON", "BEALL TRAILERS"),
+    ("KAUFMAN TRAILERS OF NC, INC.", "KAUFMAN TRAILERS"),
+]
+
+
+@pytest.mark.parametrize("raw", _GUARDED_BLOCK)
+def test_geo_guarded_blocks_single_token(raw):
+    # guarded keeps the name whole (no bare-single-token over-strip)...
+    assert clean_firm_name(raw, geo_mode="guarded") == clean_firm_name(raw, geo_mode="off")
+    # ...whereas 'full' WOULD over-strip it to a bare token (that is the bug the guard prevents)
+    assert len(clean_firm_name(raw, geo_mode="full").split()) <= 1
+
+
+@pytest.mark.parametrize("raw,expected", _GUARDED_STRIP)
+def test_geo_guarded_strips_multitoken(raw, expected):
+    assert clean_firm_name(raw, geo_mode="guarded") == expected
+
+
+def test_geo_full_is_the_default():
+    assert clean_firm_name("Walmart of Bentonville, Ark.") == clean_firm_name(
+        "Walmart of Bentonville, Ark.", geo_mode="full"
     )
 
 
@@ -138,86 +189,80 @@ def test_clean_edges(raw, expected):
     assert clean_firm_name(raw) == expected
 
 
-# ── NHTSA parenthetical cleaning (PR 6b.3) ──────────────────────────────────────
-# Fixtures from data/exploratory/nhtsa/name_normalization_features.csv (2026-06-03):
-# 41 parenthetical names, 0 over-strips, 10 merge clusters (21 names -> 10).
+# ── Parentheticals are NOT stripped (PR 6b.4, ADR 0037) ─────────────────────────
+# The cross-source blast-radius review (cleaning_blast_radius_by_source.csv, 2026-06-04)
+# showed a blanket paren strip is too blunt — abbreviation-prefix over-truncation, brand
+# loss, (DBA) mashups. So clean_firm_name leaves non-DBA parens WHOLE (RapidFuzz handles
+# the variants); only brand-bearing parens are lifted into alternate_names.
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "CHRYSLER (FCA US, LLC)",  # parent-corp paren stays (was over-stripped to CHRYSLER)
+        "FENGM (HONG KONG FENGMANG INTERNATIONAL CO. LTD.)",  # abbreviation prefix kept whole
+        "DEERE & COMPANY (JOHN DEERE)",
+        "RECREATIONAL EQUIPMENT INC. (REI)",
+    ],
+)
+def test_clean_keeps_non_dba_parentheticals(raw):
+    assert clean_firm_name(raw) == raw
 
-# Balanced (parenthetical) annotation removed -> canonical name.
-_NHTSA_STRIP = [
-    ("CHRYSLER (FCA US, LLC) (STELLANTIS)", "CHRYSLER"),
-    ("CHRYSLER (FCA US, LLC)", "CHRYSLER"),
-    ("CHRYSLER (FCA US LLC)", "CHRYSLER"),
-    ("TAKATA (TK GLOBAL, LLC)", "TAKATA"),
-    ("HONDA (AMERICAN HONDA MOTOR CO.)", "HONDA"),
-    ("ALUMINUM TRAILER COMPANY (ATC)", "ALUMINUM TRAILER COMPANY"),
-    ("DIONO (FORMERLY SUNSHINE KIDS JUVENILE)", "DIONO"),
-    ("APOLLO TIRES (US) INC.", "APOLLO TIRES INC."),
-    ("NOVA BUS (US) INC.", "NOVA BUS INC."),
-    ("SEMPERIT, A.G.(AUSTRIA)", "SEMPERIT, A.G."),  # no space before paren
-    ("HINO DIESEL TRUCKS(USA)", "HINO DIESEL TRUCKS"),  # no space before paren
-    ("GENERAL RUBBER (THAILAND) CO., LTD", "GENERAL RUBBER CO., LTD"),
-    ("MAZDA (NORTH AMERICA),INC", "MAZDA,INC"),
-    ("KEY SAFETY SYSTEMS, INC. - (DBA JOYSON)", "KEY SAFETY SYSTEMS, INC."),
+
+# ── (DBA)-marker-alone form, brand OUTSIDE the parens (bucket 4 fix) ─────────────
+_DBA_MARKER = [
+    ("ANNONA COMPANY, LLC (DBA) HONEST FOODS", "ANNONA COMPANY, LLC", "HONEST FOODS"),
+    ("ED ROLLER, INC. (DBA) ROLLER'S HORSERADISH", "ED ROLLER, INC.", "ROLLER'S HORSERADISH"),
+    (
+        "RICKETTS INVESTMENT GROUP (DBA) L & H INDUSTRIES",
+        "RICKETTS INVESTMENT GROUP",
+        "L & H INDUSTRIES",
+    ),
 ]
 
 
-@pytest.mark.parametrize("raw,expected", _NHTSA_STRIP)
-def test_clean_nhtsa_strips_parentheticals(raw, expected):
-    assert clean_nhtsa_firm_name(raw) == expected
+@pytest.mark.parametrize("raw,clean,brand", _DBA_MARKER)
+def test_dba_marker_alone_form(raw, clean, brand):
+    # The brand is outside the "(DBA)" parens; clean drops it, extract captures it (no mashup).
+    assert clean_firm_name(raw) == clean
+    assert extract_firm_dba(raw) == brand
 
 
-# Truncated open paren (CHAR(40) cut-off) or no paren -> left WHOLE.
-_NHTSA_KEEP = [
-    "AMERICAN PACIFIC INDUSTRIES, INC (A.P.I.",  # truncated open paren
-    "TOMY INTERNATIONAL (LEARNING CURVE BRAND",  # truncated open paren
-    "FORD MOTOR COMPANY",
-    "TOYOTA MOTOR ENGINEERING & MANUFACTURING",
+# ── extract_paren_aliases: keep brand parens, drop noise ─────────────────────────
+_ALIAS_KEEP = [
+    ("DEERE & COMPANY (JOHN DEERE)", ["JOHN DEERE"]),  # multiword brand
+    ("NATIONAL PRESTO INDUSTRIES INC. (PRESTO), OF EAU CLAIRE, WIS.", ["PRESTO"]),  # shared token
+    ("INTER-CITY PRODUCTS (ARCOAIRE, COMFORTMAKER)", ["ARCOAIRE, COMFORTMAKER"]),  # brands
+    ("BCI (BUS & COACH INTERNATIONAL)", ["BUS & COACH INTERNATIONAL"]),  # corp-less multiword
+    # First paren kept (corp form); second paren STELLANTIS (single word, no shared token)
+    # is the documented skip — same class as the accepted "(Texsport)" gap.
+    ("CHRYSLER (FCA US, LLC) (STELLANTIS)", ["FCA US, LLC"]),
 ]
 
 
-@pytest.mark.parametrize("raw", _NHTSA_KEEP)
-def test_clean_nhtsa_keeps_whole(raw):
-    assert clean_nhtsa_firm_name(raw) == raw
+@pytest.mark.parametrize("raw,expected", _ALIAS_KEEP)
+def test_extract_paren_aliases_keeps_brands(raw, expected):
+    assert extract_paren_aliases(raw) == expected
 
 
-def test_clean_nhtsa_chrysler_variants_collapse():
-    # 3 paren spellings -> ONE canonical (the cluster the truncated sample missed).
-    forms = [
-        "CHRYSLER (FCA US LLC)",
-        "CHRYSLER (FCA US, LLC)",
-        "CHRYSLER (FCA US, LLC) (STELLANTIS)",
-    ]
-    assert {clean_nhtsa_firm_name(f) for f in forms} == {"CHRYSLER"}
+_ALIAS_DROP = [
+    "ACER INC., OF TAIWAN (COMPUTERS)",  # product qualifier
+    "MECO CORP., OF GREENEVILLE, TENN. (GRILL)",  # product qualifier
+    "ERO INDUSTRIES (NO LONGER IN BUSINESS), OF MOUNT PROSPECT, ILL.",  # status
+    "BAYSIDE FURNISHINGS (A DIVISION OF WHALEN), OF SAN DIEGO, CALIF.",  # narrative
+    "KEY SAFETY SYSTEMS, INC. (DBA JOYSON)",  # DBA -> owned by extract_firm_dba
+    "AMERICAN NATIONAL RED CROSS (THE)",  # article
+    "BLACK & DECKER (U.S.) INC., OF TOWSON, MD.",  # region
+    "POLYGROUP NORTH AMERICA INC. (EL PASO, TEXAS)",  # trailing City, State
+    "ENGLISH RIDING SUPPLY LLC, OF SCRANTON, PENNSYLVANIA (12/31/2021-PRESENT)",  # date
+    "FORD MOTOR COMPANY",  # no paren at all
+]
 
 
-def test_clean_nhtsa_key_safety_variants_collapse():
-    # The "- (DBA JOYSON)" trailing-hyphen form must tidy to merge with the rest.
-    forms = [
-        "KEY SAFETY SYSTEMS, INC.",
-        "KEY SAFETY SYSTEMS, INC. (DBA JOYSON)",
-        "KEY SAFETY SYSTEMS, INC. - (DBA JOYSON)",
-    ]
-    assert {clean_nhtsa_firm_name(f) for f in forms} == {"KEY SAFETY SYSTEMS, INC."}
+@pytest.mark.parametrize("raw", _ALIAS_DROP)
+def test_extract_paren_aliases_drops_noise(raw):
+    assert extract_paren_aliases(raw) == []
 
 
-@pytest.mark.parametrize("raw", ["(SOMETHING)", "(X)", "()"])
-def test_clean_nhtsa_never_over_strips(raw):
-    # Stripping to < 2 chars would destroy the name -> keep the original (precision-first).
-    assert clean_nhtsa_firm_name(raw) == raw
-
-
-@pytest.mark.parametrize("raw,expected", [("", ""), ("   ", ""), ("  NOVA BUS  (US) ", "NOVA BUS")])
-def test_clean_nhtsa_edges(raw, expected):
-    assert clean_nhtsa_firm_name(raw) == expected
-
-
-@pytest.mark.parametrize("raw", [r for r, _ in _NHTSA_STRIP] + _NHTSA_KEEP)
-def test_clean_nhtsa_is_idempotent(raw):
-    once = clean_nhtsa_firm_name(raw)
-    assert clean_nhtsa_firm_name(once) == once
-
-
-# DBA brand still captured from the NHTSA paren form (extract_firm_dba unchanged).
+# DBA brand still captured from the parenthetical "(DBA X)" form (extract_firm_dba).
 @pytest.mark.parametrize(
     "raw,expected",
     [

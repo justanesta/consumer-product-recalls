@@ -95,10 +95,10 @@ models:
           - not_null
       - name: alternate_names
         description: >
-          JSONB array of surface-form aliases (DBA brands, etc.) preserved for
-          search + RapidFuzz match-explanation (Phase 6b). Populated from the
-          firm_crosswalk extracted_dba (CPSC in 6b.1; later sources add theirs).
-          Nullable, untested.
+          JSONB array of surface-form aliases — the DBA brand plus any brand-bearing
+          parentheticals ("Deere & Company (John Deere)" -> "John Deere"), preserved for
+          search + RapidFuzz match recall (Phase 6b). Flattened + de-duped across the
+          canonical firm from firm_crosswalk.alternate_names. Nullable, untested.
 
   - name: firm_establishment_attributes
     description: >
@@ -234,8 +234,12 @@ models:
               arguments:
                 values:
                   - exact_name
-                  - cpsc_suffix_strip_exact
-                  - cpsc_dba_extract_exact
+                  # Source-agnostic deterministic-cleaning tiers (6b.4: the crosswalk PK is
+                  # global, so confidence labels the rule, not the source). Renamed from the
+                  # 6b.1 cpsc_* names when the other sources joined the crosswalk. Paren
+                  # strip was scoped out (ADR 0037) — paren-variants resolve via RapidFuzz.
+                  - geo_suffix_strip_exact
+                  - dba_extract_exact
                   - usda_unambiguous
                   - usda_product_items_extract
                   - usda_state_match

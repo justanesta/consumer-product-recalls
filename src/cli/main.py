@@ -548,13 +548,16 @@ def resolve_firms(
         typer.Option("--dry-run", help="Report the row counts without writing firm_crosswalk."),
     ] = False,
 ) -> None:
-    """Rebuild firm_crosswalk from CPSC bronze firm names (Phase 6b clean stage).
+    """Rebuild firm_crosswalk from all-source staging firm names (Phase 6b clean stage).
 
-    Maps each distinct CPSC firm name through ``src.enrichment.firm_normalization``
-    (geo suffix-strip + DBA-extract) and truncate-reloads ``firm_crosswalk``, keyed by
-    ``md5(upper(trim(name)))`` so the silver firm models join it for
-    ``canonical_firm_id`` / ``clean_name`` / ``extracted_dba``. Deterministic +
-    idempotent; no API or watermark side effects. PR 6b.4 overlays RapidFuzz here.
+    Maps each distinct firm name (CPSC / FDA / USDA / NHTSA / USCG staging views) through
+    ``src.enrichment.firm_normalization`` (``clean_firm_name`` geo-suffix + DBA strip;
+    ``extract_firm_dba`` / ``extract_paren_aliases`` for alternate names — no parenthetical
+    strip, that proved too blunt cross-source, ADR 0037) and truncate-reloads
+    ``firm_crosswalk``, keyed by ``md5(upper(trim(name)))`` so the silver firm models join it
+    for ``canonical_firm_id`` / ``clean_name`` / ``alternate_names``. Deterministic +
+    idempotent; no API or watermark side effects. Run AFTER ``dbt build`` of staging (it
+    reads the ``stg_*`` views). PR 6b.4 Increment 2 overlays RapidFuzz clustering here.
     """
     configure_logging()
     settings = Settings()  # type: ignore[call-arg]
@@ -563,8 +566,8 @@ def resolve_firms(
     dry = " [dry-run]" if summary.dry_run else ""
     typer.echo(
         f"resolve-firms{dry}: distinct_names={summary.distinct_names} "
-        f"written={summary.rows_written} suffix_cleaned={summary.cleaned_count} "
-        f"dba_extracted={summary.dba_count}"
+        f"written={summary.rows_written} cleaned={summary.cleaned_count} "
+        f"aliased={summary.alias_count}"
     )
 
 

@@ -178,7 +178,7 @@ Per [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md), schemas
 
 ### `src/cli/` — Typer CLI dispatch
 
-`recalls extract <source>`, `recalls deep-rescan <source>`, and `recalls version`. The CLI loads source-level config from `config/sources/<source>.yaml` via `src/config/source_loader.py`, looks up the target extractor class from a static dict in `src/config/source_registry.py` keyed on `source_name`, and constructs the extractor with kwargs filtered against the class's Pydantic `model_fields`. CLI flag-specific behavior (`--lookback-days`, `--since`, `--change-type=etag_audit`) is layered on top of the YAML-driven extractor instance via post-construction methods or attribute mutations. No business logic lives in CLI modules. See ADR 0012's "Implementation notes — source-config loader and registry (Wave 2, landed 2026-05-10)" section.
+`recalls extract <source>`, `recalls deep-rescan <source>`, `recalls version`, and `recalls resolve-firms` (the firm-resolution stage — see [`src/enrichment/`](#srcenrichment--firm-resolution-stage-adr-0037) below). The CLI loads source-level config from `config/sources/<source>.yaml` via `src/config/source_loader.py`, looks up the target extractor class from a static dict in `src/config/source_registry.py` keyed on `source_name`, and constructs the extractor with kwargs filtered against the class's Pydantic `model_fields`. CLI flag-specific behavior (`--lookback-days`, `--since`, `--change-type=etag_audit`) is layered on top of the YAML-driven extractor instance via post-construction methods or attribute mutations. No business logic lives in CLI modules. See ADR 0012's "Implementation notes — source-config loader and registry (Wave 2, landed 2026-05-10)" section.
 
 ### `src/config/` — settings, source config, and structured logging
 
@@ -202,6 +202,20 @@ Per-source bronze + rejected tables, the shared `extraction_runs` and `source_wa
 | `gold/recalls_by_month.sql` etc. | Aggregate views and search materializations |
 
 Generic dbt tests (`not_null`, `unique`, `accepted_values`, `relationships`) and singular tests (orphan detection, source count baselines) are configured per [ADR 0015](decisions/0015-testing-strategy.md).
+
+### `src/enrichment/` — firm-resolution stage (ADR 0037)
+
+Cross-source firm entity resolution — collapsing the name variants exact-match can't (`"Fisher-Price of East Aurora, N.Y."` → `Fisher-Price`; `HONDA` ↔ `AMERICAN HONDA MOTOR CO`) — runs here, as a **Python stage that writes a table dbt reads as a source**, not as an in-warehouse SQL transform. The *why* (RapidFuzz `token_set_ratio` + union-find clustering can't run in Neon — no `pg_trgm`/`fuzzystrmatch`, no dbt-python runtime — and pg_trgm's char-trigram matching is the wrong model for multi-token company names) is recorded in [ADR 0037](decisions/0037-firm-resolution-python-stage-not-sql-fuzzy.md).
+
+| File | Role |
+|---|---|
+| `firm_normalization.py` | Pure cleaning — `clean_firm_name` (universal DBA strip + a **source-gated** geo-suffix strip: on for CPSC/NHTSA, off for the FEI/establishment/MIC-backed sources, NHTSA guarded against integral-name over-strip; no parenthetical strip — paren-variants go to RapidFuzz, ADR 0037) + `extract_firm_dba` / `extract_paren_aliases` for brand aliases. No I/O. |
+| `crosswalk_writer.py` | The I/O boundary — reads the all-source distinct firm names from the `stg_*` views, maps them through the cleaner, truncate-and-reloads `firm_crosswalk`. Pure `build_crosswalk_rows` is split from `resolve_firm_crosswalk` (mirrors the extractor `_parse_*` separation). |
+| `firm_resolution.py` | Pure fuzzy clustering — first-token blocking, RapidFuzz `token_set_ratio`, union-find with the FDA FEI government-ID edges as forced merges. *(Lands in PR 6b.4; the deterministic-clean floor is live from 6b.1.)* |
+
+**Where it sits in the flow.** It is a post-staging, pre-silver-firm step. The user runs `recalls resolve-firms` (Typer CLI), which reads the same `stg_*` views the silver `firm` model reads, clusters the distinct names, and writes `firm_crosswalk` — a Postgres table created by Alembic (migrations 0024/0025) and registered as the dbt source `enrichment.firm_crosswalk`. The silver `firm.sql` and `recall_event_firm.sql` then LEFT JOIN it for an **additive** `canonical_firm_id = coalesce(crosswalk.canonical_firm_id, md5(normalized_name))`. `firm_id` stays `md5(normalized_name)`; fuzzy merges express only through the additive canonical. Run-order is therefore **`dbt build` (staging) → `recalls resolve-firms` → `dbt build` (silver firm)**.
+
+**Why the seam is safe** (the load-bearing property): the stage is *additive* by construction. Because silver coalesces to `md5(normalized_name)`, a missing, stale, or empty crosswalk degrades to "every firm is its own canonical" (no fuzzy merges) — never broken correctness — so the external stage is never load-bearing. And the JOIN keys match by construction: `firm_id = md5(upper(trim(name)))` is computed in Python over the *same* string Postgres computes, reading the *same* staging views `firm.sql` reads. The pure cluster logic is pytest-covered (`tests/enrichment/`); the landed table carries dbt source-tests (`firm_id` not_null+unique, `canonical_firm_id` not_null) — the two-framework testing split ADR 0037 calls for.
 
 ### `tests/` — pytest
 
