@@ -143,7 +143,19 @@ uscg_event_firms as (
         -- (lockstep preserved); the fma LEFT JOIN is 1:1 on mic (no fan-out) and only feeds
         -- match_confidence, which the `mapped` precedence below carries (non-'exact_name' wins).
         case
-            when fma.mic_oob_recycled or fma.mic_has_prior_holder
+            -- 6c.5 (c): the boat's model_year is at/after the MIC's latest reassignment year, so it
+            -- was built during the CURRENT holder's tenure → current attribution confirmed (no longer
+            -- time-sensitive). Needs a clean 4-digit model_year AND a dated reassignment year; else it
+            -- falls through. ~a few dozen recalls (gate probe_uscg_refinement_gates Q4).
+            when fma.mic_has_prior_holder
+                 and ry.current_holder_since_year is not null
+                 and r.model_year ~ '^(19|20)\d\d$'
+                 and r.model_year::int >= ry.current_holder_since_year
+                then 'uscg_mic_build_date_resolved'
+            -- A real recycle (OOB) or unmarked-distinct prior → time-sensitive. 6c.5 (a):
+            -- mic_renamed_not_recycled downgrades the 2 pure-"(previous name)" MICs to unambiguous.
+            when (fma.mic_oob_recycled or fma.mic_has_prior_holder)
+                 and not coalesce(fma.mic_renamed_not_recycled, false)
                 then 'uscg_mic_time_sensitive_unresolved'
             else 'uscg_mic_unambiguous'
         end                                                                        as match_confidence,
@@ -153,6 +165,10 @@ uscg_event_firms as (
         on upper(trim(r.mic)) = upper(trim(m.mic))
     left join {{ ref('firm_manufacturer_attributes') }} fma
         on upper(trim(r.mic)) = upper(trim(fma.mic))
+    -- 6c.5 (b/c): the MIC's reassignment year for the as-of-build-year resolution. 1:1 on mic
+    -- (ry.mic is already upper(trim) — sourced from firm_manufacturer_attributes), no fan-out.
+    left join {{ ref('uscg_mic_reassignment_years') }} ry
+        on upper(trim(r.mic)) = ry.mic
     where coalesce(m.company_name, r.company_name, r.mic) is not null
       and trim(coalesce(m.company_name, r.company_name, r.mic)) <> ''
       and r.announced_at is not null

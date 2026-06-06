@@ -138,3 +138,29 @@ The `feature/silver-field-remap` audit measured, per source, **whether** SCD-2 i
 - `dbt/snapshots/firm_fda_attributes_snapshot.sql` — anchor `firm_fei_num`; `check_cols` = firm name/address/succession fields; driver keeps the DISTINCT-ON-event_lmd latest-per-FEI collapse. `firm_fda_attributes.sql` repointed to its current view.
 
 Both use the same primitive as USCG (`strategy='check'`, `silver_snapshots` schema, ADR 0007 pruning-exempt). **Forward-banking, not corrective:** these anchors are stable with **0 edit-versions** post-6a.5-reseed (the snapshot-hypothesis verdict holds), so each banks one version per anchor now and grows as incrementals re-bank history; the §4 measure-forward monitors quantify the payoff. **CPSC stays monitors-only** — its firm dim is name-keyed (no stable structured anchor for a sidecar; fragmentation is a 6b normalization concern, not SCD). The cross-source policy (C) and the deferred USCG refinements (§5) are unchanged.
+
+## Amendment 2026-06-06 — Phase 6c.5: the §5 USCG refinements built (all dbt-SQL)
+
+§5 deferred three refinements to "Phase-6c follow-on." All three shipped in 6c.5, gated by
+`scripts/sql/cross_source/scd_monitors/probe_uscg_refinement_gates.sql` and built **entirely in
+dbt-SQL — no Python** (a HIN decode is a deterministic `substring`+`CASE` transform → ADR 0027's
+dbt-SQL venue, not the ADR 0037 Python stage; and `model_year` is a first-class recall field, so a
+HIN parse is at most a fallback, which the gate showed unnecessary). Gate verdict confirmed all
+three are marginal (as predicted) — built for completeness/technique-breadth, not live volume:
+
+- **(a) rename-vs-recycle tier.** `firm_manufacturer_attributes.mic_renamed_not_recycled` = a prior
+  holder whose every slot is a source-tagged `(previous name)` rename, none OOB. `recall_event_firm`
+  downgrades those from `uscg_mic_time_sensitive_unresolved` → `uscg_mic_unambiguous`. Gate Q1: **2
+  recalled MICs** (ACB, CEC). The ~16% unmarked-rename tail stays (correctly over-)flagged.
+- **(b) historical-interval backfill.** New model `uscg_mic_reassignment_years` parses the
+  `(OOB YYYY)` markers → per-MIC `current_holder_since_year`. Gate Q2: **23 of 221** OOB MICs carry a
+  parseable year; the rest are undated (excluded). `In Business` unused (heartbeat).
+- **(c) as-of-build-year join.** `recall_event_firm` stamps `uscg_mic_build_date_resolved` when a
+  recall's `model_year` ≥ the MIC's `current_holder_since_year` (built during the current holder's
+  tenure → current attribution confirmed). Gate Q3: `model_year` (566/857) > `hin` (491), so
+  **no HIN macro** — `model_year` only. Resolves ~a few dozen recalls; the rest stay on the (a)/6b.5 flag.
+
+`assert_uscg_mic_reassignment_flag_present` updated: an OOB-recycled MIC must be HANDLED —
+`time_sensitive_unresolved` OR `build_date_resolved` (a bare `unambiguous` is still the failure).
+The `match_confidence` enum (incl. `uscg_mic_build_date_resolved`) was reserved in 6b.0, so no enum
+edit. `firm_id` recipe untouched → the `firm.sql` ↔ `recall_event_firm.sql` lockstep is preserved.

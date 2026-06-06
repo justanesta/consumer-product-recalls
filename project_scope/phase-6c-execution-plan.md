@@ -215,9 +215,10 @@ Mirror the shipped USCG pattern exactly (`uscg_manufacturer_attributes_snapshot.
 - **Honest payoff:** only ~13/221 OOB years parse (~6%) — document the coverage explicitly; this is a recall (completeness) refinement, not a correctness gap.
 - A backfill model/seed feeding the snapshot history with the parsed intervals; flag low-confidence rows.
 
-**(c) As-of-build-date HIN join.** Parse HIN chars 9–12 → hull build date → which holder held the MIC *then*; stamp `match_confidence = uscg_mic_build_date_resolved` (enum value reserved in 6b.0) where the build date resolves to a single historical holder.
-- New pure HIN parser in `src/enrichment/` (pytest-covered, mirrors the extractor `_parse_*` separation); `tests/enrichment/test_hin_parse.py`.
-- `recalls` staging carries `hin` + `model_year` (`stg_uscg_recalls.sql`); ~52.8% of USCG recalls have a HIN (`field_audit_2026_w22 §4`).
+**(c) As-of-build-**year** join.** Which holder held the MIC when the boat was built; stamp `match_confidence = uscg_mic_build_date_resolved` (enum reserved in 6b.0) where the build year resolves to a single historical holder.
+- **All dbt-SQL, no Python** (revised 2026-06-06, user-prompted). The source's reassignment markers are `(OOB YYYY)` — **year**-grain — and the recall already carries **`model_year`** as a first-class field (`stg_uscg_recalls.model_year`). So the join is a deterministic `model_year` vs MIC-reassignment-year comparison in SQL — no HIN parse needed for the common case. The original "Python HIN parser in `src/enrichment/`" was a mis-applied extractor-`_parse_*` precedent: a HIN decode is a deterministic `substring`+`CASE` transform, which per ADR 0027 belongs in **dbt-SQL** (a macro), not a Python stage (contrast ADR 0037's RapidFuzz, which genuinely can't run in-warehouse).
+- A HIN-year decode is at most a *fallback* (recover `model_year` when null/`9999`); build it as a dbt macro `{{ hin_build_year(hin) }}` only if Gate G-c shows the fallback is worth it. ~52.8% of USCG recalls have a HIN (`field_audit_2026_w22 §4`).
+- **HIN encoding (33 CFR 181, for the macro)** — 12 chars: `[1-3]` MIC · `[4-8]` serial (excludes O/I/Q) · `[9]` build month `A=Jan … L=Dec` (**`I`=September** — the serial drops I/O/Q but the month uses I) · `[10]` last digit of build year (decade-ambiguous on its own) · `[11-12]` model year, 2-digit (needs a decade pivot, e.g. `26`→2026 vs `95`→1995). Model-year window shifted Aug1–Jul31 → Jun1–Jul31 for MY2019+ (designated by the ending year), but our reassignment markers are year-grain `(OOB YYYY)`, so sub-year detail is noise. The macro returns `substring(hin,11,2)` pivoted to 4 digits; prefer the `model_year` field, fall back to this only when it's null.
 
 **No migration.**
 
@@ -326,7 +327,7 @@ Every 6c change documents **what the table/view/mechanism is, how it works, and 
 - **New silver models:** `recall_event_history` (6c.1), `recall_lifecycle` (6c.2), `recall_product_v15` + `recall_product_history` (6c.6; v15 dropped at cutover 6c.7).
 - **New silver columns (dbt-computed):** USCG `mic_renamed_not_recycled` + new `match_confidence` values (6c.5).
 - **New dbt tests:** 3 promoted monitors + erasure tripwire (6c.3), `assert_pre_2008_six_tuple_unique` (6c.6), `recall_event_history`/`recall_lifecycle` uniqueness + the e2e drift test (6c.1/6c.2/6c.8).
-- **New Python:** manifest-tuple builder (6c.0), HIN parser in `src/enrichment/` (6c.5). **No `CREATE EXTENSION`.**
+- **New Python:** manifest-tuple builder (6c.0) only. 6c.5 is all dbt-SQL (an optional `hin_build_year` macro, not a Python parser — revised 2026-06-06). **No `CREATE EXTENSION`.**
 
 ## Phase 6c Quality Gates
 

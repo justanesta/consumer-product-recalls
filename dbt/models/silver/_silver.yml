@@ -450,3 +450,21 @@ models:
         description: USDA-only (v1) — identity present in the latest enumerating run's manifest. NULL for other sources.
       - name: was_ever_retracted
         description: USDA-only (v1) — absent from some enumerating run since first appearance. NULL for other sources.
+
+  - name: uscg_mic_reassignment_years
+    description: >
+      USCG MIC reassignment boundary per MIC (ADR 0035 §5 historical backfill; Phase 6c.5 (b)).
+      current_holder_since_year = latest parsed "(OOB YYYY)" year from the detail-page Past Company
+      lineage = roughly when the current holder took over a recycled MIC. recall_event_firm's
+      as-of-build-year join (6c.5 c) compares a recall's model_year to it. Thin by nature: only the
+      ~23 of 221 OOB-recycled MICs that carry a parseable year appear (gate Q2); the rest are undated.
+    columns:
+      - name: mic
+        description: MIC anchor (upper(trim), from firm_manufacturer_attributes).
+        tests:
+          - not_null
+          - unique
+      - name: current_holder_since_year
+        description: Latest parsed reassignment year (NOT NULL — undated MICs are excluded).
+        tests:
+          - not_null

@@ -122,3 +122,13 @@ The firm attribute sidecars carry SCD-2 history via dbt snapshots in the `silver
 - `firm_manufacturer_attributes` ← `uscg_manufacturer_attributes_snapshot` (anchor `mic`) — the only Type-2 **NEED** (MIC reassignment; shipped 6b.5).
 - `firm_establishment_attributes` ← `firm_establishment_attributes_snapshot` (anchor `establishment_number`) and `firm_fda_attributes` ← `firm_fda_attributes_snapshot` (anchor `firm_fei_num`) — Type-2 **BENEFIT**, built in 6c.4 (portfolio breadth). Stable anchors, 0 edit-versions post-reseed → they bank one version per anchor now and grow forward.
 - **Heartbeat exclusion is the load-bearing `check_cols` rule** (else every re-scan spawns phantom versions): USCG excludes `date_modified`/`in_business`, USDA establishments exclude `latest_mpi_active_date` (ADR 0032). Repointing a dim to its snapshot keeps the dim's column contract identical, so consumers are unaffected — the snapshot is a purely additive history layer. CPSC has no such dim (name-keyed firm, no stable structured anchor) → monitors only.
+
+### 11. USCG MIC time-sensitivity refinements (6c.5, ADR 0035 §5)
+
+The `recall_event_firm` USCG `match_confidence` started as a binary flag (6b.5): `uscg_mic_time_sensitive_unresolved` for any recalled MIC with a prior holder, else `uscg_mic_unambiguous`. 6c.5 refines it into three tiers (all dbt-SQL, lockstep-safe — `firm_id` recipe untouched):
+
+- **rename downgrade** — `firm_manufacturer_attributes.mic_renamed_not_recycled` (every prior slot is a source `(previous name)` marker, none OOB) → `uscg_mic_unambiguous` (same manufacturer, renamed).
+- **build-year resolution** — `uscg_mic_reassignment_years` parses `(OOB YYYY)` → `current_holder_since_year`; a recall whose `model_year` ≥ that was built during the current holder's tenure → `uscg_mic_build_date_resolved` (current attribution confirmed). Uses `model_year` (a recall field), not a HIN parse.
+- **time-sensitive** — the residual (real OOB / unmarked-distinct prior, build year unknown or pre-reassignment).
+
+Gate `probe_uscg_refinement_gates.sql` confirmed all three are marginal in volume (2 renames / 23 dated MICs / ~dozens resolved) — built for completeness; the correctness NEED was already met by the 6b.5 flag. Detail + gate numbers: ADR 0035 amendment 2026-06-06.
