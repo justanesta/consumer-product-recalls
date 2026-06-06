@@ -378,3 +378,33 @@ The Phase 5c USDA U3 assertion (`scripts/sql/usda_recalls/bronze/assert_field_la
 **Cross-references for the Phase 6 implementer:**
 - `documentation/usda/bilingual_and_lmd_findings.md` — full U2/U3 baselines and the rebaseline-filter pattern that Phase 6 `recall_event_history` must mirror.
 - `documentation/source_assumption_audit.md` — cross-source assumption catalogue; lifecycle-relevant rows are U2, U3, F4, U4 (no-deletion confirmation).
+
+---
+
+## Phase 6c implementation note (2026-06-06)
+
+Built in `project_scope/phase-6c-execution-plan.md` commit 6c.0 (migration `0027`). Two
+resolutions/deviations vs the sketch above, both forced by the code as it stands today:
+
+- **Q1 resolved — manifest written in `Extractor._record_run`, not `load_bronze`.** Neither
+  shape from Q1 is used. Since this ADR was filed, `_record_run` (the `extraction_runs`
+  write) became a **separate, best-effort transaction that runs *after* `load_bronze`**
+  (`src/extractors/_base.py`). The manifest FKs to `extraction_runs(run_id)`, so writing it
+  in the bronze transaction would violate the FK — the parent run row does not exist yet.
+  Instead `run()` stashes the invariant-passing records on a `_passing_records` PrivateAttr,
+  and `_record_run` writes the manifest in the **same transaction** as the `extraction_runs`
+  insert (parent-then-child, FK satisfied). `run_id` is therefore NOT threaded into
+  `load_bronze` — the ABC signature is unchanged. The manifest write is gated to
+  `status == "success"` + `DedupContract.default_track_presence`, so it is fully
+  source-parameterized (USDA-only today; adding a source is a one-line flag flip) and a 304
+  / failed run writes nothing.
+- **Schema deviation — surrogate `id` PK + composite UNIQUE, not a nullable-`langcode` PK.**
+  The sketch's `PRIMARY KEY (run_id, source, source_recall_id, langcode)` is invalid in
+  Postgres because `langcode` is nullable. Migration `0027` follows the project's table
+  convention (surrogate `id` PK, as on every `*_bronze` table) and expresses the identity
+  uniqueness as a `UNIQUE (run_id, source, source_recall_id, langcode)` constraint. It also
+  adds a `UNIQUE` constraint on `extraction_runs.run_id` first (the FK target; `run_id` is a
+  per-run uuid4, already logically unique). The FK is `ON DELETE CASCADE`.
+- **Pure/IO split** mirrors the loader: `src/bronze/manifest.py.build_presence_manifest_rows`
+  is the pure, unit-tested row builder; `_record_run` does the I/O. Presence is recall-grain
+  (`source_recall_id` + optional `langcode`), not bronze-identity grain.

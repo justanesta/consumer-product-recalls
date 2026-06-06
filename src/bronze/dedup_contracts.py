@@ -40,12 +40,42 @@ class DedupContract:
     ``identity_fields`` + ``hash_exclude_fields`` are the *oracle* — the part that must be
     identical across every load path for the source. ``default_within_batch_dedup`` and
     ``default_allow_null_identity`` are mode-overridable defaults, not part of the oracle.
+
+    ``default_track_presence`` enables the ADR 0026 per-run presence manifest
+    (``extraction_run_identities``) for the source — USDA-only initially.
+    ``Extractor._record_run`` reads it via this registry and writes the manifest on every
+    successful run of the source. Unlike ``default_within_batch_dedup`` /
+    ``default_allow_null_identity`` it is a per-source **policy**, not a mode-overridable
+    default.
+
+    **Hard prerequisite — the source must return the FULL corpus on every run this flag
+    covers.** The manifest exists to tell "absent upstream (retracted)" from "unchanged
+    (dedup-skipped)", which only holds if a run enumerates everything currently published.
+    This is the real gate on enabling a source, NOT merely "does it retract":
+
+      * **USDA qualifies** — it full-dumps every run (Finding D: no server-side filter
+        works), so each daily run is a complete presence snapshot.
+      * **CPSC / FDA do NOT qualify on their daily path** — those runs are watermark-filtered
+        (``LastPublishDate`` / ``eventlmd``), i.e. partial, so a manifest built from one
+        would mark every unchanged recall as "absent" (false retraction). They full-enumerate
+        only on the deep-rescan path, which this *source-level* flag cannot single out (it
+        fires on all of a source's modes) — they need per-mode gating, not a flag flip.
+      * **NHTSA does NOT need a table** — its flat file IS already a full-snapshot manifest
+        (``recall_lifecycle`` derives presence from bronze directly), and its
+        ``source_recall_id`` (RECORD_ID) is regen-unstable (excluded from the hash), so the
+        recall-grain builder would key presence on the wrong field.
+      * **USCG** full-enumerates (listing scrape) except on short-circuit runs and has no
+        retraction evidence yet — plausible later, unmeasured.
+
+    So enabling a *qualifying* (full-enumerating, stable-recall-key) source is a one-line
+    flip; a partial-incremental source needs design first. See ADR 0026 + the Phase 6c plan.
     """
 
     identity_fields: tuple[str, ...]
     hash_exclude_fields: frozenset[str] = field(default_factory=frozenset)
     default_within_batch_dedup: bool = False
     default_allow_null_identity: bool = False
+    default_track_presence: bool = False
 
 
 # Keys MUST match ``EXTRACTOR_BY_SOURCE_NAME`` in src/config/source_registry.py
@@ -64,9 +94,13 @@ DEDUP_CONTRACT_BY_SOURCE_NAME: dict[str, DedupContract] = {
     ),
     # usda.py — composite identity for bilingual English/Spanish siblings sharing
     # field_recall_number (Finding F); press-release bodies excluded from the hash.
+    # track_presence ON (ADR 0026): USDA is the only source with confirmed implicit
+    # retraction (state-4 toggles observed within hours, Phase 5b) + non-atomic bilingual
+    # updates, so the per-run presence manifest is load-bearing for its lifecycle dims.
     "usda": DedupContract(
         identity_fields=("source_recall_id", "langcode"),
         hash_exclude_fields=frozenset({"en_press_release", "press_release"}),
+        default_track_presence=True,
     ),
     # usda_establishment.py — latest_mpi_active_date excluded (weekly FSIS republish
     # churn, ADR 0032).

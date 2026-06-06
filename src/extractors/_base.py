@@ -13,10 +13,13 @@ import tenacity
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from sqlalchemy.exc import OperationalError
 
-from src.extractors._tables import extraction_runs
+from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
+from src.bronze.manifest import build_presence_manifest_rows
+from src.extractors._tables import extraction_run_identities, extraction_runs
 
 if TYPE_CHECKING:
     import httpx
+    from sqlalchemy import Connection
 
 logger = structlog.get_logger()
 
@@ -185,6 +188,12 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
     _captured_response_body_sha256: str | None = PrivateAttr(default=None)
     _captured_response_headers: dict[str, str] | None = PrivateAttr(default=None)
 
+    # Presence-manifest support (ADR 0026): run() stashes the invariant-passing records
+    # here so _record_run can write the per-run presence manifest (extraction_run_identities)
+    # in the same transaction as the extraction_runs row. None until validation runs (so a
+    # run that fails before validation writes no manifest); reset at the top of every run().
+    _passing_records: list[Any] | None = PrivateAttr(default=None)
+
     # --- Abstract lifecycle methods ---
 
     @abc.abstractmethod
@@ -286,6 +295,8 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
         try:
             with engine.begin() as conn:
                 conn.execute(extraction_runs.insert().values(**row))
+                # Presence manifest in the SAME txn as its FK parent (ADR 0026).
+                self._maybe_write_presence_manifest(conn, run_id=run_id, status=status)
         except Exception as exc:
             logger.warning(
                 "extraction_run.record_failed",
@@ -294,6 +305,43 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+
+    def _maybe_write_presence_manifest(self, conn: Connection, *, run_id: str, status: str) -> None:
+        """Write the ADR 0026 per-run presence manifest, in the caller's transaction.
+
+        Called from :meth:`_record_run` inside the same ``engine.begin()`` block as the
+        ``extraction_runs`` insert, so the manifest's ``run_id`` FK target already exists
+        (the parent row was inserted immediately above and is visible within the txn).
+        This is *why* the manifest is written here and not in ``load_bronze``:
+        ``extraction_runs`` is recorded AFTER ``load_bronze`` (best-effort), so a manifest
+        written in the bronze transaction would violate the FK — the run row would not yet
+        exist. (ADR 0026's sketch predates the after-bronze run-recording design; this is
+        the Q1 resolution against the current code.)
+
+        Gated to:
+          * ``status == "success"`` — aborted / failed runs do not assert presence.
+          * the source's ``DedupContract.default_track_presence`` (USDA-only initially,
+            ADR 0026); every other source no-ops here.
+          * ``_passing_records`` stashed by :meth:`run` (None on a run that failed before
+            validation; ``[]`` on a 304 — both write no manifest).
+
+        Quarantined records are excluded by construction — ``run`` stashes the
+        invariant-passing records only (ADR 0026 Q2).
+        """
+        if status != "success" or self._passing_records is None:
+            return
+        contract = DEDUP_CONTRACT_BY_SOURCE_NAME.get(self.source_name)
+        if contract is None or not contract.default_track_presence:
+            return
+        langcode_field = "langcode" if "langcode" in contract.identity_fields else None
+        rows = build_presence_manifest_rows(
+            self._passing_records,
+            run_id=run_id,
+            source=self.source_name,
+            langcode_field=langcode_field,
+        )
+        if rows:
+            conn.execute(extraction_run_identities.insert(), rows)
 
     def _augment_run_row(self, row: dict[str, Any]) -> None:
         """Hook: add source-specific top-level columns to the ``extraction_runs`` row.
@@ -326,6 +374,8 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
         """
         run_id = str(uuid.uuid4())
         started_at = datetime.now(UTC)
+        # Reset per-run presence state; set once invariants have run (see _record_run).
+        self._passing_records = None
         structlog.contextvars.bind_contextvars(source=self.source_name, run_id=run_id)
         log = logger.bind(source=self.source_name, run_id=run_id)
 
@@ -351,6 +401,9 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
 
             log.info("extraction.check_invariants.started")
             passing_records, invariant_rejects = self.check_invariants(valid_records)
+            # Stash for the presence manifest (ADR 0026) — these are the records present
+            # in this run's response (quarantined rejects excluded per ADR 0026 Q2).
+            self._passing_records = passing_records
             log.info(
                 "extraction.check_invariants.completed",
                 passing=len(passing_records),

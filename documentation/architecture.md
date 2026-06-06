@@ -131,7 +131,7 @@ End-to-end, a single record moves like this: the extractor fetches a source payl
 
 Three things happen per extraction run that the diagram above abbreviates:
 
-1. **Run metadata is recorded.** `extraction_runs` gets a row with `source`, `started_at`, `status`, `records_extracted`, `records_inserted`, and `change_type` (per [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md), distinguishing routine runs from re-baselines).
+1. **Run metadata is recorded.** `extraction_runs` gets a row with `source`, `started_at`, `status`, `records_extracted`, `records_inserted`, and `change_type` (per [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md), distinguishing routine runs from re-baselines). For presence-tracked sources (USDA initially, per [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md)), the same `_record_run` transaction also writes the per-run **presence manifest** (`extraction_run_identities`) — one row per recall identity returned by the run. Presence is distinct from content: bronze records *what changed*, the manifest records *what was present*, so silver can tell a retraction (absent upstream) from an unchanged record — both of which produce zero new bronze rows. The manifest is written here, not in `load_bronze`, because it FKs to the `extraction_runs` row, which is recorded after the bronze write.
 2. **Watermarks advance** for sources that have one. `source_watermarks.last_extracted_at` is updated after a successful run ([ADR 0020](decisions/0020-pipeline-state-tracking.md)). Watermarks are advisory cursors — they tell the extractor where to start its next incremental query, but the bronze content-hash dedup is what actually prevents duplicates.
 3. **Logs are emitted to stdout in JSON** via `structlog`, with a `run_id` correlation ID that ties together every log line from a single extraction ([ADR 0021](decisions/0021-structured-logging.md)).
 
@@ -164,6 +164,7 @@ R2 is the immutable substrate. Every extraction's raw payload lands here before 
 | File | Role |
 |---|---|
 | `loader.py` | `BronzeLoader` — content-hash conditional insert + quarantine routing |
+| `manifest.py` | Pure builder for the per-run presence manifest (`extraction_run_identities`, ADR 0026) — turns a run's passing records into recall-grain presence rows; the write happens in `Extractor._record_run` |
 | `hashing.py` | Canonical-serialization + SHA-256 helpers (per ADR 0007 — changes here are treated as schema migrations) |
 | `retry.py` | `tenacity`-decorated retry policies, applied to lifecycle methods that contact external services |
 | `invariants.py` | Cross-record / business-logic checks (e.g., USDA bilingual orphan, date sanity, null-ID guard) |
@@ -191,7 +192,7 @@ Per [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md), schemas
 
 ### `migrations/versions/` — Alembic migrations
 
-Per-source bronze + rejected tables, the shared `extraction_runs` and `source_watermarks` state tables, and `extraction_runs.change_type` (added in Phase 5b.2 per ADR 0027). Migrations are forward-only — there is no `downgrade()` body that does anything meaningful, by convention.
+Per-source bronze + rejected tables, the shared `extraction_runs` and `source_watermarks` state tables, `extraction_runs.change_type` (added in Phase 5b.2 per ADR 0027), and the `extraction_run_identities` presence manifest (`0027`, Phase 6c per ADR 0026). Migrations are forward-only — there is no `downgrade()` body that does anything meaningful, by convention.
 
 ### `dbt/models/` — silver and gold transformations
 
