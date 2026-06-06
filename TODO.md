@@ -56,7 +56,7 @@ Non-ADR-captured action items for this project. ADRs handle design decisions; th
 - [ ] **Free-text → structured enrichment** (FDA distributed-quantity → value/unit; FDA distribution-area → state/country arrays; USDA `field_product_items` / media-contact parse) — Tier-2 structured extraction deferred out of the `silver-field-remap` (a) branch; cross-source, Phase 6/7. **→ see `project_scope/freetext-enrichment-backlog.md`** (evidence: `documentation/audit/bronze_corpus_profile.md` §7).
 - [ ] **Lookup tables for bronze values that don't fit defined silver models**: Do we have/need lookup tables for fields from each source (like the FDA `distribution_area_summary_text`, `number_of_units`, etc.) that don't validate into silver that we will need to inspect and potentially alter/update data validation from? What is our current procedure for this, if any?
 - [x] **`src/` soundness consolidation** — ultrathink `/codebase-analyzer` audit of DRY / dead-code / convention-drift in `src/` (originally framed around three smells: "NHTSA can't be one accessor", "only 5/8 call check_date_sanity", "3 USCG schemas lack populate_by_name"). Grew a design + surfaced a reachable NHTSA deep-rescan dedup bug → graduated to a plan. **→ see `project_scope/archive/src-consolidation-plan.md`** (findings: `documentation/audit/src_soundness_audit.md`). Flips to `[x]` at PR merge; NHTSA data remediation is the last open step. Done 2026-06-02 (PR #48)
-- [ ] Manual report audit list: Timed observations of collapsed firms (triggered/prompted by some dbt warn or other automated stage) to inspect for erroneous conflations. Timed observations of USCG SCD to eliminate points 3 and 4: 
+- [x] Manual report audit list: Timed observations of collapsed firms (triggered/prompted by some dbt warn or other automated stage) to inspect for erroneous conflations. Timed observations of USCG SCD to eliminate points 3 and 4: 
 This is why it's not a clean call. A prior holder without an OOB marker can be any of four things:  
   1. A real recycle the source just didn't annotate. USCG's data entry is inconsistent (we saw CO(OOB) with no space, (OOB 1991) with a year). Some defunct priors simply lack the marker. →
   genuine misattribution risk; should flag.
@@ -66,7 +66,7 @@ This is why it's not a clean call. A prior holder without an OOB marker can be a
   harmless.
   4. Brand / DBA noise — not a prior holder at all. The slot holds a product line or DBA, not a different owner: from Q4, TIGER SHARK (BRAND NAME), BAYLINER MAXUM, DBA AMERICAN CONDOR,
   BRYANT BOATS (DBA). → flagging these is a true false positive.
-- [ ]
+- [ ] USDA changed a number of string values in their API to lists as well as added a new column and removed another. Surfaced on 2026-06-06 run on feature/phase-6c-history-lifecycle branch. A fix for the data validation, schema, extractor, and bronze table was shipped in that branch but it required re-transforming new list values back into string so no silver/dbt code could be changed. After some time observing that this change is permenant, let's update this so that silver consumes new newly-reliable list-type values.
 
 
 
