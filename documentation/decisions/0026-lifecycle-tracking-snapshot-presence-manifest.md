@@ -397,7 +397,13 @@ resolutions/deviations vs the sketch above, both forced by the code as it stands
   `load_bronze` — the ABC signature is unchanged. The manifest write is gated to
   `status == "success"` + `DedupContract.default_track_presence`, so it is fully
   source-parameterized (USDA-only today; adding a source is a one-line flag flip) and a 304
-  / failed run writes nothing.
+  / failed run writes nothing. **Consumer rule (refines the line-165 derivation table):**
+  since a 304-Not-Modified run *succeeds* but enumerates nothing, `recall_lifecycle` (6c.2)
+  computes `is_currently_active` against the most recent **enumerating** run (the latest run
+  that wrote manifest rows), NOT the most recent *successful* run; `was_ever_retracted`
+  likewise considers only enumerating runs. Proven 2026-06-06 — an `extract` after the USDA
+  array re-seed returned 304 and correctly wrote no manifest, which a latest-success rule
+  would misread as "all retracted."
 - **Schema deviation — surrogate `id` PK + composite UNIQUE, not a nullable-`langcode` PK.**
   The sketch's `PRIMARY KEY (run_id, source, source_recall_id, langcode)` is invalid in
   Postgres because `langcode` is nullable. Migration `0027` follows the project's table

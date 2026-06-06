@@ -19,12 +19,16 @@ SELECT source, count(*) AS manifest_rows, count(DISTINCT run_id) AS runs
  ORDER BY source;
 
 \echo
-\echo '=== 2) Latest successful USDA run: rows, distinct recall numbers, langcode split ==='
-WITH latest AS (
-  SELECT run_id
-    FROM extraction_runs
-   WHERE source = 'usda' AND status = 'success'
-   ORDER BY started_at DESC
+\echo '=== 2) Latest enumerating USDA run: rows, distinct recall numbers, langcode split ==='
+WITH latest AS (  -- latest ENUMERATING run (wrote manifest rows), not latest success: a
+                  -- 304-Not-Modified run succeeds but enumerates nothing, so latest-success
+                  -- would read as empty. Same rule recall_lifecycle (6c.2) uses.
+  SELECT eri.run_id
+    FROM extraction_run_identities eri
+    JOIN extraction_runs er ON er.run_id = eri.run_id
+   WHERE er.source = 'usda'
+   GROUP BY eri.run_id, er.started_at
+   ORDER BY er.started_at DESC
    LIMIT 1
 )
 SELECT
@@ -45,12 +49,16 @@ SELECT count(*) AS orphan_manifest_rows
  WHERE er.run_id IS NULL;
 
 \echo
-\echo '=== 4) Sample rows (latest successful USDA run) ==='
-WITH latest AS (
-  SELECT run_id
-    FROM extraction_runs
-   WHERE source = 'usda' AND status = 'success'
-   ORDER BY started_at DESC
+\echo '=== 4) Sample rows (latest enumerating USDA run) ==='
+WITH latest AS (  -- latest ENUMERATING run (wrote manifest rows), not latest success: a
+                  -- 304-Not-Modified run succeeds but enumerates nothing, so latest-success
+                  -- would read as empty. Same rule recall_lifecycle (6c.2) uses.
+  SELECT eri.run_id
+    FROM extraction_run_identities eri
+    JOIN extraction_runs er ON er.run_id = eri.run_id
+   WHERE er.source = 'usda'
+   GROUP BY eri.run_id, er.started_at
+   ORDER BY er.started_at DESC
    LIMIT 1
 )
 SELECT source_recall_id, langcode
