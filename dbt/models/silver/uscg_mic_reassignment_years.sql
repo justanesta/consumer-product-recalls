@@ -9,10 +9,13 @@
 -- holder's tenure ⇒ the current-holder attribution is confident (uscg_mic_build_date_resolved).
 --
 -- Scope is DIRECTORY-WIDE: every OOB-recycled MIC in firm_manufacturer_attributes with a parseable
--- (OOB YYYY) year (~393 rows), NOT just recalled MICs. This is a reusable lookup dimension — the
--- recall_event_firm join is exact on MIC, so the ~370 rows no recall references are inert. Only the
--- ~23 that appear in a USCG recall can match (the gate probe_uscg_refinement_gates Q2 is RECALL-scoped,
--- hence its smaller count), and ~6 of those have a model_year >= the reassignment year → resolved.
+-- (OOB YYYY) year (393 of the directory's 3,015 OOB-recycled MICs), NOT just recalled MICs. This is
+-- a reusable lookup dimension — the recall_event_firm join is exact on MIC, so the 379 rows no recall
+-- references are inert. Only 14 MICs (21 recall rows) appear in a USCG recall; 6 of those recalls have
+-- a model_year >= the reassignment year → resolved, the rest are older boats built under a prior holder
+-- (correctly still time-sensitive). The gate probe_uscg_refinement_gates Q2 reports 23 because it
+-- counts ANY year in the slots; this model is stricter — the year must FOLLOW the OOB marker
+-- (OOB[^0-9]*YYYY), so a year sitting in a "(previous name … 1998)" fragment is correctly ignored.
 -- MICs with no parseable year do not appear here (undated → cannot resolve → the recall stays
 -- time-sensitive). `In Business` is deliberately NOT used (a record-touch heartbeat, noisy — ADR
 -- 0035 §5 / ADR 0032). One row per MIC. reassignment_years is the full parsed set (audit); the join
