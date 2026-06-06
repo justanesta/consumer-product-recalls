@@ -1,6 +1,6 @@
 # Phase 6b Execution Plan — Firm Entity Resolution
 
-- **Status:** Active — sequenced PR-by-PR plan for `feature/6b-firm-entitiy-resolution`. **PR 6b.0 substrate drafted 2026-06-03** (migration 0024, `enrichment.firm_crosswalk` source, `recall_event_firm.match_confidence`, `firm.alternate_names`, `src/enrichment/` skeleton, G0 gate, `rapidfuzz` dep); ruff/pyright/yaml gates green; awaits user-run `alembic upgrade head` + `dbt build`. See the PR 6b.0 "as-built refinements" note.
+- **Status:** ✅ **Complete (code) — pending merge to `main`.** All rungs 6b.0–6b.6 shipped on `feature/6b-firm-entity-resolution`; **6b.5** (USCG SCD-2 snapshot, ADR 0035) and **6b.6** (rollup acceptance dbt tests + the `audit-firm-rollups` review loop + a full-corpus SS-tail precision pass that fixed 24 false-merges and seeded `firm_rollup_reviewed_ok.txt`) closed **2026-06-05**; `dbt build`/`dbt test` green, audit queue clean. **Deferred to 6c (out of 6b by design):** cross-source SCD-2 for FDA/CPSC/USDA (0 edit-versions today — event-driven later, ADR 0035), USCG historical backfill / as-of-build-date, the FEI merge tier (attribute-only/opt-in). The sequenced PR-by-PR plan below is retained as the build record. *(Historical: PR 6b.0 substrate drafted 2026-06-03 — migration 0024, `enrichment.firm_crosswalk` source, `recall_event_firm.match_confidence`, `firm.alternate_names`, `src/enrichment/` skeleton, G0 gate, `rapidfuzz` dep.)*
 - **Owning master plan:** `project_scope/implementation_plan.md` Phase 6. Supersedes the "Phase 6b — Firm Entity Resolution" section of `project_scope/phase-6-execution-plan.md` (lines ~166-277), which was written BEFORE silver-remap PR #58 and carries stale `firm.sql` line references and stale "greenfield" assumptions.
 - **Branch lineage confirmed:** both `728a9a3` (#58 silver-remap) and `f630beb` (FDA FEI sidecar) are ancestors of HEAD, so the post-#58 shape AND `firm_fda_attributes.sql` are present in the working tree.
 - **Hard operating constraints (every actionable step):** the USER runs ALL code (extractors, alembic, psql, dbt, the new CLI); agents only specify the exact command/SQL. SQL exploration lives under `scripts/sql/<source>/<layer>/<purpose>.sql` — never pasted multi-line into prose. Any helper under `scripts/` or `src/` meets the same bar as `src/`: `ruff check`, `ruff format --check`, `pyright`, and `pytest` coverage of pure logic. Every data figure below is tagged confirmed-in-doc / inferred / needs-corpus-requery; needs-requery figures are gated, never hard-coded.
@@ -379,17 +379,17 @@ Run order: per-PR, BEFORE the build. `psql "$NEON_DATABASE_URL" -f <path>`. Tag 
 | Gate | Script (NEW unless noted) | PR | Tag | Gating decision |
 |---|---|---|---|---|
 | G0 ✓RUN 2026-06-03 | `scripts/sql/cross_source/silver/count_distinct_normalized_names_and_overlap.sql` | 6b.0, 6b.4 | confirmed-full-corpus | 29,470 names (=firm dim); 78 cross-source; 434M→204K pairs blocked (~2,127×) → first-token blocking ON, strip leading THE; SHENZHEN/CO/LTD boilerplate = precision watch for residual gate |
-| G1 | `scripts/sql/cpsc/bronze/measure_comma_optional_of_strip.sql` | 6b.1 | needs-requery | comma-optional vs comma-required `of` |
-| G1b | `scripts/sql/cpsc/bronze/inspect_firm_name_fragmentation.sql` (EXTEND) | 6b.1 | needs-requery | keep/drop `d/b/a` branch |
-| G1c | `scripts/sql/cpsc/bronze/inspect_firm_name_fragmentation.sql` (EXISTS) | 6b.1 | confirm-in-doc | bronze single-shot 9,828; add dedup CTE if not |
-| G2 | `scripts/sql/usda_establishments/bronze/inspect_duplicate_names.sql` (EXTEND, +city) | 6b.2 | needs-requery | `establishment_group_id` key = (name,city,state) vs (name,state) |
-| G3 | `scripts/sql/usda_recalls/bronze/probe_product_items_embedded_estab_number.sql` | 6b.2 | needs-requery | Signal-1 first? ambiguous_null test severity |
-| G4 | `scripts/sql/usda_recalls/bronze/probe_field_states_tokenization.sql` | 6b.2 | needs-requery | Signal-2 viability + blocklist |
-| G5 | `scripts/sql/usda_establishments/bronze/probe_cold_storage_activities.sql` | 6b.2 | needs-requery | deterministic cold_storage_flag? |
-| G6 | `scripts/sql/fda/bronze/profile_firm_fei_for_sidecar.sql` (EXISTS, re-run) | 6b.3 | artifact-capture | FEI viable as pre-merge block (already confirmed) |
-| G7 | `scripts/sql/nhtsa/bronze/inspect_mfgname_vs_mfgtxt.sql` (EXISTS, re-run) | 6b.3 | artifact-capture | RapidFuzz blast radius (3,940 firms, already confirmed) |
-| G8 | `scripts/sql/nhtsa/bronze/probe_maketxt_space_collapse_safety.sql` | 6b.3 | needs-requery | maketxt space-collapse safe? |
-| G9 | `scripts/sql/cross_source/scd_monitors/assert_mic_holder_stable.sql` (EXISTS, re-run) | 6b.5 | artifact-capture | recycle set (221/365/718; OOB broadened 2026-06-05 from paren-only 205) |
+| G1 ✓RUN 2026-06-03| `scripts/sql/cpsc/bronze/measure_comma_optional_of_strip.sql` | 6b.1 | needs-requery | comma-optional vs comma-required `of` |
+| G1b✓RUN 2026-06-03 | `scripts/sql/cpsc/bronze/inspect_firm_name_fragmentation.sql` (EXTEND) | 6b.1 | needs-requery | keep/drop `d/b/a` branch |
+| G1c✓RUN 2026-06-03 | `scripts/sql/cpsc/bronze/inspect_firm_name_fragmentation.sql` (EXISTS) | 6b.1 | confirm-in-doc | bronze single-shot 9,828; add dedup CTE if not |
+| G2 ✓RUN 2026-06-03| `scripts/sql/usda_establishments/bronze/inspect_duplicate_names.sql` (EXTEND, +city) | 6b.2 | needs-requery | `establishment_group_id` key = (name,city,state) vs (name,state) |
+| G3 ✓RUN 2026-06-03| `scripts/sql/usda_recalls/bronze/probe_product_items_embedded_estab_number.sql` | 6b.2 | needs-requery | Signal-1 first? ambiguous_null test severity |
+| G4 ✓RUN 2026-06-03| `scripts/sql/usda_recalls/bronze/probe_field_states_tokenization.sql` | 6b.2 | needs-requery | Signal-2 viability + blocklist |
+| G5 ✓RUN 2026-06-03| `scripts/sql/usda_establishments/bronze/probe_cold_storage_activities.sql` | 6b.2 | needs-requery | deterministic cold_storage_flag? |
+| G6 ✓RUN 2026-06-03| `scripts/sql/fda/bronze/profile_firm_fei_for_sidecar.sql` (EXISTS, re-run) | 6b.3 | artifact-capture | FEI viable as pre-merge block (already confirmed) |
+| G7 ✓RUN 2026-06-03| `scripts/sql/nhtsa/bronze/inspect_mfgname_vs_mfgtxt.sql` (EXISTS, re-run) | 6b.3 | artifact-capture | RapidFuzz blast radius (3,940 firms, already confirmed) |
+| G8 ✓RUN 2026-06-03| `scripts/sql/nhtsa/bronze/probe_maketxt_space_collapse_safety.sql` | 6b.3 | needs-requery | maketxt space-collapse safe? |
+| G9 ✓RUN 2026-06-03| `scripts/sql/cross_source/scd_monitors/assert_mic_holder_stable.sql` (EXISTS, re-run) | 6b.5 | artifact-capture | recycle set (221/365/718; OOB broadened 2026-06-05 from paren-only 205) |
 
 Do NOT block the build on G6/G7/G9 — they are already confirmed-full-corpus; capture the artifact only. Block on G0/G1/G1b/G2/G3/G4/G5/G8.
 

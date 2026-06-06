@@ -15,7 +15,7 @@
 -- material fraction carry n_rows>1, prepend a latest-per-id CTE (mirror stg_cpsc_recalls.sql)
 -- to G1 + inspect_firm_name_fragmentation.sql before trusting their counts.
 --
--- Feeds: project_scope/phase-6b-execution-plan.md PR 6b.1 gate G1c.
+-- Feeds: project_scope/archive/phase-6b-execution-plan.md PR 6b.1 gate G1c.
 -- Run with: psql ... -f scripts/sql/cpsc/bronze/confirm_single_shot_seed.sql
 
 \set ON_ERROR_STOP on

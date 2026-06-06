@@ -6,7 +6,7 @@
 -- (c) the blocklist keeps are intact, (d) no clean_name still carries an unstripped
 -- ", of <geo>" or " dba " suffix.
 --
--- Feeds: project_scope/phase-6b-execution-plan.md PR 6b.1 Increment A gate.
+-- Feeds: project_scope/archive/phase-6b-execution-plan.md PR 6b.1 Increment A gate.
 -- Run AFTER `recalls resolve-firms`, with:
 --   psql ... -f scripts/sql/cross_source/silver/verify_firm_crosswalk.sql
 

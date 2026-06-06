@@ -4,7 +4,7 @@ Revision ID: 0024
 Revises: 0023
 Create Date: 2026-06-03
 
-Phase 6b firm entity resolution (``project_scope/phase-6b-execution-plan.md``,
+Phase 6b firm entity resolution (``project_scope/archive/phase-6b-execution-plan.md``,
 PR 6b.0 substrate). The HYBRID normalization engine (Lane F / D1) keeps
 deterministic name-cleaning in dbt-SQL macros but runs the genuine edit-distance
 clustering in a tested Python ``recalls resolve-firms`` CLI (PR 6b.4, USER-run),

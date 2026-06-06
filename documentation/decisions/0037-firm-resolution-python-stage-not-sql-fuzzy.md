@@ -4,7 +4,7 @@
 - **Date:** 2026-06-04
 
 > Decided during Phase 6b design (2026-06-03, the "Lane-F hybrid" in
-> `project_scope/phase-6b-execution-plan.md` §2) and implemented across PRs 6b.1 + 6b.4;
+> `project_scope/archive/phase-6b-execution-plan.md` §2) and implemented across PRs 6b.1 + 6b.4;
 > formalized here so the rejected SQL-fuzzy alternative is on record with its reasoning.
 >
 > **Amendment 2026-06-04 (same-day refinement, pre-merge):** the deterministic cleaner does
@@ -243,4 +243,4 @@ The single most important safeguard is the `coalesce`: it makes the entire exter
 - ADR 0027 — deterministic normalization is a silver concern (this scopes the *venue* of
   the resolution surface to Python).
 - ADR 0005 — Neon storage tier (the runtime/extension constraint that forces the seam).
-- Plan: `project_scope/phase-6b-execution-plan.md` §2 (engine spine) + the resolve-firms PRs.
+- Plan: `project_scope/archive/phase-6b-execution-plan.md` §2 (engine spine) + the resolve-firms PRs.

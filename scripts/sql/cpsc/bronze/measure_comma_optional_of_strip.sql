@@ -46,7 +46,7 @@
 -- Inline CTEs per query (no temp table — psql autocommits, ON COMMIT DROP would drop it before
 -- the next read; matches the sibling inspect_firm_name_fragmentation.sql).
 --
--- Feeds: project_scope/phase-6b-execution-plan.md PR 6b.1 gate G1 (clean_firm_name regex).
+-- Feeds: project_scope/archive/phase-6b-execution-plan.md PR 6b.1 gate G1 (clean_firm_name regex).
 -- Run with: psql ... -f scripts/sql/cpsc/bronze/measure_comma_optional_of_strip.sql
 
 \set ON_ERROR_STOP on

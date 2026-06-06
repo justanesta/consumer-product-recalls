@@ -6,7 +6,7 @@
 - **Superseded by:** —
 - **Generalizes:** [ADR 0033](0033-silver-row-versioning-via-scd-on-stable-anchor.md) (SCD-on-stable-anchor, proven NHTSA-first for `recall_product`) to the silver *firm* dimensions. ADR 0033's "Cross-source implications → USCG" subsection is the design seed for this ADR.
 - **Clarifies / companion changes (land in PR 6b.5):** [ADR 0031](0031-silver-row-fragmentation-strategy.md) — fill its TBD USCG per-source row; [ADR 0007](0007-lineage-via-bronze-snapshots-and-content-hashing.md) — exempt `silver_snapshots` from bronze-snapshot pruning.
-- **Companion documents:** `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 (the USCG SCD-2 build spec); `project_scope/phase-6b-execution-plan.md` PR 6b.5; `project_scope/implementation_plan.md` Phase 6 (cross-source SCD-2 item, `:707`, Policy C `:715`); `project_scope/silver_v15_migration_plan.md` cross-source section; `documentation/audit/scd_field_designations.md` (the per-field NEED/BENEFIT verdicts + validating monitors).
+- **Companion documents:** `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 (the USCG SCD-2 build spec); `project_scope/archive/phase-6b-execution-plan.md` PR 6b.5; `project_scope/implementation_plan.md` Phase 6 (cross-source SCD-2 item, `:707`, Policy C `:715`); `project_scope/silver_v15_migration_plan.md` cross-source section; `documentation/audit/scd_field_designations.md` (the per-field NEED/BENEFIT verdicts + validating monitors).
 
 ## Context
 
@@ -98,7 +98,7 @@ Rationale: the flag **discharges the correctness NEED** at precision-over-recall
 
 ## Implementation
 
-Bundled into **Phase 6b PR 6b.5** — the single PR that already edits `firm.sql`/`recall_event_firm.sql`, which §11 requires so the lockstep edit happens once (no cross-branch rebase risk). Sequenced per `phase-6b-execution-plan.md` PR 6b.5:
+Bundled into **Phase 6b PR 6b.5** — the single PR that already edits `firm.sql`/`recall_event_firm.sql`, which §11 requires so the lockstep edit happens once (no cross-branch rebase risk). Sequenced per `archive/phase-6b-execution-plan.md` PR 6b.5:
 
 1. **Prereq (one-time, user):** provision/confirm the `silver_snapshots` schema + dbt create-schema rights on the Neon dev branch.
 2. **Gate G9 (user):** re-run `assert_mic_holder_stable.sql`, capture the recycle set to `documentation/uscg/`.

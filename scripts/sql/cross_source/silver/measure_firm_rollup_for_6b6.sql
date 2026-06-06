@@ -4,7 +4,7 @@
 -- Sizes: (Q2) the over-merge ceiling, (Q3) the cross-source unification value + monitor floor,
 -- (Q4) what Honda/Tyson actually do under name/brand grain (the parent-rollup gap), and (Q5)
 -- confirms the known over-merge disasters are currently un-merged before we encode anti-merge tests.
--- Decision home: project_scope/phase-6b-execution-plan.md PR 6b.6 + the 6b.6 design thread.
+-- Decision home: project_scope/archive/phase-6b-execution-plan.md PR 6b.6 + the 6b.6 design thread.
 --
 -- Run from repo root (Q3b/Q4b dump to data/exploratory/cross_source/, gitignored):
 --   psql "$NEON_DATABASE_URL" -f scripts/sql/cross_source/silver/measure_firm_rollup_for_6b6.sql

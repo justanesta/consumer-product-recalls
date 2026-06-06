@@ -19,7 +19,7 @@
 --   * the rapidfuzz threshold sizing input (paired with the 6b.4 residual gate).
 --   * the canonical_firm_id re-key magnitude (Q2 total distinct).
 --
--- Feeds: project_scope/phase-6b-execution-plan.md PR 6b.0 / 6b.4.
+-- Feeds: project_scope/archive/phase-6b-execution-plan.md PR 6b.0 / 6b.4.
 -- Run with: psql "$NEON_DATABASE_URL" -f scripts/sql/cross_source/silver/count_distinct_normalized_names_and_overlap.sql
 
 \set ON_ERROR_STOP on
