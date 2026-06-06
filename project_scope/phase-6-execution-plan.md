@@ -278,7 +278,9 @@ The `mixed` bucket dominates by record count — most disambiguation work happen
 
 ### Phase 6c — History + Lifecycle
 
-Existing Phase 6 items, unchanged in scope but only safe to build after 6a:
+> **Superseded 2026-06-06 by `project_scope/phase-6c-execution-plan.md`** — the full, current Phase 6c scope (the three items below + the SCD work that was scattered across ADR 0035 §5, `silver_v15_migration_plan.md`, and the W3 SCD audit, now consolidated as commits 6c.0–6c.8 on one branch + a single PR). The bullets below predate USCG reactivation, the 6b USCG SCD-2 build (#59), and the W3 audit; they survive here as the original seed only. **Build from the new doc.**
+
+Original seed (now owned by the new doc):
 
 - `extraction_run_identities` table + Alembic migration (per ADR 0026, USDA-only initially).
 - `recall_event_history` silver model (per ADR 0022) — snapshot-based history with `LAG()` over bronze across all 4 sources; filters non-routine change types per ADR 0027.

@@ -1,6 +1,6 @@
 # 0035 — Cross-source SCD-2 for silver dimensions
 
-- **Status:** Proposed — **decision recorded 2026-06-05 on the A scope** (cross-source policy = Policy C; the only instance *built* now is USCG `firm_manufacturer_attributes`). Ratifies → **Accepted** at PR 6b.5 merge, per the PR-merge status-flip convention (mirrors ADR 0036). The 2026-06-01 stub rationale and the 2026-06-02 applicability verdict are retained below as history.
+- **Status:** Accepted — **ratified at the #59 merge** (which carried the PR 6b.5 USCG `firm_manufacturer_attributes` SCD-2 build), per the PR-merge status-flip convention (mirrors ADR 0036); status flip recorded 2026-06-06 (catch-up — the flip was missed at merge time). **Decision recorded 2026-06-05 on the A scope** (cross-source policy = Policy C; the only instance *built* is USCG `firm_manufacturer_attributes`). The Phase-6c follow-on refinements deferred in §5 (rename-vs-recycle tier, historical-interval backfill, as-of-build-date HIN join) are owned by `project_scope/phase-6c-execution-plan.md` (commit 6c.5). The 2026-06-01 stub rationale and the 2026-06-02 applicability verdict are retained below as history.
 - **Date:** 2026-06-01 (number reserved) · 2026-06-02 (SCD-applicability verdict, W3) · 2026-06-05 (decision)
 - **Supersedes:** —
 - **Superseded by:** —
