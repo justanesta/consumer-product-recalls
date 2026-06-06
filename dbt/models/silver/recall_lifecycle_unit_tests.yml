@@ -1,0 +1,51 @@
+version: 2
+
+# dbt unit test for recall_lifecycle (Phase 6c.2). Verifies the manifest-derived dims, which
+# are otherwise unverifiable on live data (only ~2 USDA enumerating runs exist, none with a
+# retraction). Scenario: USDA recall R1 present in run1 + run3 but ABSENT from run2 (a gap),
+# and present in the latest run (run3). R2 exists only to make run2 an enumerating run.
+# Expected: R1 is_currently_active=true (in latest), was_ever_retracted=true (missed run2),
+# edit_count=2 (two content versions), first/last from bronze.
+#
+# Non-USDA bronze sources get stub rows (their bronze_stats don't match the USDA recall_event
+# row, so they don't appear in output). recall_event is mocked as a ref with only the 3
+# columns recall_lifecycle reads from it.
+
+unit_tests:
+  - name: recall_lifecycle_presence_and_retraction
+    model: recall_lifecycle
+    given:
+      - input: ref('recall_event')
+        rows:
+          - {recall_event_id: 'evt1', source: 'USDA', source_recall_id: 'R1'}
+      - input: source('usda', 'usda_fsis_recalls_bronze')
+        rows:
+          - {source_recall_id: 'R1', langcode: 'English', extraction_timestamp: '2026-01-01 00:00:00+00', content_hash: 'h1'}
+          - {source_recall_id: 'R1', langcode: 'English', extraction_timestamp: '2026-01-05 00:00:00+00', content_hash: 'h2'}
+      - input: source('pipeline', 'extraction_run_identities')
+        rows:
+          - {run_id: 'run1', source: 'usda', source_recall_id: 'R1', langcode: 'English'}
+          - {run_id: 'run1', source: 'usda', source_recall_id: 'R2', langcode: 'English'}
+          - {run_id: 'run2', source: 'usda', source_recall_id: 'R2', langcode: 'English'}
+          - {run_id: 'run3', source: 'usda', source_recall_id: 'R1', langcode: 'English'}
+          - {run_id: 'run3', source: 'usda', source_recall_id: 'R2', langcode: 'English'}
+      - input: source('pipeline', 'extraction_runs')
+        rows:
+          - {run_id: 'run1', started_at: '2026-01-01 00:00:00+00'}
+          - {run_id: 'run2', started_at: '2026-01-03 00:00:00+00'}
+          - {run_id: 'run3', started_at: '2026-01-05 00:00:00+00'}
+      - input: source('cpsc', 'cpsc_recalls_bronze')
+        rows:
+          - {source_recall_id: 'C1', extraction_timestamp: '2026-01-01 00:00:00+00', content_hash: 'h'}
+      - input: source('fda', 'fda_recalls_bronze')
+        rows:
+          - {recall_event_id: 1, extraction_timestamp: '2026-01-01 00:00:00+00', content_hash: 'h'}
+      - input: source('nhtsa', 'nhtsa_recalls_bronze')
+        rows:
+          - {campno: 'N1', extraction_timestamp: '2026-01-01 00:00:00+00', content_hash: 'h'}
+      - input: source('uscg', 'uscg_recalls_bronze')
+        rows:
+          - {source_recall_id: 'U1', extraction_timestamp: '2026-01-01 00:00:00+00', content_hash: 'h'}
+    expect:
+      rows:
+        - {recall_event_id: 'evt1', source: 'USDA', source_recall_id: 'R1', first_seen_at: '2026-01-01 00:00:00+00', last_seen_at: '2026-01-05 00:00:00+00', edit_count: 2, is_currently_active: true, was_ever_retracted: true}

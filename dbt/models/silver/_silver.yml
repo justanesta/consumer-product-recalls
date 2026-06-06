@@ -407,3 +407,46 @@ models:
           - accepted_values:
               arguments:
                 values: ['routine', 'historical_seed', 'etag_audit']
+
+  - name: recall_lifecycle
+    description: >
+      Per-recall lifecycle summary (ADR 0026 / Phase 6c.2), one row per recall_event.
+      first_seen_at / last_seen_at / edit_count are bronze-derived (all 5 sources, manifest-
+      independent — but bounded by the 6a.5 reseed; use announced_at for recall age).
+      is_currently_active / was_ever_retracted come from the presence manifest and are USDA-only
+      in v1 (NULL elsewhere until a source's track_presence manifest lands). See silver_design_notes.md.
+    columns:
+      - name: recall_event_id
+        description: FK to recall_event (1:1).
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: ref('recall_event')
+                field: recall_event_id
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
+      - name: source_recall_id
+        tests:
+          - not_null
+      - name: first_seen_at
+        description: First bronze observation since the 6a.5 reseed (pipeline-observation, NOT recall age).
+        tests:
+          - not_null
+      - name: last_seen_at
+        description: Last bronze version's timestamp (last change). Presence "now" is is_currently_active.
+        tests:
+          - not_null
+      - name: edit_count
+        description: Distinct content versions observed (1 = never changed since first seen).
+        tests:
+          - not_null
+      - name: is_currently_active
+        description: USDA-only (v1) — identity present in the latest enumerating run's manifest. NULL for other sources.
+      - name: was_ever_retracted
+        description: USDA-only (v1) — absent from some enumerating run since first appearance. NULL for other sources.
