@@ -168,14 +168,49 @@ all_normalized as (
     select * from nhtsa_normalized
     union all
     select * from uscg_normalized
+),
+
+-- Phase 6b PR 6b.1 (Increment B): resolve each raw firm to its canonical (cleaned —
+-- later clustered) id via enrichment.firm_crosswalk, keyed by md5(normalized_name).
+-- Firms with no crosswalk row are their own canonical (the coalesce — non-CPSC today).
+-- KEEP IN LOCKSTEP with recall_event_firm.sql's `mapped` CTE: both map the raw firm_id
+-- -> canonical_firm_id via the SAME crosswalk join, or recall_event_firm.firm_id
+-- orphans against firm.firm_id (the relationships test).
+resolved as (
+    select
+        an.raw_name,
+        an.normalized_name,
+        an.company_id,
+        coalesce(x.canonical_firm_id, md5(an.normalized_name)) as canonical_firm_id,
+        coalesce(x.canonical_name, an.raw_name)                as resolved_name,
+        x.alternate_names
+    from all_normalized an
+    left join {{ source('enrichment', 'firm_crosswalk') }} x
+        on x.firm_id = md5(an.normalized_name)
+),
+
+-- alternate_names (Phase 6b): brand / surface-form aliases from the crosswalk — the DBA
+-- brand plus any brand-bearing parentheticals (extract_paren_aliases). Each crosswalk row
+-- carries a jsonb ARRAY, so flatten + de-dupe the arrays across every raw name that maps to
+-- one canonical firm. Firms whose members carry no aliases produce no row here -> NULL via
+-- the LEFT JOIN below.
+alias_flat as (
+    select
+        canonical_firm_id,
+        jsonb_agg(distinct alias order by alias) as alternate_names
+    from resolved,
+        lateral jsonb_array_elements_text(coalesce(alternate_names, '[]'::jsonb)) as alias
+    group by canonical_firm_id
 )
 
 select
-    md5(normalized_name)                      as firm_id,
-    normalized_name,
-    (array_agg(raw_name order by raw_name))[1] as canonical_name,
-    jsonb_agg(distinct raw_name)              as observed_names,
-    jsonb_agg(distinct company_id)
-        filter (where company_id is not null) as observed_company_ids
-from all_normalized
-group by normalized_name
+    r.canonical_firm_id                                                   as firm_id,
+    upper(trim((array_agg(r.resolved_name order by r.resolved_name))[1])) as normalized_name,
+    (array_agg(r.resolved_name order by r.resolved_name))[1]              as canonical_name,
+    jsonb_agg(distinct r.raw_name)                                        as observed_names,
+    jsonb_agg(distinct r.company_id)
+        filter (where r.company_id is not null)                          as observed_company_ids,
+    af.alternate_names
+from resolved r
+left join alias_flat af using (canonical_firm_id)
+group by r.canonical_firm_id, af.alternate_names

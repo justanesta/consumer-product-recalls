@@ -386,6 +386,8 @@ A detail-page sampling probe (`scripts/uscg/probe_mic_reassignment_rate.py`, 202
 
 **Decision: build Path B + SCD-2.** The misattribution surface is large and confirmed (≈29% of recalled MICs recycled), not a negligible edge case. Methodology + the affected list are reproducible via `--recalled-only`.
 
+**Amendment 2026-06-05 (6b.5 build) — the `(OOB)` count above is PAREN-ONLY and undercounts.** The swing-set probe (`scripts/sql/cross_source/scd_monitors/probe_mic_prior_holder_not_oob.sql`) found the detail page marks out-of-business priors in **two** notations — `(OOB)` / `(OOB YYYY)` AND a **dash form `- OOB`** ("ARLINGTON BOAT WORKS - OOB"). `probe_mic_reassignment_rate.py` (and the table above) detected only the paren form. Widening OOB detection to word-boundary `\yOOB\y` raises recalled OOB-recycled from **205 (28.7%) → 221 (30.8%)** — the +16 dash-form; the **≥1-Past-Company surface (365 / 51.1%) is unchanged** (it never depended on the marker). The silver flag (`firm_manufacturer_attributes.mic_oob_recycled`) + `assert_mic_holder_stable.sql` now use `\yOOB\y`; the bridge time-sensitivity flag fires on the **broad 365** (any prior holder), not the OOB subset. Reading the full 144-MIC residual (has-prior, not-OOB) confirmed ~84% are genuine distinct-prior-firm reassignments, ~16% same-entity renames — so the broad set is mostly real risk. (`probe_mic_reassignment_rate.py` itself was not re-run; its 205 stands as the dated paren-only measurement.)
+
 ## Step 2 architectural decisions (locked, contingent on Finding H probe)
 
 **Contingent on the CSV probe outcome in §H.** Default path below assumes CSV is unavailable / not viable.

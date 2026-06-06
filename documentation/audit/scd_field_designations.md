@@ -30,7 +30,7 @@
 | Canonical field | Source | Silver today | Designation | NEED / BENEFIT | Status | Validating monitor |
 |---|---|---|---|---|---|---|
 | `firm.normalized_name` / `canonical_name` | all 5 | Type 1 | **Type 1** (the fragmentation problem is solved by *normalization*, not SCD) | avoid-fragmentation → 6b | ASSUMED | (6b RapidFuzz; NHTSA `assert_*name*`) |
-| USCG firm anchor (`mic` → company) | `uscg_manufacturers` + `uscg_manufacturer_details` | Type 1 (current holder) | **Type 2 — NEED** (MIC reassignment → a pre-reassignment hull is *misattributed* to the current holder) | **misattribution** / succession-history | **MEASURED + MONITOR-CONFIRMED** (§M AXY/COP; §M.6 = 365 prior / 205 OOB-recycled of 718 recalled MICs — reproduced **exactly** by the SQL monitor 2026-06-02) | **`cross_source/scd_monitors/assert_mic_holder_stable.sql`** (Q1 dynamic + Q2–Q4 static all-slot `past_company_*` lineage → unfold to Type-2) |
+| USCG firm anchor (`mic` → company) | `uscg_manufacturers` + `uscg_manufacturer_details` | Type 1 (current holder) | **Type 2 — NEED** (MIC reassignment → a pre-reassignment hull is *misattributed* to the current holder) | **misattribution** / succession-history | **MEASURED + MONITOR-CONFIRMED** (§M AXY/COP; §M.6 = 365 prior / 221 OOB-recycled — paren 205 + dash-form `- OOB` 16, OOB regex broadened to word-boundary 2026-06-05 — of 718 recalled MICs; the paren-only 205 reproduced **exactly** by the SQL monitor 2026-06-02) | **`cross_source/scd_monitors/assert_mic_holder_stable.sql`** (Q1 dynamic + Q2–Q4 static all-slot `past_company_*` lineage → unfold to Type-2) |
 | USDA establishment status | `usda_fsis_establishments.status_regulated_est` | Type 1 | **Type 2 — BENEFIT** (active↔Inactive flip analytics) | low / flip-time-series | ASSUMED | **`usda_establishments/bronze/list_status_flips.sql`** (exists) |
 
 ### `recall_product` grain
@@ -53,7 +53,7 @@ The repo already carries a scattered fleet of change-detection asserts; this sec
 |---|---|---|
 | `cross_source/scd_monitors/assert_classification_stable.sql` | `classification`/`severity` Type-2-BENEFIT (amendment rate) | yes — re-seeds wiped versions; measure-forward |
 | `cross_source/scd_monitors/assert_lifecycle_stable.sql` | `lifecycle_status` Type-2-BENEFIT (status-transition rate) | yes — measure-forward |
-| `cross_source/scd_monitors/assert_mic_holder_stable.sql` | USCG firm anchor Type-2-NEED (MIC reassignment) | **no for Q2–Q4** — the static all-slot `past_company_*` lineage returns real data now (reproduces §M.6 exactly: 365 prior / 205 OOB-recycled); Q1 (edit-versions) is measure-forward |
+| `cross_source/scd_monitors/assert_mic_holder_stable.sql` | USCG firm anchor Type-2-NEED (MIC reassignment) | **no for Q2–Q4** — the static all-slot `past_company_*` lineage returns real data now (reproduces §M.6: 365 prior / 221 OOB-recycled — paren-only was 205, word-boundary OOB added 16 dash-form 2026-06-05); Q1 (edit-versions) is measure-forward |
 | `nhtsa/bronze/assert_eleven_tuple_identity_stable.sql` | NHTSA 11-tuple Type-2 (core stability) | no — 167 edit-versions, gives real signal |
 | `cpsc/bronze/assert_products_array_append_only.sql` | CPSC product ordinal key (C2 append-only) | yes — 0 edit-versions in the re-seed |
 | `cpsc/bronze/assert_name_model_normalization_stable.sql` | CPSC C3 name/model normalization | yes |

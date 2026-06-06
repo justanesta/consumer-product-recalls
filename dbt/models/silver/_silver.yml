@@ -81,12 +81,24 @@ models:
           - not_null
           - unique
       - name: normalized_name
+        description: >
+          Representative cleaned name for the canonical firm. As of Phase 6b PR 6b.1
+          the firm grain is canonical_firm_id (clean → cluster), so normalized_name is
+          a display representative of that grain, NOT the key — its `unique` test was
+          dropped (critic C5; two raw spellings can clean to one canonical, and the
+          representative is derived across the Python/SQL upper() boundary). firm_id
+          (= canonical_firm_id) carries uniqueness.
         tests:
           - not_null
-          - unique
       - name: canonical_name
         tests:
           - not_null
+      - name: alternate_names
+        description: >
+          JSONB array of surface-form aliases — the DBA brand plus any brand-bearing
+          parentheticals ("Deere & Company (John Deere)" -> "John Deere"), preserved for
+          search + RapidFuzz match recall (Phase 6b). Flattened + de-duped across the
+          canonical firm from firm_crosswalk.alternate_names. Nullable, untested.
 
   - name: firm_establishment_attributes
     description: >
@@ -119,11 +131,16 @@ models:
 
   - name: firm_manufacturer_attributes
     description: >
-      USCG-registered boat-manufacturer dim with directory metadata.
-      Phase 5d Step 7 Step 5; one row per mic (= USCG Manufacturer
-      Identification Code, also written to firm.observed_company_ids for
-      USCG firms via the recalls-side join). Listing-only extraction;
-      address is truncated at ~30 chars at source per Step 1 Finding F.1.
+      USCG-registered boat-manufacturer dim — the CURRENT view (dbt_valid_to is null)
+      over the SCD-2 snapshot uscg_manufacturer_attributes_snapshot (ADR 0035). One row
+      per mic (= USCG Manufacturer Identification Code, also written to
+      firm.observed_company_ids for USCG firms via the recalls-side join). Source switched
+      from the listing view to the detail-page snapshot, so the address is now the FULL
+      untruncated value (fixes the ~30-char Finding F.1 truncation) and the succession
+      lineage (past_company_1/2/3, parent_*) is present. mic_has_prior_holder /
+      mic_oob_recycled flag the MIC-recycle NEED (mirror assert_mic_holder_stable.sql:
+      all three Past Company slots, `\(OOB` marker); recall_event_firm stamps
+      uscg_mic_time_sensitive_unresolved from them. SCD-2 history is the snapshot (Policy C).
     columns:
       - name: mic
         tests:
@@ -132,6 +149,59 @@ models:
       - name: detail_url
         tests:
           - not_null
+      - name: mic_has_prior_holder
+        description: True when any Past Company slot is populated (the ~365 set).
+        tests:
+          - not_null
+      - name: mic_oob_recycled
+        description: >
+          True when a Past Company is marked out-of-business in ANY source notation — `(OOB)`,
+          `(OOB 1991)`, or the dash form `- OOB` (word-boundary `\yOOB\y`; `(previous name)` renames
+          are excluded). A subset of mic_has_prior_holder. NB: assert_mic_holder_stable.sql's
+          published "205" counts the paren form only and undercounts the true recycle set.
+        tests:
+          - not_null
+      - name: prior_holders
+        description: jsonb array of the non-null Past Company names, for inspection.
+
+  - name: firm_fda_attributes
+    description: >
+      FDA-registered establishment dim with address + firm-continuity metadata.
+      Capture-expansion (b) PR W1; one row per firm_fei_num (= FDA FEI, also
+      written to firm.observed_company_ids for FDA firms). No directory source —
+      reconstructed DISTINCT ON (firm_fei_num) latest from the recall feed
+      (stg_fda_recalls). Firms with a null FEI (0.4%, 2026-06-03 profile) have no
+      row here; their names still live in firm.sql. firm_fei_num is the hard key
+      (not_null + unique). firm_legal_nam / firm_city_nam / firm_country_nam /
+      firm_line1_adr are ~100% on full corpus but tested severity=warn (Q4
+      populations are rounded; a handful of nulls at FEI grain should be a
+      watch-list, not a build break). state / postal / surviving are legitimately
+      nullable (86.8% / 96.0% / 7.0%).
+    columns:
+      - name: firm_fei_num
+        tests:
+          - not_null
+          - unique
+      - name: firm_legal_nam
+        tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: firm_city_nam
+        tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: firm_country_nam
+        tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: firm_line1_adr
+        tests:
+          - not_null:
+              config:
+                severity: warn
 
   - name: recall_event_firm
     description: >
@@ -168,6 +238,125 @@ models:
           - accepted_values:
               arguments:
                 values: ['manufacturer', 'importer', 'distributor', 'establishment', 'filer']
+      - name: match_confidence
+        description: >
+          Firm-resolution path/quality for this bridge row (Phase 6b). Defaults to
+          'exact_name'; per-source PRs overwrite it (6b.1 CPSC, 6b.2 USDA, 6b.4
+          RapidFuzz, 6b.5 USCG MIC time-sensitivity). The full namespaced
+          vocabulary is single-homed below; 6b.6 promoted it to **error** now that
+          every source's value set has landed (6b.0–6b.5) — an unexpected label is a bug.
+        tests:
+          - accepted_values:
+              config:
+                severity: error
+              arguments:
+                values:
+                  - exact_name
+                  # Source-agnostic deterministic-cleaning tiers (6b.4: the crosswalk PK is
+                  # global, so confidence labels the rule, not the source). Renamed from the
+                  # 6b.1 cpsc_* names when the other sources joined the crosswalk. Paren
+                  # strip was scoped out (ADR 0037) — paren-variants resolve via RapidFuzz.
+                  - geo_suffix_strip_exact
+                  - dba_extract_exact
+                  - usda_unambiguous
+                  - usda_product_items_extract
+                  - usda_state_match
+                  - usda_processing_match
+                  - usda_multi_signal
+                  - usda_ambiguous_null
+                  - uscg_mic_unambiguous
+                  - uscg_mic_time_sensitive_unresolved
+                  - uscg_mic_build_date_resolved
+                  # Tiered name/FEI resolution (6b.4, ADR 0037). Tier 0 = fei_exact (FDA
+                  # current-FEI group). Tier 1 = name_variant_exact (identical distinctive set)
+                  # / name_typo_high (token_sort_ratio typo). Tier 2 = rapidfuzz_rollup (>=2
+                  # shared distinctive tokens; the reviewable tier). singleton = unmerged.
+                  - fei_exact
+                  - name_variant_exact
+                  - name_typo_high
+                  - rapidfuzz_rollup
+                  - singleton
+      - name: establishment_number
+        description: >
+          FSIS establishment number resolved for USDA establishment bridge rows (Phase 6b 6b.2,
+          from recall_event_establishment_resolution joined on recall_event_id). NULL for non-USDA
+          rows and for USDA fan-outs that stayed usda_ambiguous_null. Nullable, untested.
     # Composite uniqueness of (recall_event_id, firm_id, role) is now enforced
     # explicitly via the model-level dbt_utils.unique_combination_of_columns
     # test above (the SELECT DISTINCT in the model also guarantees it).
+
+  - name: recall_event_press_release
+    description: >
+      FDA press releases (Tier-3, capture-expansion (b) PR) — event-grain child of
+      recall_event, M:1 (an event can carry several). FDA-only; lookup-endpoint-only data
+      (Finding K0). One row per (event, press-release URL). Joined to recall_event via
+      recall_event_id.
+    columns:
+      - name: recall_event_press_release_id
+        tests:
+          - not_null
+          - unique
+      - name: recall_event_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('recall_event')
+                field: recall_event_id
+      - name: url
+        tests:
+          - not_null
+
+  - name: recall_event_establishment_resolution
+    description: >
+      USDA recall -> FSIS establishment disambiguation (Phase 6b PR 6b.2). One row per USDA
+      recall_event_id with >=1 name-matched establishment, resolving the free-text establishment
+      name to a single establishment_number via a precision-first signal hierarchy
+      (unambiguous > embedded establishment number > field_states match > ambiguous_null).
+      recall_event_firm joins this on recall_event_id to stamp establishment_number +
+      match_confidence on USDA bridge rows. ~688/786 name-matched recalls resolve; the ~12.5%
+      ambiguous_null are mostly multi-plant producers with no stated number (correctly NULL).
+    columns:
+      - name: recall_event_id
+        tests:
+          - not_null
+          - unique
+      - name: establishment_number
+        description: >
+          Resolved FSIS establishment_number (the '+'-composite id), or NULL when the fan-out is
+          unresolved (precision-over-recall — a wrong attribution is worse than none).
+      - name: match_confidence
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - usda_unambiguous
+                  - usda_product_items_extract
+                  - usda_state_match
+                  - usda_ambiguous_null
+
+  - name: firm_fei_edges
+    description: >
+      FDA shared-FEI + surviving-FEI succession edges (Phase 6b PR 6b.3) — the
+      deterministic forced-merge constraints the 6b.4 RapidFuzz clusterer consumes
+      (union-find) so the 12.4% of FEIs mapping to >1 legal name collapse without fuzzy.
+      One row per distinct (firm_id, normalized_name, firm_fei_num, firm_surviving_fei)
+      from stg_fda_recalls where firm_fei_num is not null. NOT yet consumed by firm.sql /
+      recall_event_firm.sql (6b.4 wires it) — additive, no lockstep impact. firm_id is the
+      pre-clustering raw md5(upper(trim(firm_legal_nam))); intentionally NOT relationship-
+      tested against firm.firm_id (it feeds the pass that makes firm.firm_id canonical).
+    columns:
+      - name: firm_id
+        description: md5(upper(trim(firm_legal_nam))) — mirrors firm.sql's fda_normalized firm_id.
+        tests:
+          - not_null
+      - name: firm_fei_num
+        description: FDA FEI (government establishment id). Shared firm_fei_num across rows = a forced merge.
+        tests:
+          - not_null
+      - name: firm_surviving_fei
+        description: >
+          FDA's own successor-FEI pointer for renamed/merged firms (NULL for most). A live
+          (firm_fei_num -> firm_surviving_fei) pair is a directed succession edge; 6b.4's
+          clusterer interprets it (ignores null/self/dangling, guards cycles). Nullable, untested.

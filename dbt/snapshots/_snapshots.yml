@@ -1,0 +1,29 @@
+version: 2
+
+snapshots:
+  - name: uscg_manufacturer_attributes_snapshot
+    description: >
+      SCD-2 history of the USCG manufacturer directory, keyed on the stable `mic`
+      anchor (ADR 0035; first cross-source SCD-2 instance). strategy='check' over the
+      firm-attribution fields; dbt manages dbt_valid_from / dbt_valid_to / dbt_scd_id.
+      The current view (dbt_valid_to is null) feeds firm_manufacturer_attributes; the
+      full table is the queryable peer history (Policy C). Lands in the silver_snapshots
+      schema (exempt from ADR 0007 bronze-snapshot pruning). Heartbeat fields
+      (in_business, date_modified) are deliberately NOT check_cols — see the model
+      header. Re-run on an unchanged corpus must bank 0 new versions (idempotency).
+    columns:
+      - name: mic
+        description: USCG Manufacturer Identification Code, upper(trim)-normalized — the SCD anchor.
+        tests:
+          - not_null
+      - name: dbt_scd_id
+        description: dbt-generated surrogate, one per version.
+        tests:
+          - unique
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - mic
+              - dbt_valid_from

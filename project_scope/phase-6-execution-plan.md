@@ -139,16 +139,16 @@ After each step, before moving to the next:
 
 **Quality gates:**
 
-- [ ] FDA depth probe complete; date window documented in this plan
-- [ ] R2 inventory sized; storage estimate within 20% of pre-flight projection
-- [ ] Neon tier upgraded; new monthly cost recorded
-- [ ] CPSC seed: bronze row count >= 9,000 (or documented reason for shortfall — e.g., archive migration still incomplete at CPSC's end)
-- [ ] NHTSA seed: bronze row count = (existing) + (~380-440k PRE_2010 + POST_2010 combined, modulo content-hash dedup of existing POST_2010)
-- [ ] NHTSA bronze 11-tuple assertion: warn-count delta documented; any new drift groups triaged
-- [ ] FDA seed: bronze row count > 5× current; no Akamai 204 blocks during seed
-- [ ] Combined quarantine rate < 5% (or each pattern's quarantine class triaged)
-- [ ] CPSC + FDA + NHTSA field audit §9 re-run; deltas folded into audit docs
-- [ ] No Phase 6a architectural surprises that require restart (Bug 1/2/3 framings + Option B still hold at corpus scale)
+- [x] FDA depth probe complete; date window documented in this plan
+- [x] R2 inventory sized; storage estimate within 20% of pre-flight projection
+- [x] Neon tier upgraded; new monthly cost recorded
+- [x] CPSC seed: bronze row count >= 9,000 (or documented reason for shortfall — e.g., archive migration still incomplete at CPSC's end)
+- [x] NHTSA seed: bronze row count = (existing) + (~380-440k PRE_2010 + POST_2010 combined, modulo content-hash dedup of existing POST_2010)
+- [x] NHTSA bronze 11-tuple assertion: warn-count delta documented; any new drift groups triaged
+- [x] FDA seed: bronze row count > 5× current; no Akamai 204 blocks during seed
+- [x] Combined quarantine rate < 5% (or each pattern's quarantine class triaged)
+- [x] CPSC + FDA + NHTSA field audit §9 re-run; deltas folded into audit docs
+- [x] No Phase 6a architectural surprises that require restart (Bug 1/2/3 framings + Option B still hold at corpus scale)
 
 **Risks + mitigations:**
 
@@ -311,7 +311,7 @@ Final deliverable, after all schema work is done (user-confirmed: "after Phase 6
 - **Overall textual summary of the silver and gold database** table/view shape and rational behind it (why the firm sidecars, etc.)
 - **Written-documentation sync (do this in 6f too).** Bring the prose docs current with everything that landed since they were written — they are materially stale (e.g. `operations.md` still lists USCG as "indefinitely deferred"; `architecture.md` says `HtmlScrapingExtractor` is "reserved for future use" and the registry has "5 entries / 3 entries" — now **8 / 7**; `data_schemas.md`'s bronze-table list omits all three USCG tables). At minimum update:
   - `documentation/architecture.md` — extractor component table (add `_html_scraping.py`, the USCG concrete subclasses, `uscg_manufacturer_detail.py`), the registry counts (8/7), the source lists in the cron-schedule + end-to-end-flow diagrams, and the medallion narrative.
-  - `documentation/data_schemas.md` — bronze rows for `uscg_recalls_bronze` / `uscg_manufacturers_bronze` / **`uscg_manufacturer_details_bronze`**, the staging + `firm_manufacturer_attributes` silver rows, and glossary terms (MIC as a **temporal SCD anchor**; `Out of Business` vs `Past Company (OOB)`; HIN ⊃ MIC).
+  - `documentation/data_schemas.md` — bronze rows for `uscg_recalls_bronze` / `uscg_manufacturers_bronze` / **`uscg_manufacturer_details_bronze`**, the staging + `firm_manufacturer_attributes` silver rows, and glossary terms (MIC as a **temporal SCD anchor**; `Out of Business` vs `Past Company (OOB)`; HIN ⊃ MIC). data_schemas.md's role vocabulary is stale. Both the glossary (line ~80) and the "I want to find…" row (line ~137) list ['manufacturer, retailer, importer, distributor, establishment'], but _silver.yml's actual accepted_values for recall_event_firm.role is now ['manufacturer, importer, distributor, establishment, filer'] — retailer dropped (retailers are excluded from the firm dim), filer added (the NHTSA filer/manufacturer split).
   - `documentation/operations.md` — replace the stale USCG "indefinitely deferred" row with the live 3-source USCG cadence table; add the `uscg_manufacturer_details` extract/deep-rescan runbook + the bulk-`Date Modified`-re-touch re-baseline note (`change_type='schema_rebaseline'`).
   - `documentation/silver_design_notes.md` — the `firm_manufacturer_attributes` SCD-2 mapping + the flag-as-time-sensitive recall→manufacturer join (ADR 0035).
   - `documentation/commands.md` — the `recalls extract|deep-rescan uscg_manufacturer_details` commands.

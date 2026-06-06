@@ -19,16 +19,19 @@ from src.bronze.invariants import (
 )
 from src.bronze.loader import BronzeLoader
 from src.config.db import make_engine
-from src.config.settings import (
-    Settings,  # noqa: TC001 — Pydantic evaluates field annotations at runtime
-)
 from src.extractors._base import (
     AuthenticationError,
     ExtractionError,
     QuarantineRecord,
     RateLimitError,
-    RestApiExtractor,
     TransientExtractionError,
+)
+from src.extractors._fda_base import (
+    IRES_USER_AGENT,
+    STATUS_AUTH_DENIED,
+    STATUS_EMPTY,
+    STATUS_SUCCESS,
+    FdaIresExtractor,
 )
 from src.extractors._tables import source_watermarks as _source_watermarks
 from src.landing.r2 import R2LandingClient
@@ -98,7 +101,6 @@ _fda_rejected = sa.Table(
 # cross-source operational tables — see src/extractors/_tables.py.
 
 _FDA_SOURCE = "fda"
-_DEFAULT_LOOKBACK_DAYS = 1
 # 2500 (not 5000): codeinformation in _DISPLAY_COLUMNS caps the API page at 2500
 # rows (audit Decision 5). Both the `rows` request param and the pagination
 # stop-condition (len(page) < _PAGE_SIZE) key off this, so it must match the API's
@@ -132,16 +134,6 @@ _MAX_INCREMENTAL_RECORDS = 5_000
 
 _RECALLS_ENDPOINT = "/recalls/"
 
-# FDA's own iRES API documentation (Python sample code) sets this exact User-Agent.
-# Sending the default `python-httpx/X.Y.Z` value is suspected to trigger FDA's
-# anti-abuse throttle on the very first request — finding N in api_observations.md.
-_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-
-# FDA STATUSCODE semantics (finding A / finding K / finding K extension):
-_STATUS_SUCCESS = 400  # bulk POST success with records
-_STATUS_EMPTY = 412  # bulk POST empty result — no RESULT key present
-_STATUS_AUTH_DENIED = 401  # auth failure
-
 # Per-page retry for _paginate. Scoped to TransientExtractionError ONLY (5xx /
 # transport): RateLimitError must propagate to run()'s outer _TRANSIENT_RETRY
 # (it is a sibling, not a subclass — _base.py), and the text/html anti-abuse
@@ -156,7 +148,7 @@ _PER_PAGE_RETRY = tenacity.Retrying(
 )
 
 
-class FdaExtractor(RestApiExtractor[FdaRecord]):
+class FdaExtractor(FdaIresExtractor[FdaRecord]):
     """
     Extractor for FDA iRES enforcement recall records — incremental path only.
 
@@ -170,17 +162,12 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
     """
 
     source_name: str = _FDA_SOURCE
-    settings: Settings
 
     # Inter-page pacing for _paginate. 0.0 = no sleep (the incremental default —
     # a daily delta is 1-2 pages). The historical seed sets this to 5.0 on
     # FdaDeepRescanLoader (Probe 4 floor) to stay under FDA's anti-abuse throttle
     # across ~54 pages.
     inter_page_sleep_seconds: float = 0.0
-
-    _engine: sa.Engine = PrivateAttr()
-    _r2_client: R2LandingClient = PrivateAttr()
-    _current_landing_path: str = PrivateAttr(default="")
 
     def model_post_init(self, __context: Any) -> None:
         self._engine = make_engine(self.settings.neon_database_url.get_secret_value())
@@ -358,7 +345,7 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
             with httpx.Client(
                 timeout=self.timeout_seconds,
                 follow_redirects=True,
-                headers={"User-Agent": _USER_AGENT},
+                headers={"User-Agent": IRES_USER_AGENT},
             ) as client:
                 response = client.post(
                     url,
@@ -408,77 +395,22 @@ class FdaExtractor(RestApiExtractor[FdaRecord]):
         STATUSCODE 402–418 → payload/parameter error, raise ExtractionError (non-retryable).
         """
         status = body.get("STATUSCODE")
-        if status == _STATUS_SUCCESS:
+        if status == STATUS_SUCCESS:
             result = body.get("RESULT", [])
             if not isinstance(result, list):
                 raise TransientExtractionError(
                     f"FDA bulk POST: expected RESULT to be a list, got {type(result)!r}"
                 )
             return result
-        if status == _STATUS_EMPTY:
+        if status == STATUS_EMPTY:
             return []
-        if status == _STATUS_AUTH_DENIED:
+        if status == STATUS_AUTH_DENIED:
             raise AuthenticationError(
                 f"FDA iRES authorization denied (STATUSCODE {status}): {body.get('MESSAGE')}"
             )
         raise ExtractionError(
             f"FDA iRES non-retryable error (STATUSCODE {status}): {body.get('MESSAGE')} — "
             f"request URL: {url}"
-        )
-
-    def _auth_headers(self) -> dict[str, str]:
-        user = self.settings.fda_authorization_user
-        key = self.settings.fda_authorization_key
-        if user is None or key is None:
-            raise AuthenticationError(
-                "FDA_AUTHORIZATION_USER and FDA_AUTHORIZATION_KEY must be set in environment"
-            )
-        return {
-            "Authorization-User": user.get_secret_value(),
-            "Authorization-Key": key.get_secret_value(),
-        }
-
-    def _capture_error_response(self, url: str, response: httpx.Response) -> None:
-        # FDA POSTs a form-encoded payLoad= body — capture it so promote_error_to_
-        # cassette.py can emit a cassette VCR will match against on replay.
-        request_body: str | None = None
-        if response.request.content:
-            try:
-                request_body = response.request.content.decode("utf-8")
-            except UnicodeDecodeError:
-                request_body = None
-        try:
-            self._r2_client.land_error_response(
-                source=_FDA_SOURCE,
-                request_method=response.request.method,
-                request_url=url,
-                request_body=request_body,
-                status_code=response.status_code,
-                response_headers=dict(response.headers),
-                response_body=response.text,
-            )
-        except Exception:
-            logger.warning(
-                "fda.error_capture_failed",
-                status_code=response.status_code,
-                url=url,
-            )
-
-    def _get_watermark(self, conn: sa.Connection) -> date:
-        row = conn.execute(
-            sa.select(_source_watermarks.c.last_cursor).where(
-                _source_watermarks.c.source == _FDA_SOURCE
-            )
-        ).fetchone()
-        if row and row[0]:
-            return date.fromisoformat(row[0])
-        return datetime.now(UTC).date() - timedelta(days=_DEFAULT_LOOKBACK_DAYS)
-
-    def _update_watermark(self, conn: sa.Connection, new_date: date) -> None:
-        conn.execute(
-            sa.update(_source_watermarks)
-            .where(_source_watermarks.c.source == _FDA_SOURCE)
-            .values(last_cursor=new_date.isoformat(), updated_at=datetime.now(UTC))
         )
 
     def override_watermark_lookback(self, days: int) -> None:

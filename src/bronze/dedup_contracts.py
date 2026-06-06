@@ -110,4 +110,13 @@ DEDUP_CONTRACT_BY_SOURCE_NAME: dict[str, DedupContract] = {
         identity_fields=("source_recall_id",),
         hash_exclude_fields=frozenset({"detail_url", "uscg_directory_id"}),
     ),
+    # fda_press_release.py — Tier-3 press releases (capture-expansion (b) PR). Composite
+    # identity: one event (source_recall_id = RECALLEVENTID) can carry several releases,
+    # so the URL is the second key. No hash exclusions — all 3 payload fields are content.
+    # within_batch_dedup on (defensive): a single event's response could repeat a URL;
+    # collapse byte-identical copies, raise only on same-identity-different-content.
+    "fda_press_releases": DedupContract(
+        identity_fields=("source_recall_id", "press_release_url"),
+        default_within_batch_dedup=True,
+    ),
 }

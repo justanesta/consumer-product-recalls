@@ -1,0 +1,99 @@
+name: Firm Rollup Audit
+
+# Phase 6b.6 precision review loop (documentation/operations.md -> "Firm resolution review loop").
+# Tier-2 (rapidfuzz_rollup) firm merges are not self-healing — a new ingest can introduce a fresh
+# 2-token coincidence — so this runs `recalls audit-firm-rollups` against production on a cadence,
+# uploads the ranked review CSV as an artifact, and opens/refreshes a single tracking ISSUE when a
+# LARGE number of high-risk (low-score / low-overlap) clusters need manual review.
+#
+# Read-only (no writes to firm_crosswalk). Cadence: monthly, plus manual dispatch. The threshold
+# below is the "large number" trip-wire — tune it as the steady-state review backlog settles.
+
+on:
+  schedule:
+    - cron: "0 7 1 * *" # 07:00 UTC on the 1st of each month
+  workflow_dispatch:
+    inputs:
+      alert_threshold:
+        description: "Open/refresh the alert issue if high_risk_count exceeds this"
+        required: false
+        default: "25"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write # to open/update the review-backlog tracking issue
+
+env:
+  ALERT_THRESHOLD: ${{ github.event.inputs.alert_threshold || '25' }}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Run firm-rollup audit
+        id: audit
+        # Write to the per-job temp dir, not the checked-out repo tree, so the report can never
+        # dirty `git status` or be accidentally committed (it's a derived diagnostic, not state).
+        run: uv run recalls audit-firm-rollups --out "$RUNNER_TEMP/firm_rollup_review.csv"
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+
+      - name: Upload review CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: firm-rollup-review
+          path: ${{ runner.temp }}/firm_rollup_review.csv
+          if-no-files-found: warn
+
+      - name: Open / refresh review-backlog issue on a spike
+        if: ${{ fromJSON(steps.audit.outputs.high_risk_count || '0') > fromJSON(env.ALERT_THRESHOLD) }}
+        uses: actions/github-script@v7
+        env:
+          HIGH_RISK: ${{ steps.audit.outputs.high_risk_count }}
+          ROLLUPS: ${{ steps.audit.outputs.rollup_clusters }}
+        with:
+          script: |
+            const high = process.env.HIGH_RISK, total = process.env.ROLLUPS;
+            const marker = '<!-- firm-rollup-audit -->';
+            const title = 'Firm-rollup review backlog: high-risk merges need eyeballing';
+            const body = [
+              marker,
+              `**${high}** high-risk Tier-2 firm merges (of ${total} rollup clusters) need manual review`,
+              `as of ${new Date().toISOString().slice(0,10)} — above the alert threshold (${process.env.ALERT_THRESHOLD || '25'}).`,
+              '',
+              'Download the ranked `firm-rollup-review` artifact from this workflow run, then follow',
+              'documentation/operations.md → "Firm resolution review loop": confirm each flagged cluster,',
+              'fix false merges (`place_words.py` / `GENERIC_WORDS` / `never_merge.py`), record legit ones',
+              'in `documentation/audit/firm_rollup_reviewed_ok.txt`, and re-resolve.',
+            ].join('\n');
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100,
+            });
+            const hit = existing.data.find(i => (i.body || '').includes(marker));
+            if (hit) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: hit.number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo, title, body,
+                labels: ['data-quality', 'firm-resolution'],
+              });
+            }

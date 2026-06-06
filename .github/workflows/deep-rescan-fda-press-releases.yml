@@ -1,0 +1,78 @@
+name: Deep Rescan FDA Press Releases
+
+# Full per-event press-release sweep (capture-expansion (b) PR, Part C) — the ~25K-event
+# historical seed and the catch-all for press releases added to old, otherwise-unchanged
+# events (which the incremental event_lmd cursor misses).
+#
+# CHUNKED BY DESIGN: ~25K GETs at the polite inter-event pace exceeds the GitHub Actions
+# 6h job limit, so run it in chunks. Dispatch with `limit` = chunk size; note the last
+# recall_event_id from the run's work-list log; re-dispatch with that as
+# `resume_after_event_id` plus the same `limit`. Content-hash dedup makes an overlapping
+# re-run idempotent. No date window (press releases have no date-range query surface).
+# No `schedule:` — this is an operator-run seed / drift sweep, not a cron.
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Chunk size: cap the sweep to the first N events (recall_event_id order). Blank → all."
+        required: false
+        default: ""
+      resume_after_event_id:
+        description: "Resume cursor: skip events with recall_event_id <= N. Blank → from the start."
+        required: false
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  deep-rescan:
+    runs-on: ubuntu-latest
+    # Just under the GitHub Actions 6h hard limit — size `limit` so the chunk finishes
+    # within this window at the extractor's inter-event pace.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
+          [[ -n "$R2_BUCKET_NAME" ]] || (echo "::error::R2_BUCKET_NAME secret is missing" && exit 1)
+          [[ -n "$R2_ACCOUNT_ID" ]] || (echo "::error::R2_ACCOUNT_ID secret is missing" && exit 1)
+          [[ -n "$R2_ACCESS_KEY_ID" ]] || (echo "::error::R2_ACCESS_KEY_ID secret is missing" && exit 1)
+          [[ -n "$R2_SECRET_ACCESS_KEY" ]] || (echo "::error::R2_SECRET_ACCESS_KEY secret is missing" && exit 1)
+          [[ -n "$FDA_AUTHORIZATION_USER" ]] || (echo "::error::FDA_AUTHORIZATION_USER secret is missing" && exit 1)
+          [[ -n "$FDA_AUTHORIZATION_KEY" ]] || (echo "::error::FDA_AUTHORIZATION_KEY secret is missing" && exit 1)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          FDA_AUTHORIZATION_USER: ${{ secrets.FDA_AUTHORIZATION_USER }}
+          FDA_AUTHORIZATION_KEY: ${{ secrets.FDA_AUTHORIZATION_KEY }}
+
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Run FDA press-release deep rescan
+        run: |
+          ARGS=()
+          if [[ -n "${{ github.event.inputs.limit }}" ]]; then
+            ARGS+=(--limit "${{ github.event.inputs.limit }}")
+          fi
+          if [[ -n "${{ github.event.inputs.resume_after_event_id }}" ]]; then
+            ARGS+=(--resume-after-event-id "${{ github.event.inputs.resume_after_event_id }}")
+          fi
+          uv run recalls deep-rescan fda_press_releases "${ARGS[@]}"
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          FDA_AUTHORIZATION_USER: ${{ secrets.FDA_AUTHORIZATION_USER }}
+          FDA_AUTHORIZATION_KEY: ${{ secrets.FDA_AUTHORIZATION_KEY }}

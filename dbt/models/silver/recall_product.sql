@@ -127,7 +127,13 @@ nhtsa_products as (
     select
         md5(
             'NHTSA' || '|' || campno
-            || '|' || coalesce(maketxt, '')        || '|' || coalesce(modeltxt, '')
+            -- ADR 0033 Normalization class (Phase 6b 6b.3): hash the normalize_maketxt-
+            -- canonicalized make so 'AC DELCO' -> 'ACDELCO' (and any whitespace/case make
+            -- drift) yields ONE recall_product_id. SAME macro as stg_nhtsa_recalls' identity
+            -- partition (one row survives there; this keeps its surrogate stable). The
+            -- DISPLAYED maketxt in the source_specific_attrs blob below stays RAW (critic C14).
+            || '|' || {{ normalize_maketxt('maketxt') }}
+            || '|' || coalesce(modeltxt, '')
             || '|' || coalesce(yeartxt, '')        || '|' || coalesce(compname, '')
             || '|' || coalesce(rcl_cmpt_id, '')    || '|' || coalesce(mfr_comp_ptno, '')
             || '|' || coalesce(mfr_comp_desc, '')  || '|' || coalesce(mfr_comp_name, '')

@@ -40,9 +40,11 @@ All fields below confirmed in the 33-column bulk POST datagroup (PDF page 7) AND
 | `firmstateprvncnam` | MEDIUM | 97% | Full state name; pairs with `firmstatecd` (co-varies perfectly — same NULLs, same per-state counts). Capture both as denormalized lookup. |
 | `firmsurvivingnam`, `firmsurvivingfei` | MEDIUM | 15% each | Current firm name / FEI if changed since the recall — critical for firm-dim continuity in Phase 6b |
 | `postedinternetdt` | LOW | 84% | "First posted to internet" date — distinct from `eventlmd` (sample: posted 05/07/2025, lmd 05/28/2026). Definitions PDF notes blank for recalls prior to 2022-10-25. |
-| `codeinformation` | HIGH | not yet corpus-measured | Lot/serial numbers, expiration dates, etc. Max length **205,424 chars** empirically (single record). Accepting the page-size penalty (5000 → 2500) is the §6 decision 5 in field_audit_2026_w22.md. Sizing impact for Phase 6a.5: revised FDA historical seed estimate to 1.5-3 GB. |
+| `codeinformation` | HIGH | not yet corpus-measured | Lot/serial numbers, expiration dates, etc. Max length **205,424 chars** in the 2026-05-29 100-record window; **full-bronze max 8,867,432 chars** (2026-06-03 probe). Accepting the page-size penalty (5000 → 2500) is the §6 decision 5 in field_audit_2026_w22.md. Sizing impact for Phase 6a.5: revised FDA historical seed estimate to 1.5-3 GB. **Silver treatment = parse into a `recall_product_code` child table, deferred post-6b → `project_scope/freetext-enrichment-backlog.md`.** |
 
 ### FDA Tier 2 — Per-product GET (one request per unique `productid`)
+
+> **RESOLVED 2026-06-03 → SKIP all of Tier-2.** Empirically settled by `scripts/fda/audit/probe_tier2_shorts.py` (random sample of 60): the `*short` fields are whitespace-normalized truncations of full fields already in bronze (`content ⊆ full` for every populated short), and the `*indicator`s are presence flags (`'true' ⟺ short present`) — zero net-new content for ~134K Akamai-paced GETs. Evidence: `documentation/fda/api_observations.md` **K0.3**. Decision homed in `project_scope/silver-field-capture-expansion-plan.md`. The table below is retained as the original candidate list.
 
 Reference Bruno requests: `bruno/fda/lookup/get_code_info.yml`, `bruno/fda/lookup/get_event_products.yml`. Pattern: `GET /recalls/product/{productid}` per product (and `GET /search/codeinfo/{productid}` as an alternative path for `codeinformation` if not captured via bulk POST).
 
@@ -50,9 +52,9 @@ Daily delta sizing (per `field_audit_2026_w22.md` §8 R2 inspection): ~150-450 p
 
 | Field | Priority | Endpoint | Note |
 |---|---|---|---|
-| `productdescriptionshort` | MEDIUM | `GET /recalls/product/{productid}` | Truncated UI variant of `productdescriptiontxt`; candidate for `recall_product.product_name`. May be derivable in silver via `LEFT(productdescriptiontxt, N)` — defer "derive vs fetch" until cross-source `product_name` strategy is set. |
-| `recallreasonshort` | LOW | `GET /recalls/product/{productid}` | Truncated UI variant of `productshortreasontxt`; could derive in silver instead. |
-| `codeinfoshort` | LOW | `GET /recalls/product/{productid}` | Truncated UI variant of `codeinformation`; could derive in silver instead. |
+| `productdescriptionshort` | ~~MEDIUM~~ **SKIP** | `GET /recalls/product/{productid}` | **Settled 2026-06-03 (K0.3): whitespace-normalized truncation of `productdescriptiontxt` (content ⊆ full 8/8), ~13% populated.** Bug 2 `product_name` → derive in silver (`regexp_replace`+truncate), not fetch. |
+| `recallreasonshort` | ~~LOW~~ **SKIP** | `GET /recalls/product/{productid}` | **Settled 2026-06-03 (K0.3): whitespace-normalized truncation of `productshortreasontxt` (content ⊆ full 7/7).** |
+| `codeinfoshort` | ~~LOW~~ **SKIP** | `GET /recalls/product/{productid}` | **Settled 2026-06-03 (K0.3): word-boundary truncation of `codeinformation` (content ⊆ full 5/5).** |
 | `productlmd` | LOW | `GET /recalls/product/{productid}` | Empirically null on every probed surface per Finding K0.1; capture would carry zero information. Listed for completeness; recommend SKIP per K0.1 closure. |
 
 ### FDA Tier 3 — Per-event GET (one request per unique `recalleventid`)
@@ -79,10 +81,12 @@ Daily delta sizing: ~50-180 unique events/day → ~50-180 extra GETs/day per per
 
 Defer the choice to cross-source consolidation. CPSC's per-recall detail-page enrichment and USCG's already-built per-detail-page scraping are similar architectures — decide them together so we standardize the per-record-enrichment pattern across sources.
 
+**RESOLVED 2026-06-03 — scope ≈ B1 + Tier-3 (no B2).** Tier-2 is excluded (settled SKIP, K0.3). Note the B2 row's framing is moot: `codeinformation` is a Tier-1 / bulk-POST field (already captured via migration 0019), not a Tier-2 add. The (b) PR is **(A) Tier-1 firm/posted-date silver lift + (C) Tier-3 press releases**; `code_information`'s silver *parse* into a `recall_product_code` child table is deferred post-6b to `project_scope/freetext-enrichment-backlog.md`. Execution owned by `project_scope/silver-field-capture-expansion-plan.md`.
+
 ### Skipped (not eligible for capture)
 
 - `fieldname`, `newvalue`, `oldvalue` — value-tracking audit-history endpoint only; out of scope for current data model
-- `productdescriptionindicator`, `distributionpatternindicator`, `recallreasonindicator`, `codeinfoindicator` — UI expansion flags ("show more…" toggles), not content
+- `productdescriptionindicator`, `distributionpatternindicator`, `recallreasonindicator`, `codeinfoindicator` — UI expansion flags ("show more…" toggles), not content (empirically confirmed 2026-06-03, K0.3: `indicator='true' ⟺ short present`, 0 exceptions / 60 sampled)
 
 ## CPSC
 

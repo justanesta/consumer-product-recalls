@@ -29,6 +29,7 @@ with cpsc_events as (
         source_recall_id,
         announced_at,
         published_at,
+        cast(null as timestamptz)              as first_posted_at,
         title,
         description                            as recall_reason,
         url,
@@ -100,6 +101,9 @@ fda_events as (
         -- contract. The post-seed gate censuses null recall_initiation_dt on the
         -- null-event_lmd subset; if any exist, extend this coalesce (plan §0.1).
         coalesce(event_lmd, recall_initiation_dt)                        as published_at,
+        -- First public posting (W1b). Distinct from published_at (=event_lmd), which
+        -- drifts when FDA re-touches archived records (Finding M). NULL pre-2022-10-25.
+        posted_internet_dt                                               as first_posted_at,
         coalesce(recall_num, center_cd || '-' || recall_event_id::text)
             || ' — ' || firm_legal_nam                                   as title,
         -- Bug 1 fix: recall_reason is the defect reason (product_short_reason_txt),
@@ -184,6 +188,7 @@ usda_events as (
         source_recall_id,
         announced_at,
         coalesce(published_at, announced_at)               as published_at,
+        cast(null as timestamptz)                          as first_posted_at,
         title,
         summary                                            as recall_reason,
         url,
@@ -266,6 +271,7 @@ nhtsa_events as (
         campno                                                         as source_recall_id,
         rcdate                                                         as announced_at,
         coalesce(datea, rcdate)                                        as published_at,
+        cast(null as timestamptz)                                      as first_posted_at,
         campno || ' — ' || mfgname                                     as title,
         desc_defect                                                    as recall_reason,
         cast(null as text)                                             as url,
@@ -342,6 +348,7 @@ uscg_events as (
         source_recall_id,
         announced_at,
         coalesce(last_date, announced_at)                              as published_at,
+        cast(null as timestamptz)                                      as first_posted_at,
         coalesce(company_name, mic, source_recall_id)
             || ' — ' || coalesce(model_name, '(no model)')             as title,
         coalesce(problem_1, problem_2)                                 as recall_reason,

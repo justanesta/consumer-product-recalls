@@ -58,6 +58,35 @@ sources:
       - name: fda_recalls_rejected
         description: Quarantine table for FDA records that failed validation or invariant checks (ADR 0013).
         loaded_at_field: rejected_at
+      - name: fda_press_releases_bronze
+        description: >
+          One row per (source_recall_id, press_release_url) press release, landed by
+          src.extractors.fda_press_release.FdaPressReleaseExtractor from the Tier-3 lookup
+          GET /search/pressreleaseurls/{eventid} (capture-expansion (b) PR). source_recall_id
+          = RECALLEVENTID (the event); M:1 to the recall event. Empty events produce no rows.
+          No freshness block — not yet cron-scheduled (Phase 7), and the incremental delta is
+          routinely empty, so a freshness gate would false-warn.
+        loaded_at_field: extraction_timestamp
+        columns:
+          - name: source_recall_id
+            description: FDA RECALLEVENTID — the event this press release belongs to.
+            tests:
+              - not_null
+          - name: press_release_url
+            description: Press-release URL — the second identity field (M:1 to the event).
+            tests:
+              - not_null
+          - name: content_hash
+            description: SHA-256 of canonicalized record payload (ADR 0007). Dedup key.
+            tests:
+              - not_null
+          - name: extraction_timestamp
+            description: When the extractor wrote this row.
+            tests:
+              - not_null
+      - name: fda_press_releases_rejected
+        description: Quarantine table for FDA press-release records that failed validation (ADR 0013).
+        loaded_at_field: rejected_at
 
   - name: usda
     description: Bronze layer for USDA FSIS recalls, loaded by src.extractors.usda.UsdaExtractor.
@@ -289,3 +318,39 @@ sources:
       - name: uscg_manufacturer_details_rejected
         description: Quarantine table for USCG manufacturer-detail records that failed validation or invariant checks (ADR 0013).
         loaded_at_field: rejected_at
+
+  - name: enrichment
+    description: >
+      Derived (non-bronze) tables written by Python enrichment steps, not by an
+      extractor. Phase 6b firm entity resolution. schema=public matches the
+      alembic-created table (migration 0024); the silver firm / recall_event_firm
+      models LEFT JOIN firm_crosswalk for the additive canonical_firm_id (PR 6b.4).
+    schema: public
+    tables:
+      - name: firm_crosswalk
+        description: >
+          Cross-source firm-resolution crosswalk: one row per firm_id
+          (= md5(normalized_name) from silver firm.sql) mapping it to its cluster
+          representative canonical_firm_id. Written by the `recalls resolve-firms`
+          CLI (PR 6b.4, USER-run): deterministic FEI/succession forced-merges +
+          RapidFuzz edit-distance clustering. Created empty by migration 0024;
+          0 rows until 6b.4 runs the resolver. No freshness block — it is rebuilt
+          on demand, not on a cron cadence.
+        columns:
+          - name: firm_id
+            description: md5(normalized_name) — the per-name firm key from firm.sql. Natural PK.
+            tests:
+              - not_null
+              - unique
+          - name: canonical_firm_id
+            description: The cluster representative's firm_id; equals firm_id for singletons.
+            tests:
+              - not_null
+          - name: match_confidence
+            description: Resolution path (e.g. 'fei_exact', 'rapidfuzz_high', 'singleton').
+            tests:
+              - not_null
+          - name: resolver_version
+            description: Blocking-key + threshold config the CLI used, for auditable rebuilds.
+            tests:
+              - not_null
