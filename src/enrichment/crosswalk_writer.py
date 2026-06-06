@@ -35,6 +35,7 @@ the silver models, so the JOIN keys match.
 from __future__ import annotations
 
 import hashlib
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -47,6 +48,7 @@ from src.enrichment.firm_normalization import (
     extract_firm_dba,
     extract_paren_aliases,
 )
+from src.enrichment.never_merge import NEVER_MERGE
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -272,10 +274,12 @@ def apply_clustering(
         rollup=rollup,
         typo_threshold=typo_threshold,
         rollup_threshold=rollup_threshold,
+        forbid=NEVER_MERGE,
     )
 
+    # v4 (6b.6): place/generic Tier-2 denylist split + never_merge override + identical-set guard.
     tiers = ("0" if fei_merge else "") + "1" + ("2" if rollup else "")
-    version = f"allsrc-tier{tiers}-roll{int(rollup_threshold)}-v3"
+    version = f"allsrc-tier{tiers}-roll{int(rollup_threshold)}-v4"
     fei_merged = fuzzy_merged = 0
     for r in rows:
         r["resolver_version"] = version
@@ -342,3 +346,41 @@ def resolve_firm_crosswalk(
         fei_gated=fei_gated,
         dry_run=dry_run,
     )
+
+
+# Every crosswalk row in a canonical that used the Tier-2 (rapidfuzz_rollup) path — the reviewable
+# universe (6b.6 audit). Pulls all members of a rollup-bearing canonical (incl. its name_variant
+# members) so the review sees the whole cluster.
+_ROLLUP_CLUSTERS = sa.text(
+    """
+    select clean_name, canonical_firm_id, canonical_name, match_score
+    from firm_crosswalk
+    where canonical_firm_id in (
+        select canonical_firm_id from firm_crosswalk where match_confidence = 'rapidfuzz_rollup'
+    )
+    """
+)
+
+
+def audit_rollup_clusters(
+    engine: Engine, *, reviewed_ok: frozenset[str] = frozenset()
+) -> list[fr.RollupReview]:
+    """Read firm_crosswalk and rank its Tier-2 clusters by false-merge suspicion (6b.6 review loop).
+
+    Groups the rollup-bearing clusters by ``canonical_firm_id``, collects DISTINCT clean names + the
+    rollup score, and delegates the risk ranking to ``firm_resolution.review_rollup_clusters``.
+    ``reviewed_ok`` (confirmed-legit cluster signatures) drop out, so the report shows only the
+    NEW/unreviewed merges. Read-only — feeds the ``recalls audit-firm-rollups`` report + GHA cron.
+    """
+    by_canon: dict[str, dict[str, float | None]] = defaultdict(dict)
+    canon_name: dict[str, str] = {}
+    with engine.connect() as conn:
+        for row in conn.execute(_ROLLUP_CLUSTERS):
+            cid = str(row.canonical_firm_id)
+            name = str(row.clean_name)
+            score = float(row.match_score) if row.match_score is not None else None
+            if name not in by_canon[cid] or by_canon[cid][name] is None:
+                by_canon[cid][name] = score  # prefer a non-null rollup score for the name
+            canon_name.setdefault(cid, str(row.canonical_name))
+    clusters = [(canon_name[cid], list(members.items())) for cid, members in by_canon.items()]
+    return fr.review_rollup_clusters(clusters, reviewed_ok=reviewed_ok)

@@ -89,6 +89,36 @@
 > Tier 0 (`fei_resolve`) is retained + tested but off, for a future *establishment* dimension
 > (keyed on FEI directly) + the FDA FEI portal API. resolver_version → `allsrc-tier{12|1|012}-v3`.
 
+> **Amendment 2026-06-05 (6b.6 — Tier-2 precision tightening + scheduled review loop):** a
+> full-corpus rollup audit (24,204 firms) confirmed no over-merge HUBS (largest legit cluster 32,
+> Kawasaki) but a ~4% small-cluster false-merge tail in `rapidfuzz_rollup`, in four classes — three
+> fixed here, the fourth made reviewable:
+> - **Place compounds** the gazetteer missed (`Mountain VIEW`, `LONE Star`, `HUDSON River`, `THIRD
+>   Coast`, `RHODE Island`, `GOLD Coast`) → added to `place_words.py`.
+> - **Generic-business 2-token coincidence** (`Great American MARKETING` + `Great Lakes …MARKETING`;
+>   `Creative Food CONCEPTS` + `Creative Consumer CONCEPTS`) → a new `GENERIC_WORDS` set folded into
+>   the **Tier-2 refusal only**. *Load-bearing nuance:* it must NOT touch Tier-1's identical-set merge
+>   — folding generics there would stop `Quality Foods` + `Quality Foods Inc` (same firm). So Tier 1
+>   refuses on `PLACE_WORDS`; Tier 2 refuses on `PLACE_WORDS | GENERIC_WORDS`.
+> - **Anagram acronyms** (`I.T.S.` {I,T,S} / `S.I.T.` {S,I,T} — identical set AND `token_sort_ratio`
+>   = 100 on the sorted letters) → both Tier-1 paths now require ≥1 multi-char distinctive token
+>   (`A.O. Smith` still merges via SMITH).
+> - **Two-real-token coincidence** (`Eagle Family` Stores / Foods; `General Parts` / `General
+>   Trailer Parts`) — neither token is denylistable. Added `never_merge.py`, a curated do-not-merge
+>   pair-list (the symmetric counterpart to the FEI `must_link`); `cluster_names(forbid=…)` refuses
+>   the direct pair.
+>
+> The **cross-source-downweight** idea (raise the bar for merges spanning regulatory sources) was
+> tested and **rejected on evidence**: 82% of rollups are within-source, and the cross-source ones
+> skew legit-large (American Honda, Tyson) — the downweight would reach ~20 false merges while risking
+> the headline cross-source value; token *genericness* (source-independent) is the real lever.
+>
+> The two-real-token residual + any new coincidence is surfaced, not silently accepted: a
+> `recalls audit-firm-rollups` report ranks rollup clusters by suspicion (low distinctive-token
+> Jaccard / no rare anchor / borderline score), a `reviewed_ok` allowlist shrinks the queue, and a
+> monthly GHA cron (`firm-rollup-audit.yml`) opens a tracking issue when the high-risk tally spikes —
+> the **scheduled manual review loop** (operations.md). resolver_version → `…-v4`.
+
 ## Context
 
 The firm dimension (ADR 0002) dedups firms by exact normalized name (`md5(upper(trim(name)))`).

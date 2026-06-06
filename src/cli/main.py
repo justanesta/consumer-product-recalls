@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import csv
+import os
 from datetime import date
 from importlib.metadata import version as _pkg_version
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import typer
@@ -21,7 +24,7 @@ from src.config.source_registry import (
     EXTRACTOR_BY_SOURCE_NAME,
     build_extractor_kwargs,
 )
-from src.enrichment.crosswalk_writer import resolve_firm_crosswalk
+from src.enrichment.crosswalk_writer import audit_rollup_clusters, resolve_firm_crosswalk
 
 if TYPE_CHECKING:
     from src.extractors._base import Extractor
@@ -604,6 +607,103 @@ def resolve_firms(
         f"aliased={summary.alias_count} fei_merged={summary.fei_merged} "
         f"fuzzy_merged={summary.fuzzy_merged} fei_gated={summary.fei_gated}"
     )
+
+
+def _load_reviewed_ok(path: Path) -> frozenset[str]:
+    """Confirmed-legit cluster signatures (one per line; blank / #-comment lines ignored)."""
+    if not path.exists():
+        return frozenset()
+    return frozenset(
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+
+
+@app.command(name="audit-firm-rollups")
+def audit_firm_rollups(
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Where to write the ranked review CSV."),
+    ] = Path("data/exploratory/cross_source/firm_rollup_review.csv"),
+    reviewed_ok: Annotated[
+        Path,
+        typer.Option(
+            "--reviewed-ok",
+            help="Allowlist of confirmed-legit cluster signatures (one per line; # comments) — "
+            "filtered out so each cycle shows only NEW merges.",
+        ),
+    ] = Path("documentation/audit/firm_rollup_reviewed_ok.txt"),
+    low_score: Annotated[
+        float,
+        typer.Option(
+            "--low-score",
+            help="A rollup whose lowest score is below this (or min Jaccard < 0.5) counts as "
+            "high-risk for the scheduled-alert tally.",
+        ),
+    ] = 95.0,
+) -> None:
+    """Rank Tier-2 (rapidfuzz_rollup) firm clusters by false-merge suspicion for manual review.
+
+    The 6b.6 precision review loop (operations.md "Firm resolution review loop"): reads
+    ``firm_crosswalk``, ranks every rollup cluster by how WEAK the merge is (low distinctive-token
+    overlap / no rare anchor / borderline score), drops the ``--reviewed-ok`` allowlist, and writes
+    a CSV most-suspect first. A confirmed FALSE merge is fixed by editing ``place_words.py`` /
+    ``GENERIC_WORDS`` / ``never_merge.py`` then re-resolving; a confirmed-LEGIT cluster's signature
+    goes into ``--reviewed-ok``. Read-only. Run after ``resolve-firms``; the GHA cron runs it
+    monthly and opens an issue when the high-risk tally spikes.
+    """
+    configure_logging()
+    settings = Settings()  # type: ignore[call-arg]
+    engine = make_engine(settings.neon_database_url.get_secret_value())
+    ok = _load_reviewed_ok(reviewed_ok)
+    reviews = audit_rollup_clusters(engine, reviewed_ok=ok)
+    high_risk = [
+        r
+        for r in reviews
+        if r.min_jaccard < 0.5 or (r.min_score is not None and r.min_score < low_score)
+    ]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(
+            [
+                "risk_rank",
+                "canonical_name",
+                "n_members",
+                "min_jaccard",
+                "weakest_anchor_df",
+                "min_score",
+                "shared_tokens",
+                "members",
+                "signature",
+            ]
+        )
+        for i, r in enumerate(reviews, 1):
+            writer.writerow(
+                [
+                    i,
+                    r.canonical_name,
+                    r.n_members,
+                    r.min_jaccard,
+                    r.weakest_anchor_df,
+                    "" if r.min_score is None else r.min_score,
+                    " | ".join(r.shared_tokens),
+                    " || ".join(r.members),
+                    r.signature,
+                ]
+            )
+    typer.echo(
+        f"audit-firm-rollups: rollup_clusters={len(reviews)} high_risk={len(high_risk)} "
+        f"reviewed_ok={len(ok)} -> {out}"
+    )
+    # GHA cron: surface the high-risk tally so the workflow can open/refresh an alert issue.
+    gh_out = os.environ.get("GITHUB_OUTPUT")
+    if gh_out:
+        with Path(gh_out).open("a", encoding="utf-8") as fh:
+            fh.write(f"high_risk_count={len(high_risk)}\n")
+            fh.write(f"rollup_clusters={len(reviews)}\n")
+            fh.write(f"report_path={out}\n")
 
 
 if __name__ == "__main__":  # pragma: no cover

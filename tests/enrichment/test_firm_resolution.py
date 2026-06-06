@@ -12,12 +12,15 @@ from src.enrichment.firm_resolution import (
     _BASE_STOP,
     block_key,
     cluster_names,
+    cluster_signature,
     document_frequencies,
     fei_resolve,
     generic_stopwords,
     pick_canonical,
+    review_rollup_clusters,
 )
-from src.enrichment.place_words import PLACE_WORDS
+from src.enrichment.never_merge import NEVER_MERGE
+from src.enrichment.place_words import GENERIC_WORDS, PLACE_WORDS
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────────
@@ -138,3 +141,78 @@ def test_singletons_kept():
     asg = cluster_names(["WHOLLY DISTINCT FIRM"], rollup=True)
     assert asg["WHOLLY DISTINCT FIRM"].method == "singleton"
     assert asg["WHOLLY DISTINCT FIRM"].score is None
+
+
+# --- 6b.6 precision fixes -------------------------------------------------
+
+
+def test_tier1_identical_set_requires_a_multichar_token():
+    # I.T.S. {I,T,S} and S.I.T. {S,I,T} have the SAME single-char set -> must NOT identical-merge
+    # (the anagram-acronym class); but A.O. SMITH variants share SMITH and DO merge.
+    anagram = cluster_names(["I.T.S.", "S.I.T."])
+    assert len({a.canonical for a in anagram.values()}) == 2
+    real = cluster_names(["A.O. SMITH", "A.O. SMITH INC"])
+    assert len({a.canonical for a in real.values()}) == 1
+
+
+def test_tier2_generic_word_guard_blocks_business_coincidence():
+    # CREATIVE + CONCEPTS are both in GENERIC_WORDS -> a rollup resting only on them is refused...
+    assert {"CREATIVE", "CONCEPTS"} <= GENERIC_WORDS
+    coincidence = cluster_names(
+        ["CREATIVE FOOD CONCEPTS", "CREATIVE CONSUMER CONCEPTS"], rollup=True
+    )
+    assert len({a.canonical for a in coincidence.values()}) == 2
+    # ...but a genuine shared brand token (HEARTHSIDE) alongside a generic one still merges.
+    real = cluster_names(["HEARTHSIDE FOOD SOLUTIONS", "HEARTHSIDE SOLUTIONS"], rollup=True)
+    assert len({a.canonical for a in real.values()}) == 1
+
+
+def test_generic_guard_does_not_touch_tier1_identical_set():
+    # All-generic name, corp-form variant -> still merges (Tier 1 uses `place` only, not generic).
+    asg = cluster_names(["QUALITY FOODS", "QUALITY FOODS INC"])
+    assert len({a.canonical for a in asg.values()}) == 1
+
+
+def test_typo_guard_blocks_generic_padded_short_token_diff():
+    # INDUSTRIES is high-df (padded) -> dropped from the distinctive scoring form, so the typo on
+    # the full corp-form string ("K S INDUSTRIES" ~ "K L INDUSTRIES", token_sort ~93) no longer
+    # carries once the real S/L difference is judged on the distinctive form alone: K&S != K L.
+    names = [
+        "K S INDUSTRIES",
+        "K L INDUSTRIES",
+        "ALPHA INDUSTRIES",
+        "BETA INDUSTRIES",
+        "GAMMA INDUSTRIES",
+    ]
+    asg = cluster_names(names, generic_df_cutoff=4)  # INDUSTRIES df 5 > 4 -> generic
+    assert asg["K S INDUSTRIES"].canonical != asg["K L INDUSTRIES"].canonical
+
+
+def test_forbid_pair_blocks_an_otherwise_certain_merge():
+    names = ["GRACO", "GRACO INC"]  # identical distinctive set {GRACO} -> certain Tier-1 merge
+    assert len({a.canonical for a in cluster_names(names).values()}) == 1
+    forbid = frozenset({frozenset({"GRACO", "GRACO INC"})})
+    assert len({a.canonical for a in cluster_names(names, forbid=forbid).values()}) == 2
+
+
+def test_never_merge_seed_splits_its_pairs_case_insensitively():
+    asg = cluster_names(
+        ["Eagle Family Discount Stores", "EAGLE FAMILY FOODS GROUP LLC"],
+        rollup=True,
+        forbid=NEVER_MERGE,
+    )
+    assert len({a.canonical for a in asg.values()}) == 2
+
+
+def test_review_rollup_clusters_ranks_low_jaccard_first_and_honors_reviewed_ok():
+    # C diverges more (jaccard 0.33) than D (0.5) -> C ranks first despite a higher score.
+    clusters = [
+        ("D", [("FOO BAR BAZ", 91.0), ("FOO BAR QUX", 91.0)]),
+        ("C", [("ALPHA BETA GAMMA", 98.0), ("ALPHA BETA DELTA EPSILON ZETA", 98.0)]),
+    ]
+    ranked = review_rollup_clusters(clusters)
+    assert [r.canonical_name for r in ranked] == ["C", "D"]
+    assert ranked[0].min_jaccard < ranked[1].min_jaccard
+    # reviewed_ok drops a confirmed-legit cluster from the next report.
+    ok = frozenset({cluster_signature(["ALPHA BETA GAMMA", "ALPHA BETA DELTA EPSILON ZETA"])})
+    assert [r.canonical_name for r in review_rollup_clusters(clusters, reviewed_ok=ok)] == ["D"]

@@ -181,7 +181,7 @@ def test_apply_clustering_name_grain_default():
     )
     assert by["BloodCenter of Wisconsin"]["match_confidence"] == "exact_name"
     assert by["Zzz Unique Firm"]["firm_id"] == by["Zzz Unique Firm"]["canonical_firm_id"]
-    assert all(r["resolver_version"] == "allsrc-tier12-roll90-v3" for r in rows)
+    assert all(r["resolver_version"] == "allsrc-tier12-roll90-v4" for r in rows)
 
 
 # ── apply_clustering: Tier 0 FEI is opt-in (deferred) ────────────────────────────
@@ -195,7 +195,7 @@ def test_apply_clustering_fei_merge_opt_in():
         == by["Blood Ctr Wisc"]["canonical_firm_id"]
     )
     assert by["BloodCenter of Wisconsin"]["match_confidence"] == "fei_exact"
-    assert all(r["resolver_version"] == "allsrc-tier012-roll90-v3" for r in rows)
+    assert all(r["resolver_version"] == "allsrc-tier012-roll90-v4" for r in rows)
 
 
 def test_apply_clustering_no_rollup_keeps_entity_rollup_split():
@@ -207,5 +207,5 @@ def test_apply_clustering_no_rollup_keeps_entity_rollup_split():
     )
     apply_clustering(rows, [], rollup=False)  # Tier 2 off
     assert rows[0]["canonical_firm_id"] != rows[1]["canonical_firm_id"]
-    assert all(r["resolver_version"] == "allsrc-tier1-roll90-v3" for r in rows)
+    assert all(r["resolver_version"] == "allsrc-tier1-roll90-v4" for r in rows)
     assert rows[0]["match_confidence"] == "exact_name"

@@ -33,6 +33,7 @@ from the Tier-2 >=2-token count (so shared initials can't anchor a rollup).
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -40,7 +41,7 @@ from typing import TYPE_CHECKING
 
 from rapidfuzz.fuzz import token_set_ratio, token_sort_ratio
 
-from src.enrichment.place_words import PLACE_WORDS
+from src.enrichment.place_words import GENERIC_WORDS, PLACE_WORDS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -234,6 +235,7 @@ def _classify(
     typo_threshold: float,
     rollup_threshold: float,
     place: frozenset[str],
+    weak: frozenset[str],
 ) -> tuple[str | None, float | None]:
     """Decide if/how two same-block names merge — strongest (safest) tier first.
 
@@ -241,19 +243,38 @@ def _classify(
     ``bform``) so content words that distinguish firms are kept (``Sun Valley Foods`` stays
     {SUN,VALLEY,FOODS}, not {SUN}). Tier 2 uses the high-df-GENERIC-dropped multi-char tokens
     (``dmulti`` / ``gform``) so a rollup rests on genuinely-distinctive shared tokens.
+
+    Two denylists, applied at DIFFERENT tiers (6b.6): Tier 1's identical-set refusal uses ``place``
+    ALONE (folding the generic-business words in would stop ``Quality Foods`` + ``Quality Foods
+    Inc`` — same firm, all-generic name — from merging). Tier 2's rollup refusal uses ``weak`` =
+    ``place | GENERIC_WORDS`` (a rollup resting only on a place OR generic-business phrase is the
+    2-token-coincidence false-merge). Tier 1 also requires >=1 MULTI-CHAR distinctive token, so two
+    all-single-char acronyms with the same letter set (``I.T.S.`` {I,T,S} / ``S.I.T.`` {S,I,T}) do
+    NOT merge, while ``A.O. Smith`` still does (it has SMITH).
     """
     if not dtok[a] or not dtok[b]:
         return None, None
+    # Both Tier-1 paths require a MULTI-CHAR distinctive token (the I.T.S./S.I.T. anagram class is
+    # all single-char: identical-set {I,T,S}=={S,I,T}, AND token_sort_ratio=100 on the sorted
+    # letters — so the guard must gate the typo path too). A.O. SMITH still merges (it has SMITH).
+    multichar_a = any(len(t) > 1 for t in dtok[a])
+    multichar_b = any(len(t) > 1 for t in dtok[b])
     # Tier 1: identical distinctive set (punct / case / spacing / corp-form) — but not a bare
-    # place/compound phrase ("Sun" must not absorb "Sun" / "Sun Valley").
-    if dtok[a] == dtok[b] and not dtok[a].issubset(place):
+    # place/compound phrase.
+    if dtok[a] == dtok[b] and not dtok[a].issubset(place) and multichar_a:
         return "name_variant_exact", None
-    ts = token_sort_ratio(bform[a], bform[b])
-    if ts >= typo_threshold:  # Tier 1: spelling typo
-        return "name_typo_high", float(ts)
-    if rollup:  # Tier 2: >=2 shared distinctive multi-char tokens, not purely a place phrase
+    if multichar_a and multichar_b:  # Tier 1: spelling typo
+        ts = token_sort_ratio(bform[a], bform[b])
+        # The typo must ALSO hold on the distinctive (generic-dropped) form, so a long shared
+        # GENERIC token (INDUSTRIES, INTERNATIONAL) can't carry a merge that masks a real diff in
+        # the short distinctive tokens ("K&S Industries"/"K L Industries"; "K-Tel"/"K-Tool").
+        if ts >= typo_threshold and token_sort_ratio(gform[a], gform[b]) >= typo_threshold:
+            return "name_typo_high", float(ts)
+    if (
+        rollup
+    ):  # Tier 2: >=2 shared distinctive multi-char tokens, not purely a place/generic phrase
         shared = dmulti[a] & dmulti[b]
-        if len(shared) >= 2 and not shared.issubset(place):
+        if len(shared) >= 2 and not shared.issubset(weak):
             r = token_set_ratio(gform[a], gform[b])
             if r >= rollup_threshold:
                 return "rapidfuzz_rollup", float(r)
@@ -269,6 +290,8 @@ def cluster_names(
     rollup_threshold: float = ROLLUP_THRESHOLD,
     generic_df_cutoff: int = GENERIC_DF_CUTOFF,
     place: frozenset[str] = PLACE_WORDS,
+    generic: frozenset[str] = GENERIC_WORDS,
+    forbid: frozenset[frozenset[str]] = frozenset(),
 ) -> dict[str, ClusterAssignment]:
     """Cluster distinct clean names; return one ClusterAssignment per name.
 
@@ -276,6 +299,11 @@ def cluster_names(
     method). Then within each distinctive-token block, pairs merge by ``_classify`` (Tier 1 always;
     Tier 2 only when ``rollup``). Each node keeps the strongest reason it was merged by; nodes that
     never merge are ``singleton``.
+
+    ``forbid`` is the ``never_merge.NEVER_MERGE`` override (case-insensitive name pairs as
+    frozensets): a forbidden pair is never unioned — the manual lever for the two-real-token
+    coincidence the ``place`` / ``generic`` denylists cannot refuse (6b.6 review loop). ``generic``
+    is folded with ``place`` for the Tier-2 refusal only (see ``_classify``).
     """
     nodes = list(dict.fromkeys(names))
     present = set(nodes)
@@ -293,7 +321,7 @@ def cluster_names(
             score[node] = s
 
     for a, b in must_link:
-        if a in present and b in present:
+        if a in present and b in present and frozenset({a.upper(), b.upper()}) not in forbid:
             uf.union(a, b)
             _bump(a, "fei_exact", None)
             _bump(b, "fei_exact", None)
@@ -306,6 +334,7 @@ def cluster_names(
     dtok = {n: frozenset(bform[n].split()) for n in nodes}
     gform = {n: _scoring_form(n, gstop) for n in nodes}  # generic-dropped (Tier 2 scoring)
     dmulti = {n: frozenset(t for t in gform[n].split() if len(t) > 1) for n in nodes}
+    weak = place | generic  # Tier-2 refusal denylist (Tier 1 still uses `place` alone)
     blocks: dict[str, list[str]] = defaultdict(list)
     for n in nodes:
         blocks[block_key(n, gstop)].append(n)
@@ -319,7 +348,11 @@ def cluster_names(
                 continue
             for j in range(i + 1, len(members)):
                 b = members[j]
-                if not dtok[b] or uf.find(a) == uf.find(b):
+                if (
+                    not dtok[b]
+                    or uf.find(a) == uf.find(b)
+                    or frozenset({a.upper(), b.upper()}) in forbid
+                ):
                     continue
                 m, s = _classify(
                     a,
@@ -332,6 +365,7 @@ def cluster_names(
                     typo_threshold=typo_threshold,
                     rollup_threshold=rollup_threshold,
                     place=place,
+                    weak=weak,
                 )
                 if m is None:
                     continue
@@ -352,3 +386,99 @@ def cluster_names(
             s = score[n] if m in _SCORE_METHODS else None
             out[n] = ClusterAssignment(canonical=canon, method=m, score=s)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Tier-2 review audit (6b.6 precision review loop) — surfaces rollup clusters
+# for the scheduled manual review documented in operations.md. Pure; the I/O
+# (read firm_crosswalk, write the CSV) lives in crosswalk_writer / the CLI.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RollupReview:
+    """One Tier-2 (``rapidfuzz_rollup``) cluster flagged for manual review, with risk features."""
+
+    signature: str  # stable id of the member-SET (the reviewed_ok key)
+    canonical_name: str
+    n_members: int
+    members: tuple[str, ...]
+    shared_tokens: tuple[str, ...]  # the weakest pair's shared distinctive tokens
+    min_jaccard: float  # lowest pairwise distinctive-token Jaccard; LOW = members diverge
+    weakest_anchor_df: int  # weakest pair's rarest shared token df; HIGH = no rare anchor
+    min_score: float | None  # lowest rollup token_set_ratio; near-threshold = borderline
+
+
+def cluster_signature(names: Iterable[str]) -> str:
+    """Stable id for a cluster's member-SET (case/whitespace-folded) — the reviewed_ok key."""
+    joined = "\n".join(sorted({n.upper().strip() for n in names}))
+    return hashlib.md5(joined.encode("utf-8")).hexdigest()  # noqa: S324
+
+
+def review_rollup_clusters(
+    clusters: Sequence[tuple[str, Sequence[tuple[str, float | None]]]],
+    *,
+    generic_df_cutoff: int = GENERIC_DF_CUTOFF,
+    reviewed_ok: frozenset[str] = frozenset(),
+) -> list[RollupReview]:
+    """Rank Tier-2 clusters by false-merge suspicion for the audit report (pure).
+
+    ``clusters`` are ``(canonical_name, [(clean_name, match_score), ...])`` — the rollup-bearing
+    clusters read from ``firm_crosswalk``. A LEGIT rollup shares a RARE brand token and its members
+    are near-identical; a FALSE one rests on common tokens and the members diverge. Three signals:
+      * ``min_jaccard``       — lowest pairwise distinctive-token Jaccard; LOW = members diverge.
+      * ``weakest_anchor_df`` — weakest pair's rarest shared token's df; HIGH = no rare anchor.
+      * ``min_score``         — lowest rollup ``token_set_ratio``; borderline near the 90 floor.
+    Ranked most-suspect first (low jaccard, high anchor-df, low score). ``reviewed_ok`` signatures
+    drop out, so each cycle shows only NEW/unreviewed merges.
+    """
+    all_names = [name for _, members in clusters for name, _ in members]
+    df = document_frequencies(all_names)
+    gstop = generic_stopwords(df, generic_df_cutoff)
+    reviews: list[RollupReview] = []
+    for canonical_name, members in clusters:
+        names = sorted({n for n, _ in members})
+        if len(names) < 2:
+            continue
+        sig = cluster_signature(names)
+        if sig in reviewed_ok:
+            continue
+        dmulti = {
+            n: frozenset(t for t in _scoring_form(n, gstop).split() if len(t) > 1) for n in names
+        }
+        min_jaccard = 1.0
+        weakest_anchor_df = -1
+        weakest_shared: tuple[str, ...] = ()
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                ti, tj = dmulti[names[i]], dmulti[names[j]]
+                shared = ti & tj
+                union = ti | tj
+                if not shared or not union:
+                    continue
+                jac = len(shared) / len(union)
+                min_jaccard = min(min_jaccard, jac)
+                rarest = min(df[t] for t in shared)
+                if rarest > weakest_anchor_df:
+                    weakest_anchor_df = rarest
+                    weakest_shared = tuple(sorted(shared))
+        scores = [s for _, s in members if s is not None]
+        min_score = min(scores) if scores else None
+        reviews.append(
+            RollupReview(
+                signature=sig,
+                canonical_name=canonical_name,
+                n_members=len(names),
+                members=tuple(names),
+                shared_tokens=weakest_shared,
+                min_jaccard=round(min_jaccard, 3),
+                weakest_anchor_df=weakest_anchor_df,
+                min_score=min_score,
+            )
+        )
+
+    def _rank(r: RollupReview) -> tuple[float, int, float]:
+        return (r.min_jaccard, -r.weakest_anchor_df, 100.0 if r.min_score is None else r.min_score)
+
+    reviews.sort(key=_rank)
+    return reviews

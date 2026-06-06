@@ -81,6 +81,7 @@ _FEATURES = {
     "PRAIRIE",
     "CANYON",
     "DESERT",
+    "VIEW",  # Mountain View (6b.6 review)
     "COAST",
     "COASTAL",
     "GULF",
@@ -110,6 +111,8 @@ _REGION = {
     "ROCKY",
     "GREAT",
     "GOLDEN",
+    "GOLD",  # Gold Coast (6b.6 review)
+    "HUDSON",  # Hudson River/Valley (6b.6 review)
     "TROPICAL",
     "SUNNY",
     "SUN",
@@ -139,6 +142,8 @@ _REGION = {
 _COMPOUND = {
     "FOUR",
     "FIVE",
+    "LONE",  # Lone Star (6b.6 review)
+    "THIRD",  # Third Coast (6b.6 review)
     "STAR",
     "STARS",
     "SEASONS",
@@ -199,6 +204,7 @@ _STATES = {
     "JERSEY",
     "MEXICO",
     "YORK",
+    "RHODE",  # Rhode Island (6b.6 review)
     "CAROLINA",
     "DAKOTA",
     "OHIO",
@@ -224,3 +230,40 @@ _STATES = {
 }
 
 PLACE_WORDS: frozenset[str] = frozenset(_DIRECTIONAL | _FEATURES | _REGION | _COMPOUND | _STATES)
+
+# Generic BUSINESS words — the non-place analog of the place denylist (6b.6 review, 2026-06-05).
+# The full-corpus rollup review surfaced a second 2-token-coincidence mode that is not geographic:
+# unrelated firms sharing only a generic business phrase ("Great American MARKETING" + "Great Lakes
+# Wholesale MARKETING"; "Creative Food CONCEPTS" + "Creative Consumer CONCEPTS"; "Central Valley Ag
+# COOPERATIVE" + "Central Connecticut COOPERATIVE"). Like PLACE_WORDS, these have mid-range document
+# frequency (below GENERIC_DF_CUTOFF, so the df filter misses them) and the "non-distinctive" signal
+# is semantic, not frequency-based.
+#
+# CRITICAL — these apply to **Tier 2 ONLY**, never Tier 1's identical-set merge. The Tier-2 refusal
+# uses ``PLACE_WORDS | GENERIC_WORDS``; Tier 1 uses ``PLACE_WORDS`` alone. Folding generics into the
+# Tier-1 refusal would stop ``Quality Foods`` + ``Quality Foods Inc`` (same firm, corp-form variant,
+# all-generic name) from merging — a recall regression. Safe-by-construction for Tier 2: a genuine
+# brand sharing a generic word also shares a real token (``Spectrum BRANDS`` keeps SPECTRUM), so the
+# shared set is not a subset and the merge still fires. Review-loop-maintained, like PLACE_WORDS.
+GENERIC_WORDS: frozenset[str] = frozenset(
+    {
+        "MARKETING",
+        "CONCEPTS",
+        "MATTERS",
+        "SOURCING",
+        "COOPERATIVE",
+        "CREATIVE",
+        "ADVANTAGE",
+        "SUPER",
+        "STORE",
+        "STORES",
+        "SOLUTIONS",
+        "SERVICES",
+        "GROUP",
+        "HOLDINGS",
+        "DISTRIBUTION",
+        "DISTRIBUTORS",
+        "WHOLESALE",
+        "SUPPLY",
+    }
+)

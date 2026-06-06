@@ -1,0 +1,12 @@
+# Firm-rollup review allowlist — confirmed-LEGIT Tier-2 clusters (6b.6 precision review loop).
+#
+# One cluster SIGNATURE per line (the md5 the `recalls audit-firm-rollups` report prints in its
+# `signature` column). A signature here is dropped from future reports, so each review cycle shows
+# only NEW / unreviewed rollups. Add a line when you have eyeballed a flagged cluster and confirmed
+# the merge is correct (e.g. genuine name variants of one firm). Blank lines and #-comments ignored.
+#
+# A confirmed FALSE merge does NOT go here — it gets fixed instead: a place/compound coincidence ->
+# src/enrichment/place_words.py; a generic-business coincidence -> GENERIC_WORDS in the same file;
+# a two-real-token coincidence -> a pair in src/enrichment/never_merge.py. Then re-resolve.
+#
+# Procedure + cadence: documentation/operations.md -> "Firm resolution review loop".

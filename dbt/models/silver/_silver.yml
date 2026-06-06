@@ -243,13 +243,12 @@ models:
           Firm-resolution path/quality for this bridge row (Phase 6b). Defaults to
           'exact_name'; per-source PRs overwrite it (6b.1 CPSC, 6b.2 USDA, 6b.4
           RapidFuzz, 6b.5 USCG MIC time-sensitivity). The full namespaced
-          vocabulary is single-homed below at severity=warn so PRs can populate
-          their values incrementally without breaking the build; 6b.6 promotes it
-          to error once every source's value set has landed.
+          vocabulary is single-homed below; 6b.6 promoted it to **error** now that
+          every source's value set has landed (6b.0–6b.5) — an unexpected label is a bug.
         tests:
           - accepted_values:
               config:
-                severity: warn
+                severity: error
               arguments:
                 values:
                   - exact_name
