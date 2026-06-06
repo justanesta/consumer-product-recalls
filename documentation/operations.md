@@ -270,11 +270,22 @@ The resolver ships **two name tiers** (full method in [architecture.md](architec
 
 Tier 2 is not self-healing — a new ingest can introduce a fresh 2-token coincidence — so review on a cadence, surfacing only the **incremental change**. The review is driven by a *ranked report*, not a raw cluster dump.
 
-1. **Surface.** Run the audit (read-only; after `resolve-firms`):
+**Who runs what.** Resolving is **manual** (you, locally, against prod — the procedure above). Only the *audit* is **scheduled** (CI, read-only): the cron never re-resolves — it just re-checks the standing `firm_crosswalk` and pings you when suspicious merges pile up. The rhythm:
+
+```
+daily              : extractors → bronze → silver        (firm_crosswalk UNCHANGED — resolve is manual)
+when you choose to : recalls resolve-firms → dbt build --select firm recall_event_firm
+                     (the ONLY thing that introduces new rollup clusters)
+monthly (CI cron)  : audit reads prod crosswalk, drops reviewed_ok sigs → opens an Issue if many high-risk remain
+on that ping       : do steps 1–3, re-resolve, record the legit ones
+```
+Because the crosswalk only changes when *you* re-resolve, the monthly report is **identical between resolves** — it catches drift *after* a resolve, not in real time.
+
+1. **Surface.** Run the audit (read-only; after `resolve-firms`). The monthly cron runs this exact command against prod:
    ```bash
-   recalls audit-firm-rollups   # -> data/exploratory/cross_source/firm_rollup_review.csv
+   recalls audit-firm-rollups   # -> data/exploratory/cross_source/firm_rollup_review.csv (gitignored)
    ```
-   It ranks every `rapidfuzz_rollup` cluster by false-merge suspicion — lowest distinctive-token **Jaccard** first (members diverge), then **no rare anchor** (`weakest_anchor_df` high = the shared tokens are all common), then borderline **score**. Clusters whose signature is in `documentation/audit/firm_rollup_reviewed_ok.txt` drop out, so each cycle shows only **new / unreviewed** merges. The summary prints `high_risk` (low-score / low-overlap) — the tally the cron alerts on.
+   It ranks every `rapidfuzz_rollup` cluster by false-merge suspicion — lowest distinctive-token **Jaccard** first (members diverge), then **no rare anchor** (`weakest_anchor_df` high = the shared tokens are all common), then borderline **score**. Signatures in `documentation/audit/firm_rollup_reviewed_ok.txt` drop out, so each cycle shows only **new / unreviewed** merges. The one-liner prints `rollup_clusters` / `high_risk` / `reviewed_ok`.
 2. **Evaluate.** Eyeball the top of the CSV. `match_confidence` is `warn`-severity and the raw `firm_id` is preserved on every row, so nothing silently corrupts — a bad merge is visible and reversible by re-resolving.
 3. **Fix** — each false-merge class has one durable, version-controlled home:
 
@@ -282,12 +293,15 @@ Tier 2 is not self-healing — a new ingest can introduce a fresh 2-token coinci
    |---|---|
    | unrelated `… <place> …` firms (San Antonio, Mountain View) | add the modifier → `src/enrichment/place_words.py` |
    | unrelated `… <generic business word> …` (Marketing, Concepts, Cooperative) | add the word → `GENERIC_WORDS` in `place_words.py` (**Tier-2 only** — never Tier-1, or `Quality Foods`+`Quality Foods Inc` stops merging) |
-   | two distinct firms sharing 2 *real* tokens (Eagle Family, General Parts) | add the clean-name pair → `src/enrichment/never_merge.py` |
+   | two distinct firms sharing 2 *real* tokens (Eagle Family, General Parts) | add the clean-name pair → `never_merge.py` `_PAIRS`; to pull ONE odd firm out of a legit cluster (Best Buy Bones ≠ the Best Buy retailer), use `_APART_FROM` = `(odd, [family…])` |
    | a genuine cluster (real name variants) | record its `signature` → `firm_rollup_reviewed_ok.txt` (so it stops re-surfacing) |
    | a real brand that failed to roll **up** | a cleaner / normalization fix; FEI hub → `FEI_FANOUT_CAP` |
 
    Then re-resolve (`recalls resolve-firms` → `dbt build --select firm recall_event_firm`) and re-run the audit to confirm the tail shrank.
-4. **Cadence (scheduled).** `.github/workflows/firm-rollup-audit.yml` runs the audit against production **monthly** (and on manual dispatch), uploads the ranked CSV as an artifact, and opens/refreshes a single tracking issue when `high_risk` exceeds the alert threshold (default 25) — the "a large number popped up, go review" signal. Tune the threshold as the steady-state backlog settles.
+4. **Cadence + where to read the output.** `.github/workflows/firm-rollup-audit.yml` runs the audit against **production** (`NEON_DATABASE_URL` secret) **monthly** (07:00 UTC on the 1st) and on demand (Actions tab → *Firm Rollup Audit* → **Run workflow**; optional `alert_threshold`, default 25). Three places to read a run:
+   - **Issue** (push) — opened/refreshed *only* when `high_risk > threshold`; title *"Firm-rollup review backlog…"*, labels `data-quality` / `firm-resolution`. A single reused issue, not a pile. **This is the "go review" signal**; a quiet month means nothing new.
+   - **Artifact** (pull, every run) — the ranked CSV, uploaded as `firm-rollup-review`. Get it from Actions → the run → **Artifacts**, or `gh run download <run-id> -n firm-rollup-review`. Expires ~90 days.
+   - **Run log** — the `audit-firm-rollups: rollup_clusters=… high_risk=… reviewed_ok=…` line, no download needed.
 5. **Escalation path:** if list maintenance ever outgrows the corpus (millions of firms), graduate Tier 2 to a probabilistic linkage library (Splink) using name **+ address + source** — overkill at federal-recall scale.
 
 ---
@@ -543,4 +557,4 @@ These are config/code changes, not crosswalk edits — file them; hand-editing `
 - [Architecture Decision Records](decisions/)
 - [Development guide](development.md)
 - [ADR 0020 — Pipeline state tracking](decisions/0020-pipeline-state-tracking.md)
-- [GitHub Actions workflows](../.github/workflows/) (not yet created)
+- [GitHub Actions workflows](../.github/workflows/)

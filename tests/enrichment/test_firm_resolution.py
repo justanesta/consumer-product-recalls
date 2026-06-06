@@ -204,6 +204,21 @@ def test_never_merge_seed_splits_its_pairs_case_insensitively():
     assert len({a.canonical for a in asg.values()}) == 2
 
 
+def test_apart_from_expands_into_never_merge_pairs():
+    # `_APART_FROM` enumerates (odd, member) for every family member.
+    assert frozenset({"BEST BUY BONES INC.", "BEST BUY"}) in NEVER_MERGE
+    assert frozenset({"BEST BUY BONES INC.", "BEST BUY CO. INC."}) in NEVER_MERGE
+
+
+def test_never_merge_apart_from_isolates_odd_member_keeping_family():
+    family = ["BEST BUY", "BEST BUY CO. INC.", "BEST BUY PURCHASING LLC"]
+    asg = cluster_names([*family, "BEST BUY BONES INC."], rollup=True, forbid=NEVER_MERGE)
+    # the odd member (pet treats) stays OUT of the retailer family (which shares only BEST+BUY)...
+    assert asg["BEST BUY BONES INC."].canonical != asg["BEST BUY"].canonical
+    # ...and the retailer family still rolls up together.
+    assert len({asg[m].canonical for m in family}) == 1
+
+
 def test_review_rollup_clusters_ranks_low_jaccard_first_and_honors_reviewed_ok():
     # C diverges more (jaccard 0.33) than D (0.5) -> C ranks first despite a higher score.
     clusters = [

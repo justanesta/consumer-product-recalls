@@ -168,6 +168,8 @@ _COMPOUND = {
     "EXPRESS",
     "PRO",
     "MAX",
+    "STATE",  # Golden State / Mid-State / Tri-State (6b.6 SS-tail review 2026-06-05)
+    "TOP",  # Top Quality (6b.6 SS-tail review 2026-06-05)
 }
 
 # US state + territory names (full forms; abbreviations are 2-char and handled separately).
@@ -227,6 +229,9 @@ _STATES = {
     "CLARA",  # Santa Clara
     "VEGAS",  # Las Vegas
     "ANGELES",  # Los Angeles
+    "MAR",  # Del Mar
+    "MIGUEL",  # San Miguel (6b.6 SS-tail review 2026-06-05)
+    "ZHONGSHAN",  # Zhongshan - Chinese mfg city, pairs w/ LIGHTING (6b.6 SS-tail review 2026-06-05)
 }
 
 PLACE_WORDS: frozenset[str] = frozenset(_DIRECTIONAL | _FEATURES | _REGION | _COMPOUND | _STATES)
@@ -265,5 +270,9 @@ GENERIC_WORDS: frozenset[str] = frozenset(
         "DISTRIBUTORS",
         "WHOLESALE",
         "SUPPLY",
+        "ALL",  # All In One / All For One / All One (6b.6 SS-tail review 2026-06-05)
+        "ONE",
+        "STYLE",  # Southern Style (6b.6 SS-tail review 2026-06-05)
+        "LIGHTING",  # Zhongshan <name> Lighting (6b.6 SS-tail review 2026-06-05)
     }
 )

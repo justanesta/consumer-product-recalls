@@ -49,7 +49,9 @@ jobs:
 
       - name: Run firm-rollup audit
         id: audit
-        run: uv run recalls audit-firm-rollups --out firm_rollup_review.csv
+        # Write to the per-job temp dir, not the checked-out repo tree, so the report can never
+        # dirty `git status` or be accidentally committed (it's a derived diagnostic, not state).
+        run: uv run recalls audit-firm-rollups --out "$RUNNER_TEMP/firm_rollup_review.csv"
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
 
@@ -57,7 +59,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: firm-rollup-review
-          path: firm_rollup_review.csv
+          path: ${{ runner.temp }}/firm_rollup_review.csv
           if-no-files-found: warn
 
       - name: Open / refresh review-backlog issue on a spike
