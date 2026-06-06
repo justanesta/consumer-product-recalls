@@ -27,13 +27,14 @@
 --   * 12.4% of FEIs map to >1 normalized name (renamed/variant spellings); the
 --     firm_surviving_nam/fei columns are FDA's own succession signal for those.
 --
--- Recency for the latest-wins collapse: event_lmd (FDA's record last-modified)
--- desc, then extraction_timestamp desc, then source_recall_id for a deterministic
--- tiebreak.
+-- As of Phase 6c.4 this is the CURRENT view (dbt_valid_to is null) over the SCD-2 snapshot
+-- firm_fda_attributes_snapshot (ADR 0035 Policy C) — an additive history layer. The column
+-- contract is UNCHANGED. The latest-per-FEI collapse (DISTINCT ON ... event_lmd desc, then
+-- extraction_timestamp desc, then source_recall_id) now lives in the snapshot driver.
 
-select distinct on (firm_fei_num)
+select
     firm_fei_num,
-    nullif(trim(firm_legal_nam), '') as firm_legal_nam,
+    firm_legal_nam,
     firm_city_nam,
     firm_state_cd,
     firm_state_prvnc_nam,
@@ -43,10 +44,5 @@ select distinct on (firm_fei_num)
     firm_line2_adr,
     firm_surviving_nam,
     firm_surviving_fei
-from {{ ref('stg_fda_recalls') }}
-where firm_fei_num is not null
-order by
-    firm_fei_num,
-    event_lmd desc nulls last,
-    extraction_timestamp desc,
-    source_recall_id
+from {{ ref('firm_fda_attributes_snapshot') }}
+where dbt_valid_to is null

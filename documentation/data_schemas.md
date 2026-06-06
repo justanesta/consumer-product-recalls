@@ -60,6 +60,18 @@ Bronze tables follow the [ADR 0027](decisions/0027-bronze-storage-forced-transfo
 | `silver/recall_event_history` | `recall_event_history.sql` (Phase 6c.1) | `_silver.yml` + `recall_event_history_unit_tests.yml` + `assert_recall_event_history_real_changes.sql` | LAG() over bronze, 5 sources, per [ADR 0022](decisions/0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) + [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md); see [`silver_design_notes.md`](silver_design_notes.md) |
 | `silver/recall_lifecycle` | `recall_lifecycle.sql` (Phase 6c.2) | `_silver.yml` + `recall_lifecycle_unit_tests.yml` | 1:1 with recall_event; bronze-derived first/last_seen + edit_count (all 5 sources) + manifest-derived is_currently_active / was_ever_retracted (USDA-only v1), per [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md); see [`silver_design_notes.md`](silver_design_notes.md) |
 
+### Silver snapshots (SCD-2 history — `silver_snapshots` schema, dbt-managed, ADR 0035)
+
+dbt snapshots (`strategy='check'`) bank attribute history per stable anchor; each firm sidecar's `dbt_valid_to is null` current view is the dim, the full table is the queryable peer history (Policy C). The `silver_snapshots` schema is exempt from ADR 0007 bronze-snapshot pruning. See [`silver_design_notes.md`](silver_design_notes.md) §10.
+
+| Snapshot | dbt | Anchor | Feeds | Type |
+|---|---|---|---|---|
+| `uscg_manufacturer_attributes_snapshot` | `dbt/snapshots/uscg_manufacturer_attributes_snapshot.sql` | `mic` | `firm_manufacturer_attributes` | Type-2 **NEED** (MIC reassignment; 6b.5) |
+| `firm_establishment_attributes_snapshot` | `dbt/snapshots/firm_establishment_attributes_snapshot.sql` | `establishment_number` | `firm_establishment_attributes` | Type-2 **BENEFIT** (6c.4) |
+| `firm_fda_attributes_snapshot` | `dbt/snapshots/firm_fda_attributes_snapshot.sql` | `firm_fei_num` | `firm_fda_attributes` | Type-2 **BENEFIT** (6c.4) |
+
+(NHTSA `recall_product` Type-2 is the separate v1.5 track — `silver_v15_migration_plan.md`. CPSC has no firm sidecar.)
+
 ### Enrichment (Python-written, dbt source)
 
 | Table | Written by | Alembic migration | dbt source |

@@ -27,3 +27,51 @@ snapshots:
             combination_of_columns:
               - mic
               - dbt_valid_from
+
+  - name: firm_establishment_attributes_snapshot
+    description: >
+      SCD-2 history of USDA FSIS establishment attributes, keyed on the stable
+      establishment_number anchor (ADR 0035 Policy C; Phase 6c.4 BENEFIT dim). strategy='check'
+      over the demographic/regulatory fields (latest_mpi_active_date EXCLUDED — heartbeat,
+      ADR 0032). Current view (dbt_valid_to is null) feeds firm_establishment_attributes; full
+      table is the queryable peer history (the status_regulated_est flip case). silver_snapshots
+      schema (ADR 0007 pruning-exempt). Forward-banking: 0 edit-versions today; re-run on an
+      unchanged corpus must bank 0 new versions.
+    columns:
+      - name: establishment_number
+        description: FSIS establishment id — the SCD anchor.
+        tests:
+          - not_null
+      - name: dbt_scd_id
+        tests:
+          - unique
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - establishment_number
+              - dbt_valid_from
+
+  - name: firm_fda_attributes_snapshot
+    description: >
+      SCD-2 history of FDA firm attributes, keyed on the stable firm_fei_num anchor (ADR 0035
+      Policy C; Phase 6c.4 BENEFIT dim). strategy='check' over the firm name + address +
+      succession fields; driver collapses the product-level recall feed to one row per FEI
+      (DISTINCT ON ... event_lmd). Current view feeds firm_fda_attributes. silver_snapshots
+      schema (ADR 0007 pruning-exempt). Forward-banking: 0 edit-versions today.
+    columns:
+      - name: firm_fei_num
+        description: FDA FEI — the SCD anchor.
+        tests:
+          - not_null
+      - name: dbt_scd_id
+        tests:
+          - unique
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - firm_fei_num
+              - dbt_valid_from

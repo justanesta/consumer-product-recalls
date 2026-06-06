@@ -1,18 +1,14 @@
 {{ config(materialized='table') }}
 
--- FSIS-regulated establishment attributes — demographic + geolocation +
--- regulatory metadata that doesn't fit on firm.sql (which is keyed on
--- normalized name and shared across CPSC/FDA/USDA). Phase 5b.2 Step 5
--- per project_scope/implementation_plan.md line 333-334.
+-- FSIS-regulated establishment attributes — demographic + geolocation + regulatory metadata
+-- that doesn't fit on firm.sql (keyed on normalized name, shared across sources). One row per
+-- establishment_number (the FSIS canonical id, written as company_id on USDA firms in firm.sql).
 --
--- One row per establishment_number (the FSIS canonical id, which is the
--- column populated as company_id on USDA-establishment firms in firm.sql).
--- Records with null establishment_number are excluded — they can't be joined
--- back to a firm so they have no place in this dim.
---
--- Source: stg_usda_fsis_establishments (the new Step-5 staging view).
--- The recall side has no analogous fields; firm.sql remains keyed on
--- normalized name for cross-source dedup, and this dim sits alongside it.
+-- As of Phase 6c.4 this is the CURRENT view (dbt_valid_to is null) over the SCD-2 snapshot
+-- firm_establishment_attributes_snapshot (ADR 0035 Policy C) — an additive history layer over
+-- the same stg_usda_fsis_establishments data. The column contract is UNCHANGED, so the consumer
+-- (recall_event_establishment_resolution) is unaffected; null-establishment_number rows are
+-- excluded by the snapshot driver. The latest-per-establishment_number collapse now lives there.
 
 select
     establishment_number          as establishment_id,
@@ -32,5 +28,5 @@ select
     circuit,
     activities,
     dbas
-from {{ ref('stg_usda_fsis_establishments') }}
-where establishment_number is not null
+from {{ ref('firm_establishment_attributes_snapshot') }}
+where dbt_valid_to is null

@@ -129,3 +129,12 @@ The `feature/silver-field-remap` audit measured, per source, **whether** SCD-2 i
 - **Not SCD (Type-1 + bronze as audit trail):** `recall_reason` narrative + `firm.normalized_name` — corrections, not history; the fragmentation concern is solved by 6b *normalization*, not SCD.
 
 **Implication for the build decision:** prioritize `firm_manufacturer_attributes` (the confirmed NEED) + its as-of-build-date join; the BENEFIT dims are deferrable features whose monitors will quantify the payoff before the build commits. *(Settled 2026-06-05: build the USCG flag now; defer the as-of-build-date join + the BENEFIT dims.)*
+
+## Amendment 2026-06-06 — Phase 6c.4: FDA + USDA BENEFIT dims built
+
+§3 scoped the *build* to USCG only ("no snapshot for FDA/CPSC/USDA now"), and the 2026-06-05 Decision deferred the BENEFIT dims. **Phase 6c.4 overrides that deferral for FDA + USDA** per the Phase 6c scope decision (the user chose "build all BENEFIT dims now" for portfolio breadth; `project_scope/phase-6c-execution-plan.md` §6c.4). The two dims are now SCD-2:
+
+- `dbt/snapshots/firm_establishment_attributes_snapshot.sql` — anchor `establishment_number`; `check_cols` = the demographic/regulatory attributes EXCLUDING `latest_mpi_active_date` (heartbeat, ADR 0032). `firm_establishment_attributes.sql` repointed to its `dbt_valid_to is null` current view (column contract unchanged → `recall_event_establishment_resolution` unaffected).
+- `dbt/snapshots/firm_fda_attributes_snapshot.sql` — anchor `firm_fei_num`; `check_cols` = firm name/address/succession fields; driver keeps the DISTINCT-ON-event_lmd latest-per-FEI collapse. `firm_fda_attributes.sql` repointed to its current view.
+
+Both use the same primitive as USCG (`strategy='check'`, `silver_snapshots` schema, ADR 0007 pruning-exempt). **Forward-banking, not corrective:** these anchors are stable with **0 edit-versions** post-6a.5-reseed (the snapshot-hypothesis verdict holds), so each banks one version per anchor now and grows as incrementals re-bank history; the §4 measure-forward monitors quantify the payoff. **CPSC stays monitors-only** — its firm dim is name-keyed (no stable structured anchor for a sidecar; fragmentation is a 6b normalization concern, not SCD). The cross-source policy (C) and the deferred USCG refinements (§5) are unchanged.
