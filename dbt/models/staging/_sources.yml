@@ -319,6 +319,27 @@ sources:
         description: Quarantine table for USCG manufacturer-detail records that failed validation or invariant checks (ADR 0013).
         loaded_at_field: rejected_at
 
+  - name: pipeline
+    description: >
+      Cross-source pipeline-state tables (alembic-managed, not bronze; src/extractors/_tables.py).
+      Consumed by silver history models — recall_event_history joins extraction_runs on
+      raw_landing_path to read each snapshot's change_type for the ADR 0027 re-baseline
+      exclusion. schema=public (migration 0001 + later).
+    schema: public
+    tables:
+      - name: extraction_runs
+        description: >
+          One row per extraction run. change_type (ADR 0027) distinguishes routine loads from
+          schema_rebaseline / hash_helper_rebaseline / historical_seed / etag_audit; raw_landing_path
+          is the 1:1 link bronze rows carry back to their loading run.
+        columns:
+          - name: run_id
+            description: uuid4 per run (unique constraint added in migration 0027).
+          - name: raw_landing_path
+            description: R2 key of the run's landed payload; the join key from bronze rows.
+          - name: change_type
+            description: routine / schema_rebaseline / hash_helper_rebaseline / historical_seed / etag_audit.
+
   - name: enrichment
     description: >
       Derived (non-bronze) tables written by Python enrichment steps, not by an

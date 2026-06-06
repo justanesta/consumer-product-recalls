@@ -1,0 +1,49 @@
+version: 2
+
+# dbt unit test for recall_event_history (Phase 6c.1). Drives the edit-detection logic with
+# synthetic USDA snapshots — the only way to verify EMISSION, since the Phase 6a.5 re-seeds
+# left live bronze with ~1 version per identity (sparse history). Covers: a real edit, a
+# whitespace-only change (suppressed), a classification escalation, a schema_rebaseline
+# snapshot (suppressed per ADR 0027 yet still the baseline the next routine edit compares to),
+# two fields changing at one snapshot, and creation (first snapshot emits nothing).
+#
+# The four non-USDA sources get one snapshot each → single-version → dropped by the
+# n_snapshots>1 filter → no output. They exist only to satisfy every union branch's column
+# schema. extraction_runs supplies change_type per landing path.
+
+unit_tests:
+  - name: recall_event_history_edit_detection
+    model: recall_event_history
+    given:
+      - input: source('usda', 'usda_fsis_recalls_bronze')
+        rows:
+          - {source_recall_id: 'R1', langcode: 'English', extraction_timestamp: '2026-01-01 00:00:00+00', raw_landing_path: 'p1', summary: 'Reason A', recall_classification: 'Class I', recall_type: 'Active Recall', title: 'Title', closed_date: null}
+          - {source_recall_id: 'R1', langcode: 'English', extraction_timestamp: '2026-01-02 00:00:00+00', raw_landing_path: 'p2', summary: 'Reason B', recall_classification: 'Class I', recall_type: 'Active Recall', title: 'Title', closed_date: null}
+          - {source_recall_id: 'R1', langcode: 'English', extraction_timestamp: '2026-01-03 00:00:00+00', raw_landing_path: 'p3', summary: 'Reason B  ', recall_classification: 'Class II', recall_type: 'Active Recall', title: 'Title', closed_date: null}
+          - {source_recall_id: 'R1', langcode: 'English', extraction_timestamp: '2026-01-04 00:00:00+00', raw_landing_path: 'p4', summary: 'Reason B reparsed', recall_classification: 'Class II', recall_type: 'Active Recall', title: 'Title', closed_date: null}
+          - {source_recall_id: 'R1', langcode: 'English', extraction_timestamp: '2026-01-05 00:00:00+00', raw_landing_path: 'p5', summary: 'Reason C', recall_classification: 'Class II', recall_type: 'Closed Recall', title: 'Title', closed_date: null}
+      - input: source('pipeline', 'extraction_runs')
+        rows:
+          - {raw_landing_path: 'p1', change_type: 'routine', run_id: 'run1', started_at: '2026-01-01 00:00:00+00'}
+          - {raw_landing_path: 'p2', change_type: 'routine', run_id: 'run2', started_at: '2026-01-02 00:00:00+00'}
+          - {raw_landing_path: 'p3', change_type: 'routine', run_id: 'run3', started_at: '2026-01-03 00:00:00+00'}
+          - {raw_landing_path: 'p4', change_type: 'schema_rebaseline', run_id: 'run4', started_at: '2026-01-04 00:00:00+00'}
+          - {raw_landing_path: 'p5', change_type: 'routine', run_id: 'run5', started_at: '2026-01-05 00:00:00+00'}
+      - input: source('cpsc', 'cpsc_recalls_bronze')
+        rows:
+          - {source_recall_id: 'C1', extraction_timestamp: '2026-01-01 00:00:00+00', raw_landing_path: 'c1', description: 'd', title: 't'}
+      - input: source('fda', 'fda_recalls_bronze')
+        rows:
+          - {recall_event_id: 1, extraction_timestamp: '2026-01-01 00:00:00+00', raw_landing_path: 'f1', content_hash: 'h', product_short_reason_txt: 'r', center_classification_type_txt: '1', phase_txt: 'Ongoing', termination_dt: null}
+      - input: source('nhtsa', 'nhtsa_recalls_bronze')
+        rows:
+          - {campno: 'N1', extraction_timestamp: '2026-01-01 00:00:00+00', raw_landing_path: 'n1', content_hash: 'h', desc_defect: 'd'}
+      - input: source('uscg', 'uscg_recalls_bronze')
+        rows:
+          - {source_recall_id: 'U1', extraction_timestamp: '2026-01-01 00:00:00+00', raw_landing_path: 'u1', problem_1: 'p', problem_2: null, severity: 'H', disposition: 'open', case_close_date: null}
+    expect:
+      rows:
+        - {source: 'USDA', source_recall_id: 'R1', langcode: 'English', field_name: 'recall_reason', old_value: 'Reason A', new_value: 'Reason B', changed_at: '2026-01-02 00:00:00+00', change_type: 'routine', change_run_id: 'run2'}
+        - {source: 'USDA', source_recall_id: 'R1', langcode: 'English', field_name: 'classification', old_value: 'Class I', new_value: 'Class II', changed_at: '2026-01-03 00:00:00+00', change_type: 'routine', change_run_id: 'run3'}
+        - {source: 'USDA', source_recall_id: 'R1', langcode: 'English', field_name: 'recall_reason', old_value: 'Reason B reparsed', new_value: 'Reason C', changed_at: '2026-01-05 00:00:00+00', change_type: 'routine', change_run_id: 'run5'}
+        - {source: 'USDA', source_recall_id: 'R1', langcode: 'English', field_name: 'lifecycle_status', old_value: 'Active Recall', new_value: 'Closed Recall', changed_at: '2026-01-05 00:00:00+00', change_type: 'routine', change_run_id: 'run5'}

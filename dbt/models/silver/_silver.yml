@@ -360,3 +360,50 @@ models:
           FDA's own successor-FEI pointer for renamed/merged firms (NULL for most). A live
           (firm_fei_num -> firm_surviving_fei) pair is a directed succession edge; 6b.4's
           clusterer interprets it (ignores null/self/dangling, guards cycles). Nullable, untested.
+
+  - name: recall_event_history
+    description: >
+      Field-level edit history of the recall EVENT (ADR 0022 / Phase 6c.1). One row per changed
+      tracked field per snapshot interval, synthesized via LAG() over content-hash-deduped bronze
+      across all five sources. Re-baseline runs are excluded (ADR 0027) and cosmetic (whitespace,
+      ''/NULL) changes are folded out (norm_text_for_change macro). Curated v1 field set:
+      recall_reason, classification, lifecycle_status, title, terminated_at. SPARSE post-6a.5-reseed
+      (~1 version per identity); grows as incrementals re-bank versions. See silver_design_notes.md.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - source
+              - source_recall_id
+              - langcode
+              - field_name
+              - changed_at
+    columns:
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
+      - name: source_recall_id
+        description: Event identity — RecallNumber (CPSC), RECALLEVENTID (FDA), field_recall_number (USDA), campno (NHTSA, NOT the regen-unstable RECORD_ID), USCG Number.
+        tests:
+          - not_null
+      - name: field_name
+        description: Canonical event field whose value changed.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['recall_reason', 'classification', 'lifecycle_status', 'title', 'terminated_at']
+      - name: changed_at
+        description: Snapshot extraction_timestamp at which the new value was first observed.
+        tests:
+          - not_null
+      - name: change_type
+        description: The changing snapshot's run change_type; always a non-rebaseline value (ADR 0027 exclusion). old_value/new_value are RAW (un-normalized).
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['routine', 'historical_seed', 'etag_audit']

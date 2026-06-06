@@ -57,7 +57,7 @@ Bronze tables follow the [ADR 0027](decisions/0027-bronze-storage-forced-transfo
 | `silver/recall_product` | `recall_product.sql` | `_silver.yml` | [`silver_design_notes.md`](silver_design_notes.md) |
 | `silver/firm` | `firm.sql` | `_silver.yml` | [`silver_design_notes.md`](silver_design_notes.md) |
 | `silver/recall_event_firm` | `recall_event_firm.sql` | `_silver.yml` | [`silver_design_notes.md`](silver_design_notes.md) |
-| `silver/recall_event_history` | (Phase 6 — not yet shipped) | (TBD) | per [ADR 0022](decisions/0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) |
+| `silver/recall_event_history` | `recall_event_history.sql` (Phase 6c.1) | `_silver.yml` + `recall_event_history_unit_tests.yml` + `assert_recall_event_history_real_changes.sql` | LAG() over bronze, 5 sources, per [ADR 0022](decisions/0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) + [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md); see [`silver_design_notes.md`](silver_design_notes.md) |
 
 ### Enrichment (Python-written, dbt source)
 
