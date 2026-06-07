@@ -1,4 +1,11 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['recall_event_id', 'firm_id', 'role'], 'unique': True},
+      {'columns': ['recall_event_id']},
+      {'columns': ['firm_id']},
+    ]
+) }}
 
 -- Many-to-many association between recall events and firms with role (ADR 0002).
 -- CPSC: firms extracted from three JSONB arrays per event (manufacturer,

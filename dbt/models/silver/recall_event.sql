@@ -1,4 +1,12 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['recall_event_id'], 'unique': True},
+      {'columns': ['source', 'source_recall_id']},
+      {'columns': ['source', 'published_at']},
+      {'columns': ['classification']},
+    ]
+) }}
 
 -- Header-level recall events (ADR 0002). One row per (source, source_recall_id).
 -- CPSC: source_recall_id = RecallNumber (one row per recall event in bronze).
@@ -43,7 +51,7 @@ with cpsc_events as (
         cast(null as text)                     as risk_level,
         cast(null as text)                     as notification_method,
         cast(null as text)                     as reason_category,
-        cast(null as text)                     as distribution_scope,
+        'Unspecified'                          as distribution_scope,
         cast(null as text)                     as distribution_states,
         cast(null as timestamptz)              as terminated_at,
         cast(null as timestamptz)              as campaign_started_at,
@@ -128,14 +136,7 @@ fda_events as (
         cast(null as text)                                               as risk_level,
         initial_firm_notification_txt                                    as notification_method,
         cast(null as text)                                               as reason_category,
-        case
-            when lower(distribution_area_summary_txt) like '%nationwide%'
-              or lower(distribution_area_summary_txt) like '%all 50%'
-              or lower(distribution_area_summary_txt) like '%all states%'   then 'Nationwide'
-            when lower(distribution_area_summary_txt) like '%worldwide%'
-              or lower(distribution_area_summary_txt) like '%international%' then 'International'
-            when distribution_area_summary_txt is not null                  then 'Regional'
-        end                                                              as distribution_scope,
+        {{ classify_distribution_scope('distribution_area_summary_txt') }} as distribution_scope,
         cast(null as text)                                               as distribution_states,
         termination_dt                                                   as terminated_at,
         cast(null as timestamptz)                                        as campaign_started_at,
@@ -212,12 +213,7 @@ usda_events as (
         end                                                as risk_level,
         cast(null as text)                                 as notification_method,
         recall_reason                                      as reason_category,
-        case
-            when lower(states) like '%nationwide%'                       then 'Nationwide'
-            when lower(states) like '%worldwide%'
-              or lower(states) like '%international%'                     then 'International'
-            when states is not null                                      then 'Regional'
-        end                                                as distribution_scope,
+        {{ classify_distribution_scope('states') }}        as distribution_scope,
         states                                             as distribution_states,
         closed_at                                          as terminated_at,
         cast(null as timestamptz)                          as campaign_started_at,
@@ -290,7 +286,7 @@ nhtsa_events as (
         cast(null as text)                                             as risk_level,
         cast(null as text)                                             as notification_method,
         cast(null as text)                                             as reason_category,
-        cast(null as text)                                             as distribution_scope,
+        'Nationwide'                                                   as distribution_scope,  -- derived default: federal vehicle recalls are national (no state field)
         cast(null as text)                                             as distribution_states,
         cast(null as timestamptz)                                      as terminated_at,
         cast(null as timestamptz)                                      as campaign_started_at,
@@ -366,7 +362,7 @@ uscg_events as (
         cast(null as text)                                             as risk_level,
         cast(null as text)                                             as notification_method,
         cast(null as text)                                             as reason_category,
-        cast(null as text)                                             as distribution_scope,
+        'Unspecified'                                                  as distribution_scope,
         cast(null as text)                                             as distribution_states,
         case_close_date                                                as terminated_at,
         campaign_open_date                                             as campaign_started_at,

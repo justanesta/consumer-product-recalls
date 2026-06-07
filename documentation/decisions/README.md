@@ -36,6 +36,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0034 — NHTSA silver v1.5 — Layer 3 migration cutover](0034-nhtsa-silver-v15-migration.md) *(Proposed — stub; design in `project_scope/archive/silver_v15_migration_plan.md`)*
 - [0035 — Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) — cross-source policy = Policy C (latest-wins current view + first-class snapshot history) via dbt snapshot `strategy='check'` on a stable anchor; only the USCG `firm_manufacturer_attributes` instance (the measured Type-2 NEED, 221/718 OOB-recycled / 365 prior) is built in 6b.5, FDA/CPSC/USDA deferred *(Proposed — decision recorded 2026-06-05 on the A scope; ratifies at PR 6b.5 merge)*
 - [0036 — Cross-source canonical silver column naming](0036-cross-source-canonical-silver-naming.md) *(Proposed — naming policy + D1–D7 written 2026-06-02 W3; ratifies at `feature/silver-field-remap` merge)*
+- [0038 — Gold-layer modeling and indexing strategy](0038-gold-layer-modeling-and-indexing-strategy.md) — `mart_`/`fct_` shapes (Kimball star deferred), serving=table+indexed / aggregate=view, Postgres FTS search, dbt `config(indexes=)` mechanism, Phase-7 profiling follow-up *(Proposed — written 2026-06-07; ratifies at `feature/phase-6e-gold-and-test` merge)*
 
 ### Pipeline, extraction, and transformation
 
@@ -100,6 +101,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 35. [Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) *(Proposed — W3 verdict written; build deferred to Phase 6)*
 36. [Cross-source canonical silver column naming](0036-cross-source-canonical-silver-naming.md) *(Proposed — W3 policy written; ratifies at merge)*
 37. [Firm resolution runs as a Python stage, not in-warehouse SQL/pg_trgm](0037-firm-resolution-python-stage-not-sql-fuzzy.md)
+38. [Gold-layer modeling and indexing strategy](0038-gold-layer-modeling-and-indexing-strategy.md) *(Proposed — ratifies at `feature/phase-6e-gold-and-test` merge)*
 
 ---
 
@@ -107,7 +109,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 When adding a new ADR:
 
-1. Pick the next sequential number. Current state: **0001–0033 filed (Accepted); 0034 a `Proposed` stub; 0035 + 0036 `Proposed` with their W3 content written 2026-06-02** (0035 = the SCD-applicability verdict, build architecture still deferred to Phase 6; 0036 = the canonical-naming policy + D1–D7, ratifies at `feature/silver-field-remap` merge); **0037 filed (Accepted) 2026-06-04** (firm resolution as a Python stage). **0024 and 0025 remain reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). **The next free number is 0038.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
+1. Pick the next sequential number. Current state: **0001–0033 filed (Accepted); 0034 a `Proposed` stub; 0035 + 0036 `Proposed` with their W3 content written 2026-06-02** (0035 = the SCD-applicability verdict, build architecture still deferred to Phase 6; 0036 = the canonical-naming policy + D1–D7, ratifies at `feature/silver-field-remap` merge); **0037 filed (Accepted) 2026-06-04** (firm resolution as a Python stage); **0038 filed (Proposed) 2026-06-07** (gold-layer modeling + indexing strategy; ratifies at `feature/phase-6e-gold-and-test` merge). **0024 and 0025 remain reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). **The next free number is 0039.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
 2. File name: `NNNN-kebab-case-title.md`.
 3. Use the standard template (see any existing ADR as a model).
 4. Add an entry under the appropriate topic above **and** in the numeric index.

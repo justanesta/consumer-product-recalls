@@ -1,4 +1,10 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['firm_id'], 'unique': True},
+      {'columns': ['normalized_name']},
+    ]
+) }}
 
 -- Firm dimension (ADR 0002). Deduped by normalized (upper-trimmed) name.
 -- CPSC contributes firms from three JSONB arrays (manufacturers, importers,

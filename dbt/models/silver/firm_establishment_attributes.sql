@@ -1,4 +1,10 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['establishment_id'], 'unique': True},
+      {'columns': ['state']},
+    ]
+) }}
 
 -- FSIS-regulated establishment attributes — demographic + geolocation + regulatory metadata
 -- that doesn't fit on firm.sql (keyed on normalized name, shared across sources). One row per

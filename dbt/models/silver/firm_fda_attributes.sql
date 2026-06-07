@@ -1,4 +1,11 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['firm_fei_num'], 'unique': True},
+      {'columns': ['firm_state_cd']},
+    ],
+    post_hook="create index if not exists idx_firm_fda_attributes_fei_text on {{ this }} ((firm_fei_num::text))"
+) }}
 
 -- FDA-registered establishment (firm) attributes — address + firm-continuity
 -- metadata that doesn't fit on firm.sql (which is keyed on normalized name and
