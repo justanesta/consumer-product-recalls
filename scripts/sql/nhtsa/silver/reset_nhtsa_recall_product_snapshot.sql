@@ -7,11 +7,16 @@
 -- intentionally exempt from `--full-refresh` (history protection), so a manual drop is the standard
 -- dev reset.
 --
--- Two dbt VIEWS depend on the snapshot (recall_product_v15, recall_product_history) — Postgres
--- views hard-depend on their source table. We drop them explicitly FIRST (in dependency order) so we
--- never need DROP ... CASCADE. Both are stateless views that the next `dbt build` recreates; nothing
--- else references the snapshot (v1 recall_product, recall_event, gold do NOT). Run from repo root
--- BEFORE rebuilding:
+-- Dependent objects (Postgres views hard-depend on their source table; drop FIRST, in dependency
+-- order, so we never need DROP ... CASCADE):
+--   - recall_product_history — a dbt view; the next `dbt build` recreates it.
+--   - recall_product_v15 — POST-6c.7-CUTOVER this is an ORPHANED view (dbt no longer manages it; the
+--     model was deleted and its SELECT folded into recall_product). The `if exists` makes the drop a
+--     one-time cleanup that no-ops on later runs. (Pre-cutover it was a managed dbt view.)
+-- NOT dropped here: `recall_product` (post-cutover it reads the snapshot but is materialized as a
+-- TABLE — a CTAS, not a hard Postgres dependent — so `dbt build` rebuilds it; no manual drop needed).
+-- Nothing else references the snapshot (recall_event, gold do NOT). Run from repo root BEFORE
+-- rebuilding:
 --   psql "$NEON_DATABASE_URL" -f scripts/sql/nhtsa/silver/reset_nhtsa_recall_product_snapshot.sql
 
 \set ON_ERROR_STOP on

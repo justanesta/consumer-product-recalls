@@ -1,7 +1,7 @@
 {{ config(materialized='view') }}
 
 -- Full product-grain version history for NHTSA recall products (Phase 6c.6 Layer 2, ADR 0033) — the
--- audit/compliance peer of recall_product_v15 under Policy C (current view + history table). Every
+-- audit/compliance peer of recall_product's NHTSA branch under Policy C (current view + history table). Every
 -- snapshot version with dbt_valid_from / dbt_valid_to and an is_current flag. For Pierce 26V217000
 -- this is where the mfr_comp_desc '' -> 'Software' transition becomes queryable (the current view
 -- shows only 'Software'). Kept (NOT dropped) through the 6c.7 cutover.

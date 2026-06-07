@@ -87,7 +87,7 @@ snapshots:
       the 6-tuple's demotion of ptno collapsed 126k STRUCTURAL multi-part rows (legitimate facts).
       The 7 anchor fields, model_year, and the extraction_timestamp heartbeat are deliberately NOT
       check_cols — see the snapshot header. Current view (dbt_valid_to is null) feeds
-      recall_product_v15 (and recall_product after the 6c.7 cutover); the full table is the queryable
+      recall_product's NHTSA branch (since the 6c.7 cutover); the full table is the queryable
       peer history (recall_product_history, Policy C). silver_snapshots schema (ADR 0007
       pruning-exempt). Re-run on an unchanged corpus must bank 0 new versions (idempotency — the
       Layer 2 gate).

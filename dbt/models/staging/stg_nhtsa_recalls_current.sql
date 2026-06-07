@@ -46,7 +46,17 @@ with current_per_product as (
         compname,
         rcl_cmpt_id,
         mfr_comp_ptno,
-        extraction_timestamp desc
+        extraction_timestamp desc,
+        -- Deterministic tiebreaker (6c.7): latest-extraction wins, but the 832 collapsing 7-tuples
+        -- (siblings differing only on these demoted fields) all share one seed-extraction timestamp,
+        -- so without a tiebreaker the distinct-on pick is arbitrary and could FLIP on a physical
+        -- reorder (VACUUM, etc.) -> the snapshot would bank a phantom version. The 4 demoted fields
+        -- uniquely distinguish siblings within a 7-tuple (anything sharing all 4 is the same 11-tuple,
+        -- already deduped by stg_nhtsa_recalls), so this makes the pick provably stable.
+        mfr_comp_desc nulls last,
+        mfr_comp_name nulls last,
+        bgman nulls last,
+        endman nulls last
 )
 
 select

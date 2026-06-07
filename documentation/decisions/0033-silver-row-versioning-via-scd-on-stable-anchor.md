@@ -1,6 +1,6 @@
 # 0033 — Silver row versioning via SCD on stable anchor (NHTSA `recall_product_id` migration to 6-tuple + Type 2 snapshot)
 
-- **Status:** Proposed (2026-05-15; amended 2026-06-03 — Phase 6b PR 6b.3 deterministic discharge of the Normalization class for the whitespace/case sub-case, see "Amendment 2026-06-03" below; **amended 2026-06-06 — Phase 6c.6 Layer 2 full-corpus finding: the 6-tuple over-collapses structural multi-part rows; anchor revised to the 7-tuple, see "Amendment 2026-06-06" below**)
+- **Status:** **Accepted** (2026-06-06 — Layer 3 cutover authorized + executed per [ADR 0034](0034-nhtsa-silver-v15-migration.md) / Phase 6c.7; the implemented anchor is the **7-tuple**, see "Amendment 2026-06-06" below). Prior: Proposed (2026-05-15; amended 2026-06-03 — Phase 6b PR 6b.3 deterministic discharge of the Normalization class for the whitespace/case sub-case, see "Amendment 2026-06-03" below; amended 2026-06-06 — Phase 6c.6 Layer 2 full-corpus finding: the 6-tuple over-collapses structural multi-part rows; anchor revised to the 7-tuple, see "Amendment 2026-06-06" below)
 - **Date:** 2026-05-15
 - **Supersedes:** —
 - **Superseded by:** —

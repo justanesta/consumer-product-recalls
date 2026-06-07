@@ -234,6 +234,8 @@ Mirror the shipped USCG pattern exactly (`uscg_manufacturer_attributes_snapshot.
 
 ## Commit 6c.6 — NHTSA v1.5 Layer 2 (parallel prototype)
 
+> **As-built (2026-06-06):** the full-corpus Layer-2 build showed the 6-tuple **over-collapses** (`recall_product` −127,163 / −40%, 99.4% structural `mfr_comp_ptno` multi-part — not drift), so the anchor shipped as the **7-tuple** (+`mfr_comp_ptno`; ADR 0033 amendment 2026-06-06) with `check_cols` = `desc`/`name`/`bgman`/`endman` + widened business fields, and the ~2-week observation window was **waived** (re-seeded corpus + forward-only snapshots can't populate it; full-corpus diff + the 6c.8 sim-drift test substitute). The 6-tuple / window / `compare_v1_v15_cardinality` / `assert_pre_2008_six_tuple_unique` items below are the plan-as-conceived; the as-built record is [ADR 0034](../documentation/decisions/0034-nhtsa-silver-v15-migration.md) + `silver_v15_migration_plan.md` + `silver_design_notes.md` §12.
+
 **Scope.** The `silver_v15_migration_plan.md` Layer-2 deliverables — a product-grain SCD running **alongside** v1 silver, reversible, no consumer impact. Now unblocked (Phase 6a.5 complete → the snapshot baseline initializes against full-corpus NHTSA bronze).
 
 **Files — new.**
@@ -257,6 +259,8 @@ Mirror the shipped USCG pattern exactly (`uscg_manufacturer_attributes_snapshot.
 ---
 
 ## Commit 6c.7 — NHTSA v1.5 Layer 3 cutover (ADR 0034)
+
+> **As-built (2026-06-06):** executed as described (recall_product → snapshot current view; `recall_product_v15` dropped; `recall_product_history` kept) on the **7-tuple** recipe (not the 6-tuple referenced below), plus a deterministic tiebreaker on `stg_nhtsa_recalls_current` (provable snapshot idempotency). Pre-condition #2 (a novel drift event in the window) is N/A — the window was waived; the 6c.8 simulated-drift test substitutes. ADR 0034 = Accepted; ADR 0033 = Accepted; ADR 0031 NHTSA row migrated.
 
 **Resolve the integration-mode fork (migration-plan Open Q#3 / Layer-3 pre-cond #3).** `recall_event_history` is **event-grain** (`source, source_recall_id`); the v1.5 snapshot is **product-grain**. They are **complementary, not competing** — ADR 0033 keeps the event-grain `LAG()` unchanged and adds a parallel product-grain layer. **Decision: `recall_event_history` stays on `LAG()`-over-bronze and does NOT consume the snapshot.** The only real coordination is the Layer-3 re-key of `recall_product_id` consumers — sequenced after 6c.1's grain is settled.
 

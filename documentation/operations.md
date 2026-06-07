@@ -33,7 +33,7 @@ Pipeline state — per-source watermarks (last-seen publication timestamps, ETag
 
 The silver SCD-2 history tables live in the `silver_snapshots` schema — the firm sidecars ([ADR 0035](decisions/0035-cross-source-scd2-silver-dimensions.md)) plus the NHTSA `nhtsa_recall_product_snapshot` v1.5 product-grain track ([ADR 0033](decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md), 6c.6). They are **dbt snapshots**, so two operational rules apply:
 
-- **`transform.yml` runs `dbt build`, which executes snapshots in DAG order.** Never substitute `dbt run` for the silver layer — `dbt run` skips snapshots, leaving the snapshot-backed current views (`firm_*_attributes`, `recall_product_v15`) reading a stale snapshot. `dbt build` (or `dbt snapshot`) is the only correct invocation.
+- **`transform.yml` runs `dbt build`, which executes snapshots in DAG order.** Never substitute `dbt run` for the silver layer — `dbt run` skips snapshots, leaving the snapshot-backed current surfaces (`firm_*_attributes`, `recall_product`'s NHTSA branch + `recall_product_history`) reading a stale snapshot. `dbt build` (or `dbt snapshot`) is the only correct invocation.
 - **Snapshots are intentionally exempt from `--full-refresh`** (history protection). Resetting one — needed only when its `unique_key`/recipe changes, never in normal forward operation — is a manual `DROP` of the snapshot table plus any dependent views in dependency order, then `dbt build` re-initializes it. The NHTSA reset is scripted at `scripts/sql/nhtsa/silver/reset_nhtsa_recall_product_snapshot.sql`. A reset discards accumulated history, so it is a dev-only operation; on `main` it requires a deliberate decision.
 
 ### Alerting strategy
