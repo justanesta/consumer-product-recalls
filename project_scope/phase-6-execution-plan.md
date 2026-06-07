@@ -288,7 +288,9 @@ Original seed (now owned by the new doc):
 
 ### Phase 6d — Operational Tooling
 
-Existing Phase 6 items, independent of audit findings:
+> **Re-scoped 2026-06-06 → `project_scope/phase-6d-execution-plan.md`** — build from that doc. The three bullets below were the original seed; after re-evaluating against the post-6c codebase: (1) `re_ingest` ships as the `recalls re-ingest` **CLI** + `src/bronze/reingest.py` (JSON sources only); (2) `backfill_manifest.py` ships USDA-only, **census-first**; (3) the NHTSA `assert_nhtsa_daily_drift_under_threshold.sql` is **DROPPED as obsolete** — 6c's 7-tuple + SCD-2 refactor turned the volatile-field drift it targeted into normal SCD versioning, and anchor-field drift is already covered by `assert_nhtsa_eleven_tuple_identity_stable.sql` + `assert_nhtsa_maketxt_drift_caught.sql`.
+
+Original seed (now owned by the new doc):
 
 - `scripts/backfill_manifest.py` — R2 payload replay per ADR 0028 Mechanism C.
 - `scripts/re_ingest.py` — re-ingest CLI per ADR 0014 for schema-drift recovery.

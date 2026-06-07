@@ -15,6 +15,11 @@ from src.bronze.recovery import (
     recover_quarantined,
     recoverable_past_date_sanity,
 )
+from src.bronze.reingest import (
+    REINGEST_CONFIG_BY_SOURCE_NAME,
+    REINGEST_VALID_CHANGE_TYPES,
+    reingest_window,
+)
 from src.config.db import make_engine
 from src.config.logging import configure_logging
 from src.config.settings import Settings
@@ -25,6 +30,7 @@ from src.config.source_registry import (
     build_extractor_kwargs,
 )
 from src.enrichment.crosswalk_writer import audit_rollup_clusters, resolve_firm_crosswalk
+from src.landing.r2 import R2LandingClient
 
 if TYPE_CHECKING:
     from src.extractors._base import Extractor
@@ -542,6 +548,134 @@ def recover_rejected(
             f"  ({result.candidates - result.inserted} already present — content-hash dedup "
             "skipped them; re-running is idempotent.)"
         )
+
+
+@app.command(name="re-ingest")
+def re_ingest(
+    source: Annotated[
+        str,
+        typer.Argument(
+            help=(
+                "Source to re-ingest. JSON REST sources only: cpsc, fda, usda, "
+                "usda_establishments, fda_press_releases."
+            )
+        ),
+    ],
+    from_date: Annotated[
+        str, typer.Option("--from-date", help="Window start (YYYY-MM-DD), inclusive.")
+    ],
+    to_date: Annotated[str, typer.Option("--to-date", help="Window end (YYYY-MM-DD), inclusive.")],
+    change_type: Annotated[
+        str,
+        typer.Option(
+            "--change-type",
+            help=(
+                "Required. One of: schema_rebaseline (schema / normalizer fix), "
+                "hash_helper_rebaseline (ADR 0027 hashing-helper change). Tags each replay run so "
+                "recall_event_history excludes the re-coerced wave from edit detection."
+            ),
+        ),
+    ],
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run", help="Report the candidate payload count for the window without replaying."
+        ),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help=(
+                "Replay payloads even if a prior re-ingest already replayed them. Default skips "
+                "already-replayed originals (via extraction_runs.replayed_from_run_id)."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Replay landed R2 payloads through the current schema, without contacting the source.
+
+    ADR 0028 Mechanism B (R2 replay) / ADR 0014. For schema-drift / normalizer-bug recovery: fix
+    the Pydantic schema, then re-ingest the affected window — re-reads each successful run's raw
+    payload from R2, re-runs ``validate_records`` → ``check_invariants`` → bronze load (content-hash
+    idempotent), and tags each replay run with ``--change-type`` so ``recall_event_history`` treats
+    the re-coerced wave as a re-baseline, not real edits. Complementary to ``deep-rescan`` (re-hits
+    the source) and ``recover-rejected`` (un-quarantines invariant false positives). JSON REST
+    sources only; NHTSA/USCG are cheaply re-fetchable — use ``deep-rescan``.
+    """
+    configure_logging()
+
+    if source not in REINGEST_CONFIG_BY_SOURCE_NAME:
+        supported = ", ".join(sorted(REINGEST_CONFIG_BY_SOURCE_NAME))
+        typer.echo(
+            f"re-ingest not supported for source: {source} (supported: {supported}). "
+            "NHTSA/USCG are cheaply re-fetchable — use 'recalls deep-rescan'.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if change_type not in REINGEST_VALID_CHANGE_TYPES:
+        allowed = ", ".join(sorted(REINGEST_VALID_CHANGE_TYPES))
+        typer.echo(
+            f"--change-type must be one of: {allowed} (got {change_type!r}). Re-ingest is a "
+            "re-baseline; a routine label would synthesize false edits in recall_event_history.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Parse dates before the heavier Settings()/config work so format errors surface early.
+    try:
+        from_d = date.fromisoformat(from_date)
+        to_d = date.fromisoformat(to_date)
+    except ValueError:
+        typer.echo("--from-date / --to-date must be YYYY-MM-DD", err=True)
+        raise typer.Exit(code=1) from None
+    if from_d > to_d:
+        typer.echo(f"--from-date {from_d} is after --to-date {to_d}", err=True)
+        raise typer.Exit(code=1)
+
+    config = load_source_config(source)
+    settings = Settings()  # type: ignore[call-arg]
+    extractor_cls = EXTRACTOR_BY_SOURCE_NAME[source]
+    kwargs = build_extractor_kwargs(config, extractor_cls, settings)
+    extractor: Extractor = extractor_cls(**kwargs)
+
+    engine = make_engine(settings.neon_database_url.get_secret_value())
+    r2 = R2LandingClient(settings)
+
+    result = reingest_window(
+        engine,
+        r2,
+        extractor,
+        source=source,
+        config=REINGEST_CONFIG_BY_SOURCE_NAME[source],
+        from_date=from_d,
+        to_date=to_d,
+        change_type=change_type,
+        dry_run=dry_run,
+        force=force,
+    )
+
+    if result.payloads_found == 0:
+        typer.echo(
+            f"{source} re-ingest: no replayable payloads in {from_d} → {to_d} "
+            "(successful runs with a landed payload; already-replayed are skipped unless --force)."
+        )
+        return
+    if result.dry_run:
+        typer.echo(
+            f"{source} re-ingest [dry-run]: {result.payloads_found} payload(s) in "
+            f"{from_d} → {to_d} would be replayed (change_type={change_type}). No write performed."
+        )
+        return
+    typer.echo(
+        f"{source} re-ingest [{from_d} → {to_d}]: payloads_replayed={result.payloads_replayed} "
+        f"rows_inserted={result.rows_inserted} change_type={change_type}"
+    )
+    typer.echo(
+        "  (content-hash dedup: rows_inserted counts only records whose canonical content changed; "
+        "re-running the same window is idempotent at the bronze grain.)"
+    )
 
 
 @app.command(name="resolve-firms")

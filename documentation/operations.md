@@ -188,7 +188,7 @@ Per [ADR 0014](decisions/0014-schema-evolution-policy.md), when an agency change
      --change-type schema_rebaseline
    ```
    The `--change-type=schema_rebaseline` flag is **required** — without it the new bronze rows are marked `routine`, which causes `recall_event_history` (Phase 6) to synthesize false-edit events for every record in the wave. See [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md) and [ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md).
-5. The re-ingest reads raw payloads from R2 landing, re-runs validation and bronze load with the updated schema, and relies on content hashing (per [ADR 0007](decisions/0007-lineage-via-bronze-snapshots-and-content-hashing.md)) to keep the operation idempotent.
+5. The re-ingest reads raw payloads from R2 landing, re-runs validation and bronze load with the updated schema, and relies on content hashing (per [ADR 0007](decisions/0007-lineage-via-bronze-snapshots-and-content-hashing.md)) to keep the operation idempotent. **Scope (Phase 6d):** supported for the JSON REST sources — `cpsc`, `fda`, `usda`, `usda_establishments`, `fda_press_releases` (their landed payload is a `json.dumps(raw_records)` array, replayed via `json.loads`). NHTSA (flat file) and USCG (HTML) are **not** re-ingestable — they are cheaply re-fetchable, so re-process them with `recalls deep-rescan` instead (the CLI rejects them with that guidance). Each replayed payload is re-landed to a fresh R2 key under a new `schema_rebaseline`/`hash_helper_rebaseline` run, so `recall_event_history` excludes the wave from edit detection. **Caveat:** a re-baseline that changes a record's canonical hash *does* increment `recall_lifecycle.edit_count` for that recall — that model counts distinct content hashes with no `change_type` filter — so expect `edit_count` to tick up by one across the rebaselined corpus even though `recall_event_history` stays honest.
 6. Verify `_rejected` rows for the window have cleared; any remaining rejections indicate a schema fix that's still incomplete.
 7. Confirm `source_watermarks` reflects the re-ingest. Re-ingests read raw from R2 and do not require watermark state to be correct, but a post-reingest sanity check is worth running:
 
@@ -199,6 +199,19 @@ Per [ADR 0014](decisions/0014-schema-evolution-policy.md), when an agency change
    ```
 
    If the watermark advanced past the re-ingest window without issue, scheduled runs will continue forward. If the re-ingest was a full backfill, manually setting the watermark back may be desired so the next scheduled run fetches nothing new — adjust via UPDATE only after verifying the expected cadence.
+
+### USDA presence-manifest backfill (one-shot)
+
+`scripts/backfill_manifest.py` ([ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md) Mechanism C) reconstructs the USDA presence manifest (`extraction_run_identities`) for runs that predate the table (6c migration 0027), so `recall_lifecycle.is_currently_active` / `was_ever_retracted` extend back to a `run_id` floor. **USDA-only** (the only `default_track_presence` source). **Census-first** — the default mode is read-only:
+
+```bash
+# (a Python script, not a `recalls` subcommand — run it directly)
+python scripts/backfill_manifest.py             # census (read-only SQL): floor + NULL-run_id count + backfillable count
+python scripts/backfill_manifest.py --dry-run   # preview: replays each backfillable run, reports would-be row counts, no write
+python scripts/backfill_manifest.py --apply     # then, if warranted, insert the backfillable runs
+```
+
+Review the census before applying. `--dry-run` and `--apply` are mutually exclusive. Runs with a NULL `run_id` (run_id was nullable from the baseline) are **permanently un-backfillable** (no FK target), so the manifest history has a hard floor — the earliest run carrying a `run_id`. `--dry-run` re-validates each old payload under the *current* schema and reports the would-be roster size, so a count well below the run's corpus size flags rows the current schema now rejects (e.g. after a source schema change). The `--apply` insert is `ON CONFLICT DO NOTHING` and skips runs already manifested, so it is safe to re-run. After applying, verify with `scripts/sql/_pipeline/verify_presence_manifest.sql` and `dbt build`.
 
 ---
 

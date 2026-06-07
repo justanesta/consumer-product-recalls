@@ -30,8 +30,20 @@
 -- `bgman: 2022-05-10 → 2022-05-17` (4 ptno variants synced by upstream
 -- edit), Western Star `26V079000` `endman: 2026-02-03 → 2026-04-10`,
 -- Mack `26V261000` brake-modulator `bgman`/`endman` populated → NULL
--- regressions. These fragment silver rows and are the numerator for
--- ADR 0031:84's silver-fragmentation trigger.
+-- regressions.
+--
+-- NOTE (Phase 6c, ADR 0033/0034): the demoted fields most of these flag
+-- (mfr_comp_desc / mfr_comp_name / bgman / endman) are now SCD-2 check_cols
+-- on the `nhtsa_recall_product` 7-tuple anchor, so their drift is captured
+-- as a banked snapshot version — NOT consumer-grain silver fragmentation.
+-- This test therefore now reads as a BRONZE-level drift signal / "an SCD
+-- version will be banked" indicator, not the silver-fragmentation alarm its
+-- older framing implied. Genuine consumer-grain fragmentation only happens
+-- on the 7-tuple ANCHOR fields (campno / maketxt / modeltxt / yeartxt /
+-- compname / rcl_cmpt_id / mfr_comp_ptno); anchor drift specifically is also
+-- watched by `assert_nhtsa_maketxt_drift_caught.sql`. (This is why the Phase
+-- 6d "assert_nhtsa_daily_drift_under_threshold" velocity alert was dropped as
+-- obsolete — see project_scope/phase-6d-execution-plan.md.)
 --
 -- Divergence from the rich SQL script: this dbt test no longer mirrors
 -- `scripts/sql/nhtsa/bronze/assert_eleven_tuple_identity_stable.sql`
