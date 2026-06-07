@@ -1,4 +1,9 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['mic'], 'unique': True},
+    ]
+) }}
 
 -- USCG MIC reassignment years — the source-native reassignment boundary per MIC, parsed from the
 -- detail page's "Past Company (OOB YYYY)" markers (ADR 0035 §5 historical backfill; Phase 6c.5 (b)).

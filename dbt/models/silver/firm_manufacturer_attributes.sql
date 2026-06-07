@@ -1,4 +1,11 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['mic'], 'unique': True},
+      {'columns': ['state']},
+    ],
+    post_hook="analyze {{ this }}"
+) }}
 
 -- USCG-registered boat-manufacturer attributes — the CURRENT view (dbt_valid_to is
 -- null) over the SCD-2 snapshot uscg_manufacturer_attributes_snapshot (ADR 0035).

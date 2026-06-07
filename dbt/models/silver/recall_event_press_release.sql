@@ -1,4 +1,10 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['recall_event_press_release_id'], 'unique': True},
+      {'columns': ['recall_event_id']},
+    ]
+) }}
 
 -- FDA press releases — event-grain child of recall_event, M:1 (an event can carry
 -- several press releases). The repo's first per-record-enrichment child fact

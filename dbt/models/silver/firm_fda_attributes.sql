@@ -1,4 +1,14 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['firm_fei_num'], 'unique': True},
+      {'columns': ['firm_state_cd']},
+    ],
+    post_hook=[
+      "create index if not exists idx_firm_fda_attributes_fei_text on {{ this }} ((firm_fei_num::text))",
+      "analyze {{ this }}",
+    ]
+) }}
 
 -- FDA-registered establishment (firm) attributes — address + firm-continuity
 -- metadata that doesn't fit on firm.sql (which is keyed on normalized name and
@@ -32,17 +42,26 @@
 -- contract is UNCHANGED. The latest-per-FEI collapse (DISTINCT ON ... event_lmd desc, then
 -- extraction_timestamp desc, then source_recall_id) now lives in the snapshot driver.
 
+-- Data-quality overrides for firm-country gaps FDA leaves null (inferred, extensible). Phase 6e.5:
+-- Visaris DOO (FEI 3012569470) — Belgrade + the "DOO" (d.o.o.) corporate suffix = a Serbian LLC,
+-- so firm_country_nam -> 'Serbia'. Add rows here as new null-country foreign firms surface (the
+-- firm_country_nam not_null test stays severity=warn to flag the next one).
+with country_overrides (firm_fei_num, country) as (
+    values (3012569470::bigint, 'Serbia')
+)
+
 select
-    firm_fei_num,
-    firm_legal_nam,
-    firm_city_nam,
-    firm_state_cd,
-    firm_state_prvnc_nam,
-    firm_country_nam,
-    firm_postal_cd,
-    firm_line1_adr,
-    firm_line2_adr,
-    firm_surviving_nam,
-    firm_surviving_fei
-from {{ ref('firm_fda_attributes_snapshot') }}
-where dbt_valid_to is null
+    c.firm_fei_num,
+    c.firm_legal_nam,
+    c.firm_city_nam,
+    c.firm_state_cd,
+    c.firm_state_prvnc_nam,
+    coalesce(c.firm_country_nam, ov.country) as firm_country_nam,
+    c.firm_postal_cd,
+    c.firm_line1_adr,
+    c.firm_line2_adr,
+    c.firm_surviving_nam,
+    c.firm_surviving_fei
+from {{ ref('firm_fda_attributes_snapshot') }} c
+left join country_overrides ov on ov.firm_fei_num = c.firm_fei_num
+where c.dbt_valid_to is null

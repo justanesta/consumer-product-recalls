@@ -1,4 +1,12 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['recall_product_id'], 'unique': True},
+      {'columns': ['recall_event_id']},
+      {'columns': ['upc']},
+      {'columns': ['hin']},
+    ]
+) }}
 
 -- Line-level recall products (ADR 0002). One row per affected product instance.
 -- CPSC: explodes the Products[] JSONB array — one row per array element with

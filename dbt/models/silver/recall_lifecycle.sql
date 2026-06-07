@@ -1,4 +1,9 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['recall_event_id'], 'unique': True},
+    ]
+) }}
 
 -- recall_lifecycle — per-recall lifecycle summary (ADR 0026 / Phase 6c.2). One row per
 -- recall_event (driven from ref('recall_event'), so the grain + per-source identity match

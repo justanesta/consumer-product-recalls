@@ -1,15 +1,234 @@
 version: 2
 
 models:
-  - name: recalls_by_month
-    description: Monthly recall event count per source, for dashboards.
+  - name: fct_recalls_by_month
+    description: Monthly recall counts per source + 'ALL' rollup (GROUPING SETS). Renamed from recalls_by_month.
+    columns:
+      - name: period
+        tests: [not_null]
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG', 'ALL']
+      - name: event_count
+        tests: [not_null]
+
+  - name: fct_recalls_by_week
+    description: Weekly recall counts per source + 'ALL' rollup. period = ISO week start (Monday).
+    columns:
+      - name: period
+        tests: [not_null]
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG', 'ALL']
+      - name: event_count
+        tests: [not_null]
+
+  - name: fct_recalls_by_year
+    description: Yearly recall counts per source + 'ALL' rollup. period = Jan 1 of the year.
+    columns:
+      - name: period
+        tests: [not_null]
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG', 'ALL']
+      - name: event_count
+        tests: [not_null]
+
+  - name: fct_recalls_monthly_trend
+    description: >
+      Monthly recall trend per source over a dense month spine — rolling 3/12-month averages +
+      year-over-year % change via window functions.
     columns:
       - name: month
+        tests: [not_null]
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
+      - name: event_count
+        tests: [not_null]
+
+  - name: fct_recalls_by_firm
+    description: Most-recalled-firms leaderboard (rank over mart_firm_profile). One row per canonical firm.
+    columns:
+      - name: firm_id
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: ref('firm')
+                field: firm_id
+      - name: event_count
+        tests: [not_null]
+      - name: event_count_rank
+        tests: [not_null]
+
+  - name: fct_recalls_by_classification
+    description: >
+      Recall counts by classification + risk_level per source + 'ALL' rollup. Source-native enums
+      (not conformed cross-source); CPSC/NHTSA NULL = unclassified bucket.
+    columns:
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG', 'ALL']
+      - name: event_count
+        tests: [not_null]
+
+  - name: fct_recall_status
+    description: >
+      Active/inactive/unknown recall counts per source + 'ALL' rollup. Cross-source signal is
+      recall_event.is_active; CPSC/NHTSA carry no status -> 'unknown'.
+    columns:
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG', 'ALL']
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['active', 'inactive', 'unknown']
+      - name: event_count
+        tests: [not_null]
+
+  - name: fct_units_recalled
+    description: >
+      Units recalled per source × month — NHTSA (vehicles) + USCG (boats) ONLY (the clean-count
+      sources). NOT cross-source comparable; no 'ALL' rollup. NHTSA potaff is collapsed to one count
+      per recall first (it repeats across component rows, else ~100x overcount). Free-text-units
+      sources (CPSC/FDA/USDA, incl. USDA pounds) deferred to the units-enrichment TODO.
+    columns:
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['NHTSA', 'USCG']
+      - name: period
+        tests: [not_null]
+      - name: total_units
+        tests: [not_null]
+
+  - name: mart_recall_summary
+    description: >
+      Denormalized one-row-per-recall serving table (Phase 6e, ADR 0038). The recall_event
+      header plus firm rollup (jsonb), product rollup, recall_lifecycle summary, and
+      recall_event_history edit flags — feeds GET /recalls (list) and the recall detail page.
+    columns:
+      - name: recall_event_id
+        description: Reused silver surrogate; one row per recall_event.
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: ref('recall_event')
+                field: recall_event_id
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
+      - name: published_at
+        tests:
+          - not_null
+      - name: firms
+        description: jsonb array of {firm_id, name, role, match_confidence} for the recall.
+      - name: product_count
+        tests:
+          - not_null
+
+  - name: mart_firm_profile
+    description: >
+      One row per canonical firm (Phase 6e, ADR 0038) — the cross-source rollup keyed on the 6b
+      cluster firm_id. Identity + aliases + recall statistics + per-source SCD-2 sidecar attributes
+      (establishment/manufacturer/FDA) as jsonb blocks. Feeds GET /firms/{id} + the firm page.
+    columns:
+      - name: firm_id
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: ref('firm')
+                field: firm_id
+      - name: canonical_name
+        tests:
+          - not_null
+      - name: total_recalls
+        tests:
+          - not_null
+      - name: recalls_by_source
+        description: jsonb object {source -> distinct recall count}.
+
+  - name: mart_product_search
+    description: >
+      One row per recall_product, denormalized for product search (Phase 6e, ADR 0038). Exact
+      identifiers (hin/model/upc, btree) + a stored tsvector search_vector (GIN, Postgres FTS).
+      Feeds GET /products/search + keyword search. product-grain upc is NULL today (see model
+      header); recall-level UPCs ride in recall_product_upcs.
+    columns:
+      - name: recall_product_id
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: ref('recall_product')
+                field: recall_product_id
+      - name: recall_event_id
         tests:
           - not_null
       - name: source
         tests:
           - not_null
-      - name: event_count
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
+      - name: search_vector
+        description: Postgres tsvector over product name/description + recall title + firm name; GIN-indexed.
+
+  - name: fct_recalls_by_geography
+    description: >
+      Recalls per US state, two lenses (Phase 6e, ADR 0038): 'distribution' (where the product went,
+      from recall_distribution_area — FDA+USDA) and 'firm_location' (where the firm is registered,
+      from the SCD-2 sidecars — USDA+USCG+FDA). GROUPING SETS emits per-source rows + an 'ALL'
+      all-source rollup. State codes constrained to the us_state_abbr seed.
+    columns:
+      - name: geography_basis
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['distribution', 'firm_location']
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG', 'ALL']
+      - name: state_code
+        tests:
+          - not_null
+      - name: recall_count
         tests:
           - not_null

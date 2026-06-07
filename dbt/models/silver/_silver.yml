@@ -26,12 +26,12 @@ models:
           - not_null
       - name: announced_at
         description: >
-          True recall-initiation date — NULLABLE by design. A small archive tail
-          (~6 FDA events, early-2000s) has no source-provided initiation date and
-          we do not fabricate one (the bulk-migration timestamp lives honestly in
-          published_at). The not_null below is severity=warn: a watch-list, not a
-          hard contract. Downstream sorts/filters on published_at, the guaranteed
-          date. If the warn count grows materially beyond ~6, investigate.
+          True recall-initiation date — NULLABLE by design (~20 FDA events). Two null classes:
+          ~6 early-2000s archive recalls with no source-provided initiation date, and ~14 with a
+          dropped-century typo in recall_initiation_dt (nulled in recall_event.sql via a >=1940
+          guard rather than trusting a garbage year — see that model's comment). We do not fabricate
+          dates; published_at is the guaranteed date downstream sorts on. The not_null below is
+          severity=warn: a watch-list. If it grows materially beyond ~20, investigate.
         tests:
           - not_null:
               config:
@@ -43,6 +43,18 @@ models:
           on. Contrast announced_at, which is nullable by design.
         tests:
           - not_null
+      - name: distribution_scope
+        description: >
+          Cross-source distribution-scope enum (ADR 0036 D7; finished in the Phase 6e geography
+          foundation via the classify_distribution_scope macro). Derived from FDA
+          distribution_area_summary + USDA states; NHTSA defaults to Nationwide (federal vehicle
+          recalls are national by regulation); CPSC + USCG carry no distribution field, so
+          Unspecified. Closed, NOT-NULL domain.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Nationwide', 'International', 'Regional', 'Unspecified']
     # (source, source_recall_id) uniqueness is now enforced explicitly via the
     # model-level dbt_utils.unique_combination_of_columns test above; the
     # recall_event_id unique test covers the same grain transitively (md5 key).
@@ -486,5 +498,26 @@ models:
           - unique
       - name: current_holder_since_year
         description: Latest parsed reassignment year (NOT NULL — undated MICs are excluded).
+        tests:
+          - not_null
+
+  - name: recall_distribution_area
+    description: >
+      Tier-2 structured distribution geography (Phase 6e geography foundation). One row per
+      recall_event (FDA + USDA) with distribution_state_codes (text[] of USPS 2-letter codes)
+      parsed precision-over-recall from the raw distribution text — FDA via a domestic-segment
+      free-text parse (international-section markers cut first), USDA via comma-token match.
+      recall_events with no parseable state have no row here (geography carried by
+      recall_event.distribution_scope). Feeds fct_recalls_by_geography + mart_recall_summary.
+    columns:
+      - name: recall_event_id
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: ref('recall_event')
+                field: recall_event_id
+      - name: n_distribution_states
         tests:
           - not_null

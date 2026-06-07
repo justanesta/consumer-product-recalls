@@ -1,4 +1,12 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['recall_event_id'], 'unique': True},
+      {'columns': ['source', 'source_recall_id']},
+      {'columns': ['source', 'published_at']},
+      {'columns': ['classification']},
+    ]
+) }}
 
 -- Header-level recall events (ADR 0002). One row per (source, source_recall_id).
 -- CPSC: source_recall_id = RecallNumber (one row per recall event in bronze).
@@ -43,7 +51,7 @@ with cpsc_events as (
         cast(null as text)                     as risk_level,
         cast(null as text)                     as notification_method,
         cast(null as text)                     as reason_category,
-        cast(null as text)                     as distribution_scope,
+        'Unspecified'                          as distribution_scope,
         cast(null as text)                     as distribution_states,
         cast(null as timestamptz)              as terminated_at,
         cast(null as timestamptz)              as campaign_started_at,
@@ -87,14 +95,21 @@ fda_events as (
         md5('FDA' || '|' || recall_event_id::text)                       as recall_event_id,
         'FDA'                                                            as source,
         recall_event_id::text                                            as source_recall_id,
-        -- announced_at is the TRUE recall-initiation date, left NULLABLE by design:
-        -- 6 events (13 product rows) are early-2000s archive recalls whose
-        -- recall_initiation_dt FDA's iRES never carried forward. We do NOT fabricate
-        -- a date — their bulk-migration timestamp lives honestly in published_at
-        -- (= event_lmd) below, the hard NOT-NULL contract date downstream sorts on.
-        -- announced_at's not_null is relaxed to severity=warn (~6 archive-tail
-        -- baseline) so the count stays a visible watch-list without faking data.
-        recall_initiation_dt                                             as announced_at,
+        -- announced_at is the TRUE recall-initiation date, left NULLABLE by design.
+        -- Two null classes: (a) ~6 early-2000s archive recalls whose recall_initiation_dt
+        -- FDA's iRES never carried forward; (b) ~14 recalls with a DROPPED-CENTURY typo in
+        -- recall_initiation_dt (parsed year 7/12/13/212 — e.g. Z-0660-2013 initiated "year 13"),
+        -- nulled via the >= 1940 guard below rather than trusting a garbage year
+        -- (precision-over-recall; the recall NUMBER carries the real year, and published_at
+        -- (= event_lmd) is the hard NOT-NULL contract date downstream sorts on). We do NOT
+        -- fabricate a date. announced_at's not_null is severity=warn (~20 baseline), a visible
+        -- watch-list. Provenance: bronze check_date_sanity DID quarantine these (its >70yr-past
+        -- branch, invariants.py); they are genuine recalls deliberately reinstated by
+        -- `recalls recover-rejected fda` (false-positive quarantine, recovery.py), kept faithful
+        -- to source per ADR 0027. Bronze stays the source of truth; this guard is the correct
+        -- silver-side normalization of the source typo.
+        case when recall_initiation_dt >= '1940-01-01'
+             then recall_initiation_dt end                               as announced_at,
         -- event_lmd is nullable as of migration 0020: ~197 un-edited records have
         -- null EVENTLMD (Finding H). Coalesce to recall_initiation_dt (mirrors the
         -- USDA branch) so silver published_at stays non-null per the strict-silver
@@ -128,14 +143,7 @@ fda_events as (
         cast(null as text)                                               as risk_level,
         initial_firm_notification_txt                                    as notification_method,
         cast(null as text)                                               as reason_category,
-        case
-            when lower(distribution_area_summary_txt) like '%nationwide%'
-              or lower(distribution_area_summary_txt) like '%all 50%'
-              or lower(distribution_area_summary_txt) like '%all states%'   then 'Nationwide'
-            when lower(distribution_area_summary_txt) like '%worldwide%'
-              or lower(distribution_area_summary_txt) like '%international%' then 'International'
-            when distribution_area_summary_txt is not null                  then 'Regional'
-        end                                                              as distribution_scope,
+        {{ classify_distribution_scope('distribution_area_summary_txt') }} as distribution_scope,
         cast(null as text)                                               as distribution_states,
         termination_dt                                                   as terminated_at,
         cast(null as timestamptz)                                        as campaign_started_at,
@@ -212,12 +220,7 @@ usda_events as (
         end                                                as risk_level,
         cast(null as text)                                 as notification_method,
         recall_reason                                      as reason_category,
-        case
-            when lower(states) like '%nationwide%'                       then 'Nationwide'
-            when lower(states) like '%worldwide%'
-              or lower(states) like '%international%'                     then 'International'
-            when states is not null                                      then 'Regional'
-        end                                                as distribution_scope,
+        {{ classify_distribution_scope('states') }}        as distribution_scope,
         states                                             as distribution_states,
         closed_at                                          as terminated_at,
         cast(null as timestamptz)                          as campaign_started_at,
@@ -290,7 +293,7 @@ nhtsa_events as (
         cast(null as text)                                             as risk_level,
         cast(null as text)                                             as notification_method,
         cast(null as text)                                             as reason_category,
-        cast(null as text)                                             as distribution_scope,
+        'Nationwide'                                                   as distribution_scope,  -- derived default: federal vehicle recalls are national (no state field)
         cast(null as text)                                             as distribution_states,
         cast(null as timestamptz)                                      as terminated_at,
         cast(null as timestamptz)                                      as campaign_started_at,
@@ -366,7 +369,7 @@ uscg_events as (
         cast(null as text)                                             as risk_level,
         cast(null as text)                                             as notification_method,
         cast(null as text)                                             as reason_category,
-        cast(null as text)                                             as distribution_scope,
+        'Unspecified'                                                  as distribution_scope,
         cast(null as text)                                             as distribution_states,
         case_close_date                                                as terminated_at,
         campaign_open_date                                             as campaign_started_at,

@@ -1,4 +1,9 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    indexes=[
+      {'columns': ['recall_event_id'], 'unique': True},
+    ]
+) }}
 
 -- USDA recall -> FSIS establishment disambiguation (Phase 6b PR 6b.2).
 --
@@ -37,21 +42,11 @@ with recalls as (
     where establishment is not null and trim(establishment) <> ''
 ),
 
--- USPS abbreviations (establishment.state is 2-letter; recall states are full names). Territories incl.
-state_abbr (name, abbr) as (
-    values
-    ('ALABAMA','AL'),('ALASKA','AK'),('ARIZONA','AZ'),('ARKANSAS','AR'),('CALIFORNIA','CA'),
-    ('COLORADO','CO'),('CONNECTICUT','CT'),('DELAWARE','DE'),('FLORIDA','FL'),('GEORGIA','GA'),
-    ('HAWAII','HI'),('IDAHO','ID'),('ILLINOIS','IL'),('INDIANA','IN'),('IOWA','IA'),('KANSAS','KS'),
-    ('KENTUCKY','KY'),('LOUISIANA','LA'),('MAINE','ME'),('MARYLAND','MD'),('MASSACHUSETTS','MA'),
-    ('MICHIGAN','MI'),('MINNESOTA','MN'),('MISSISSIPPI','MS'),('MISSOURI','MO'),('MONTANA','MT'),
-    ('NEBRASKA','NE'),('NEVADA','NV'),('NEW HAMPSHIRE','NH'),('NEW JERSEY','NJ'),('NEW MEXICO','NM'),
-    ('NEW YORK','NY'),('NORTH CAROLINA','NC'),('NORTH DAKOTA','ND'),('OHIO','OH'),('OKLAHOMA','OK'),
-    ('OREGON','OR'),('PENNSYLVANIA','PA'),('RHODE ISLAND','RI'),('SOUTH CAROLINA','SC'),
-    ('SOUTH DAKOTA','SD'),('TENNESSEE','TN'),('TEXAS','TX'),('UTAH','UT'),('VERMONT','VT'),
-    ('VIRGINIA','VA'),('WASHINGTON','WA'),('WEST VIRGINIA','WV'),('WISCONSIN','WI'),('WYOMING','WY'),
-    ('DISTRICT OF COLUMBIA','DC'),('PUERTO RICO','PR'),('GUAM','GU'),('AMERICAN SAMOA','AS'),
-    ('VIRGIN ISLANDS','VI'),('U.S. VIRGIN ISLANDS','VI')
+-- USPS abbreviations (establishment.state is 2-letter; recall states are full names). Sourced from
+-- the shared dbt/seeds/us_state_abbr.csv seed (Phase 6e geography foundation — DRY with
+-- recall_distribution_area.sql; identical values to the prior inline list).
+state_abbr as (
+    select name, abbr from {{ ref('us_state_abbr') }}
 ),
 
 -- Candidate establishments for each recall (matched by name); grant set = composite split, normalized.
