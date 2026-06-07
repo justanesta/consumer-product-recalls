@@ -88,6 +88,27 @@ extraction_runs = sa.Table(
     sa.Column("was_short_circuited", sa.Boolean),
 )
 
+# Durable resume cursor for batched deep-rescan sweeps (migration 0030). One row per
+# (source, change_type); a batched sweep co-commits its position in the SAME transaction as
+# the bronze load, so resume reads the cursor from here rather than grepping a log (empty
+# events leave no bronze row, so the cursor was never recoverable from bronze). ``cursor`` is
+# an opaque per-source JSONB — the FDA press-release seed stores
+# {"init_dt": "YYYY-MM-DD", "event_id": <int>}. status is 'in_progress' until the sweep
+# exhausts its work-list, then 'complete'.
+deep_rescan_checkpoints = sa.Table(
+    "deep_rescan_checkpoints",
+    metadata,
+    sa.Column("source", sa.Text, primary_key=True),
+    sa.Column("change_type", sa.Text, primary_key=True),
+    sa.Column("cursor", postgresql.JSONB, nullable=False),
+    sa.Column("status", sa.Text, nullable=False),
+    sa.Column("batches_done", sa.Integer, nullable=False),
+    sa.Column("events_processed", sa.Integer, nullable=False),
+    sa.Column("rows_loaded", sa.Integer, nullable=False),
+    sa.Column("started_at", sa.TIMESTAMP(timezone=True)),
+    sa.Column("updated_at", sa.TIMESTAMP(timezone=True)),
+)
+
 # Per-run presence manifest (ADR 0026 Option A; migration 0027). One row per
 # (run_id, source_recall_id [, langcode]) actually returned by a successful run, written
 # by Extractor._record_run in the same transaction as the extraction_runs row its run_id

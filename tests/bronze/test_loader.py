@@ -65,6 +65,20 @@ class RecordWithNullableIdentity(BaseModel):
     title: str = ""
 
 
+class PressReleaseRecord(BaseModel):
+    """Simulates FDA press releases: the full natural key is identity
+    (source_recall_id, press_release_url, press_release_type, press_release_issued_dt).
+
+    One event carries several releases AND the same URL recurs under a different type or
+    issue date (event 76385), so all four columns are identity. issued_dt is modelled as the
+    ISO string model_dump(mode='json') yields for the real UTC-aware datetime field."""
+
+    source_recall_id: str
+    press_release_url: str
+    press_release_type: str | None = None
+    press_release_issued_dt: str | None = None
+
+
 def _make_conn() -> MagicMock:
     """Return a mock SQLAlchemy Connection."""
     conn = MagicMock()
@@ -939,6 +953,93 @@ def test_within_batch_dedup_with_hash_exclude_fields_collapses_record_id_only_du
     # (arbitrary by ADR 0030 design — both are byte-equivalent on the
     # hashed surface).
     assert rows_inserted[0]["source_recall_id"] in {"record-100", "record-200"}
+
+
+_FDA_PR_IDENTITY = (
+    "source_recall_id",
+    "press_release_url",
+    "press_release_type",
+    "press_release_issued_dt",
+)
+
+
+def test_within_batch_dedup_fda_pr_same_url_distinct_issue_dates_both_load() -> None:
+    """Event 76385 regression at the loader level. The same URL under the same type with two
+    different issue dates must NOT raise WithinBatchIdentityCollisionError — under the full
+    natural-key identity they are distinct rows, so both load. This is the exact batch shape
+    that deterministically crashed the historical seed under the old 2-tuple identity."""
+    loader, _, _ = _make_loader(
+        identity_fields=_FDA_PR_IDENTITY,
+        within_batch_dedup=True,
+        allow_null_identity=True,
+    )
+    conn = _make_conn()
+    url = "https://www.fda.gov/AnimalVeterinary/NewsEvents/CVMUpdates/ucm542265.htm"
+    rec_a = PressReleaseRecord(
+        source_recall_id="76385",
+        press_release_url=url,
+        press_release_type="FDA",
+        press_release_issued_dt="2017-02-17T00:00:00Z",
+    )
+    rec_b = PressReleaseRecord(
+        source_recall_id="76385",
+        press_release_url=url,
+        press_release_type="FDA",
+        press_release_issued_dt="2017-03-02T00:00:00Z",
+    )
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={}):
+        count = loader.load(
+            conn,
+            records=[rec_a, rec_b],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    assert count == 2
+    rows_inserted = conn.execute.call_args[0][1]
+    assert len(rows_inserted) == 2
+    assert {r["press_release_issued_dt"] for r in rows_inserted} == {
+        "2017-02-17T00:00:00Z",
+        "2017-03-02T00:00:00Z",
+    }
+
+
+def test_within_batch_dedup_fda_pr_exact_byte_duplicate_collapses() -> None:
+    """The within_batch_dedup justification under the full natural key: an event whose
+    response repeats the exact same 4-tuple row collapses to one insert (identity AND hash
+    match), while genuinely distinct releases (above) are preserved."""
+    loader, _, _ = _make_loader(
+        identity_fields=_FDA_PR_IDENTITY,
+        within_batch_dedup=True,
+        allow_null_identity=True,
+    )
+    conn = _make_conn()
+    url = "https://www.fda.gov/Safety/Recalls/ucm539900.htm"
+    rec_a = PressReleaseRecord(
+        source_recall_id="76385",
+        press_release_url=url,
+        press_release_type="Firm",
+        press_release_issued_dt="2017-02-03T00:00:00Z",
+    )
+    rec_b = PressReleaseRecord(
+        source_recall_id="76385",
+        press_release_url=url,
+        press_release_type="Firm",
+        press_release_issued_dt="2017-02-03T00:00:00Z",
+    )
+
+    with patch.object(loader, "_fetch_existing_hashes", return_value={}):
+        count = loader.load(
+            conn,
+            records=[rec_a, rec_b],
+            quarantined=[],
+            raw_landing_path=_LANDING_PATH,
+            extraction_timestamp=_FIXED_TS,
+        )
+
+    assert count == 1
 
 
 # ---------------------------------------------------------------------------

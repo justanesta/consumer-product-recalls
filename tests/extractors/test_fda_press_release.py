@@ -17,6 +17,7 @@ from src.extractors._base import (
     TransientExtractionError,
 )
 from src.extractors.fda_press_release import (
+    FdaPressReleaseCheckpointedSeedLoader,
     FdaPressReleaseExtractor,
     _interpret_pr_response,
     _rows_from_result,
@@ -53,6 +54,152 @@ def pr_extractor(monkeypatch: pytest.MonkeyPatch) -> FdaPressReleaseExtractor:
         return FdaPressReleaseExtractor(
             base_url=_BASE_URL, settings=settings, inter_event_sleep_seconds=0.0
         )
+
+
+@pytest.fixture
+def seed_loader(monkeypatch: pytest.MonkeyPatch) -> FdaPressReleaseCheckpointedSeedLoader:
+    """Checkpointed seed loader with mocked engine + R2 and no inter-event sleep."""
+    for k, v in _REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+    mock_engine = MagicMock(spec=sa.Engine)
+    mock_r2 = MagicMock()
+    mock_r2.land.return_value = _FAKE_R2_PATH
+    with (
+        patch("sqlalchemy.create_engine", return_value=mock_engine),
+        patch("src.extractors.fda_press_release.R2LandingClient", return_value=mock_r2),
+    ):
+        settings = Settings()  # type: ignore[call-arg]
+        return FdaPressReleaseCheckpointedSeedLoader(
+            base_url=_BASE_URL, settings=settings, inter_event_sleep_seconds=0.0
+        )
+
+
+# ---------------------------------------------------------------------------
+# FdaPressReleaseCheckpointedSeedLoader — resumable recent-first seed driver
+# ---------------------------------------------------------------------------
+
+
+class TestCheckpointedSeedDriver:
+    # run() lives on the base Extractor (no leading underscore), and Pydantic v2 blocks
+    # setattr of non-field instance attrs — so run() is patched on the CLASS, not the
+    # instance. The underscore-prefixed helpers patch fine on the instance.
+    _SEED_CLS = FdaPressReleaseCheckpointedSeedLoader
+
+    def test_loops_until_short_batch_then_marks_complete(
+        self, seed_loader: FdaPressReleaseCheckpointedSeedLoader
+    ) -> None:
+        """Three full batches then a short one → 4 run()s, mark complete once, totals summed."""
+        loader = seed_loader
+        event_counts = iter([250, 250, 250, 137])
+        loaded_counts = iter([5, 8, 12, 3])
+
+        def fake_run(change_type: str) -> Any:
+            loader._last_batch_event_count = next(event_counts)
+            result = MagicMock()
+            result.records_loaded = next(loaded_counts)
+            return result
+
+        with (
+            patch.object(loader, "_read_checkpoint", return_value=(None, None)),
+            patch.object(self._SEED_CLS, "run", side_effect=fake_run) as run_mock,
+            patch.object(loader, "_mark_complete") as mark_mock,
+        ):
+            summary = loader.run_checkpointed(change_type="historical_seed", batch_size=250)
+
+        assert run_mock.call_count == 4
+        assert mark_mock.call_count == 1
+        assert summary == {
+            "batches": 4,
+            "events": 887,  # 250+250+250+137
+            "loaded": 28,  # 5+8+12+3
+            "already_complete": False,
+        }
+
+    def test_exact_multiple_runs_one_trailing_empty_batch(
+        self, seed_loader: FdaPressReleaseCheckpointedSeedLoader
+    ) -> None:
+        """When events are an exact multiple of batch_size, the final batch returns 0 → stop."""
+        loader = seed_loader
+        counts = iter([250, 0])
+
+        def fake_run(change_type: str) -> Any:
+            loader._last_batch_event_count = next(counts)
+            result = MagicMock()
+            result.records_loaded = 0
+            return result
+
+        with (
+            patch.object(loader, "_read_checkpoint", return_value=(None, None)),
+            patch.object(self._SEED_CLS, "run", side_effect=fake_run) as run_mock,
+            patch.object(loader, "_mark_complete") as mark_mock,
+        ):
+            summary = loader.run_checkpointed(change_type="historical_seed", batch_size=250)
+
+        assert run_mock.call_count == 2
+        assert mark_mock.call_count == 1
+        assert summary["batches"] == 2
+
+    def test_noop_when_checkpoint_already_complete(
+        self, seed_loader: FdaPressReleaseCheckpointedSeedLoader
+    ) -> None:
+        """A 'complete' checkpoint short-circuits: no run(), no re-mark."""
+        loader = seed_loader
+        done_cursor = {"init_dt": "2026-05-01T00:00:00+00:00", "event_id": 99000}
+        with (
+            patch.object(loader, "_read_checkpoint", return_value=(done_cursor, "complete")),
+            patch.object(self._SEED_CLS, "run") as run_mock,
+            patch.object(loader, "_mark_complete") as mark_mock,
+        ):
+            summary = loader.run_checkpointed(change_type="historical_seed")
+
+        run_mock.assert_not_called()
+        mark_mock.assert_not_called()
+        assert summary["already_complete"] is True
+
+    def test_extract_builds_next_cursor_from_last_workitem(
+        self, seed_loader: FdaPressReleaseCheckpointedSeedLoader
+    ) -> None:
+        """extract() stashes the batch event count + the recent-first resume cursor (the
+        LAST work item = the oldest in this DESC batch)."""
+        loader = seed_loader
+        loader.batch_size = 250
+        work = [
+            {
+                "recall_event_id": 99000,
+                "init_key": datetime(2026, 5, 1, tzinfo=UTC),
+                "event_lmd": None,
+            },
+            {
+                "recall_event_id": 98000,
+                "init_key": datetime(2026, 4, 1, tzinfo=UTC),
+                "event_lmd": None,
+            },
+        ]
+        with (
+            patch.object(loader, "_read_checkpoint", return_value=(None, None)),
+            patch.object(loader, "_build_seed_work_list", return_value=work),
+            patch.object(loader, "_fetch_all", return_value=[]) as fetch_mock,
+        ):
+            loader.extract()
+
+        assert loader._last_batch_event_count == 2
+        assert loader._next_cursor == {"init_dt": "2026-04-01T00:00:00+00:00", "event_id": 98000}
+        fetch_mock.assert_called_once_with(work)
+
+    def test_extract_empty_work_clears_cursor(
+        self, seed_loader: FdaPressReleaseCheckpointedSeedLoader
+    ) -> None:
+        """An empty work-list (past the cursor) → count 0 and no cursor write target."""
+        loader = seed_loader
+        with (
+            patch.object(loader, "_read_checkpoint", return_value=(None, None)),
+            patch.object(loader, "_build_seed_work_list", return_value=[]),
+            patch.object(loader, "_fetch_all", return_value=[]),
+        ):
+            loader.extract()
+
+        assert loader._last_batch_event_count == 0
+        assert loader._next_cursor is None
 
 
 # ---------------------------------------------------------------------------

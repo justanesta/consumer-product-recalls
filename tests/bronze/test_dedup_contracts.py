@@ -101,6 +101,57 @@ class TestNhtsaOracle:
         assert hashed(row) == hashed(regen)  # same content_hash → recognized, not re-inserted
 
 
+class TestFdaPressReleaseOracle:
+    def test_oracle_is_full_natural_key(self) -> None:
+        """Pins the fda_press_releases oracle to the full 4-column natural key.
+
+        The original 2-tuple (source_recall_id, press_release_url) collided on event 76385,
+        which returns the same URL twice (same type "FDA", different issue dates), and
+        press_release_issued_dt is content — so the 2-tuple raised
+        WithinBatchIdentityCollisionError mid-seed. issued_dt and type must be IN the identity
+        to keep the two distinct releases apart (probe 2026-06-07)."""
+        contract = DEDUP_CONTRACT_BY_SOURCE_NAME["fda_press_releases"]
+        assert contract.identity_fields == (
+            "source_recall_id",
+            "press_release_url",
+            "press_release_type",
+            "press_release_issued_dt",
+        )
+        assert contract.hash_exclude_fields == frozenset()
+        assert contract.default_within_batch_dedup is True
+        assert contract.default_allow_null_identity is True
+
+    def test_event_76385_same_url_different_issued_dt_no_longer_collides(self) -> None:
+        """THE regression guard for the seed crash. Event 76385's two FDA rows share
+        (source_recall_id, press_release_url, press_release_type) and differ only in
+        press_release_issued_dt. Under the full-natural-key oracle they map to DISTINCT
+        identity tuples, so both load and _dedup_within_batch never raises. A true
+        byte-duplicate (all four equal) still shares identity AND content_hash → collapses.
+        Mirrors the loader's identity/hash construction (BronzeLoader.load)."""
+        contract = DEDUP_CONTRACT_BY_SOURCE_NAME["fda_press_releases"]
+
+        def identity(d: dict[str, str]) -> tuple[str, ...]:
+            return tuple(str(d.get(f, "")) for f in contract.identity_fields)
+
+        row_0217 = {
+            "source_recall_id": "76385",
+            "press_release_url": (
+                "https://www.fda.gov/AnimalVeterinary/NewsEvents/CVMUpdates/ucm542265.htm"
+            ),
+            "press_release_type": "FDA",
+            "press_release_issued_dt": "2017-02-17T00:00:00Z",
+        }
+        row_0302 = {**row_0217, "press_release_issued_dt": "2017-03-02T00:00:00Z"}
+
+        # The collision pair now resolves to two distinct identity buckets.
+        assert identity(row_0217) != identity(row_0302)
+
+        # A genuine byte-duplicate shares both identity and content_hash → collapsible.
+        dup = dict(row_0217)
+        assert identity(row_0217) == identity(dup)
+        assert content_hash(row_0217) == content_hash(dup)
+
+
 class TestFromContract:
     def test_propagates_oracle_and_inherits_default_flags(self) -> None:
         contract = DEDUP_CONTRACT_BY_SOURCE_NAME["nhtsa"]
