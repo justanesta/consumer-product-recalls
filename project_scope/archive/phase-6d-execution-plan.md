@@ -1,6 +1,6 @@
 # Phase 6d — Operational Tooling (Execution Plan)
 
-- **Status:** In progress on `feature/phase-6d-operational-tooling` (branch name predates the 6d rename; it is the 6d branch). Re-scoped 2026-06-06 after re-evaluating the original three deliverables against the post-6c codebase.
+- **Status:** In progress on `feature/archive/phase-6d-operational-tooling` (branch name predates the 6d rename; it is the 6d branch). Re-scoped 2026-06-06 after re-evaluating the original three deliverables against the post-6c codebase.
 - **Owning master plan:** `project_scope/phase-6-execution-plan.md` §"Phase 6d — Operational Tooling" (this doc supersedes those three bullets; build from here).
 - **Sequencing:** 6d is independent — any time after 6a; no dependency on 6e/6f.
 

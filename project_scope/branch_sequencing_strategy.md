@@ -46,7 +46,7 @@ feature/silver-v15-migration (Layer 3 cutover) — gated by Layer 2 evidence +
               6c/6b (not free parallel)
   │
   ▼
-feature/phase-6d-operational-tooling
+feature/archive/phase-6d-operational-tooling
   │
   ▼
 feature/phase-6e-gold-layer
