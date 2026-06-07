@@ -144,13 +144,28 @@ DEDUP_CONTRACT_BY_SOURCE_NAME: dict[str, DedupContract] = {
         identity_fields=("source_recall_id",),
         hash_exclude_fields=frozenset({"detail_url", "uscg_directory_id"}),
     ),
-    # fda_press_release.py — Tier-3 press releases (capture-expansion (b) PR). Composite
-    # identity: one event (source_recall_id = RECALLEVENTID) can carry several releases,
-    # so the URL is the second key. No hash exclusions — all 3 payload fields are content.
-    # within_batch_dedup on (defensive): a single event's response could repeat a URL;
-    # collapse byte-identical copies, raise only on same-identity-different-content.
+    # fda_press_release.py — Tier-3 press releases (capture-expansion (b) PR). Identity is the
+    # FULL natural key: one event (source_recall_id = RECALLEVENTID) carries several releases,
+    # AND the same URL recurs within an event under a different type or issue date — event 76385
+    # returns ucm542265.htm twice, both type "FDA", issued 02/17 and 03/02/2017 (probe 2026-06-07).
+    # The original 2-tuple (source_recall_id, press_release_url) bucketed those two distinct
+    # releases together; since press_release_issued_dt is content, _dedup_within_batch raised
+    # WithinBatchIdentityCollisionError — the deterministic crash that blocked the historical seed.
+    # All four payload columns are immutable facts and belong in the key. press_release_issued_dt
+    # is a UTC-aware datetime (schema _parse_fda_date mirrors NHTSA's _parse_nhtsa_date), so it
+    # text-canonicalizes identically on the Python and SQL sides of the existing-hash match (the
+    # NHTSA bgman/endman precedent — proven idempotent). No hash exclusions; the identity now
+    # covers every content field, so a within-batch collision is structurally impossible —
+    # within_batch_dedup stays on only to collapse exact byte-duplicate rows. allow_null_identity
+    # on: press_release_type / press_release_issued_dt are nullable.
     "fda_press_releases": DedupContract(
-        identity_fields=("source_recall_id", "press_release_url"),
+        identity_fields=(
+            "source_recall_id",
+            "press_release_url",
+            "press_release_type",
+            "press_release_issued_dt",
+        ),
         default_within_batch_dedup=True,
+        default_allow_null_identity=True,
     ),
 }

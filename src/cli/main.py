@@ -30,6 +30,7 @@ from src.config.source_registry import (
     build_extractor_kwargs,
 )
 from src.enrichment.crosswalk_writer import audit_rollup_clusters, resolve_firm_crosswalk
+from src.extractors.fda_press_release import FdaPressReleaseCheckpointedSeedLoader
 from src.landing.r2 import R2LandingClient
 
 if TYPE_CHECKING:
@@ -359,6 +360,37 @@ def deep_rescan(
             ),
         ),
     ] = None,
+    checkpointed: Annotated[
+        bool,
+        typer.Option(
+            "--checkpointed",
+            help=(
+                "fda_press_releases only: run the resumable, recent-first full-sweep seed "
+                "(recall_initiation_dt DESC). Lands+loads+checkpoints per --batch-size events "
+                "and loops to completion; resumes from the DB cursor (deep_rescan_checkpoints), "
+                "so a crash/throttle costs at most one batch. Mutually exclusive with --limit / "
+                "--resume-after-event-id."
+            ),
+        ),
+    ] = False,
+    batch_size: Annotated[
+        int | None,
+        typer.Option(
+            "--batch-size",
+            help="fda_press_releases --checkpointed only: events per batch (default 250).",
+        ),
+    ] = None,
+    since: Annotated[
+        str | None,
+        typer.Option(
+            "--since",
+            help=(
+                "fda_press_releases --checkpointed only: floor the work-list to "
+                "recall_initiation_dt >= YYYY-MM-DD (date-unknown events kept). Omit for the "
+                "full sweep."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run a historical / deep-rescan load for a given source over a date window.
 
@@ -373,6 +405,10 @@ def deep_rescan(
 
     if source not in DEEP_RESCAN_BY_SOURCE_NAME:
         typer.echo(f"Deep-rescan not implemented for source: {source}", err=True)
+        raise typer.Exit(code=1)
+
+    if checkpointed and source != "fda_press_releases":
+        typer.echo("--checkpointed is only supported for fda_press_releases", err=True)
         raise typer.Exit(code=1)
 
     # Date-window pre-validation per source.
@@ -412,6 +448,33 @@ def deep_rescan(
         settings,
         exclude=frozenset({"etag_enabled"}),
     )
+    # fda_press_releases checkpointed seed: the resumable, recent-first full-sweep driver
+    # (fda-press-release-seed-plan.md). Bypasses the generic single-run path — it
+    # lands+loads+checkpoints per batch and loops to completion, resuming from the DB cursor.
+    if source == "fda_press_releases" and checkpointed:
+        if limit is not None or resume_after_event_id is not None:
+            typer.echo(
+                "--checkpointed manages its own batching + cursor; drop --limit / "
+                "--resume-after-event-id (use --batch-size instead).",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        if batch_size is not None and batch_size < 1:
+            typer.echo("--batch-size must be >= 1", err=True)
+            raise typer.Exit(code=1)
+        since_date = date.fromisoformat(since) if since else None
+        seed = FdaPressReleaseCheckpointedSeedLoader(**kwargs)
+        summary = seed.run_checkpointed(
+            change_type=change_type, batch_size=batch_size, since=since_date
+        )
+        typer.echo(
+            "fda_press_releases checkpointed seed: "
+            + ("already complete" if summary["already_complete"] else "done")
+            + f" — batches={summary['batches']} events={summary['events']} "
+            + f"loaded={summary['loaded']}"
+        )
+        return
+
     loader: Extractor = loader_cls(**kwargs)
 
     # FDA-only: post-construction mode mutation (the date / full-corpus fields are

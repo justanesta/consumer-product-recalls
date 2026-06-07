@@ -606,6 +606,19 @@ cassette-trim reasoning is unaffected (its windows still terminate in one page).
 
 ---
 
+### K0.4. Press-release URLs are lookup-endpoint-only — no bulk presence signal, no alternate bulk source
+
+The press-release columns (`recalleventid, pressreleasetype, pressreleaseissuedt, pressreleaseurl`) are obtainable **only** via the per-event `GET /search/pressreleaseurls/{eventid}` — there is no way to learn which events *have* a press release without one GET per event. Established 2026-06-07 (decision-grade; verified against the primary docs + live probes; see `project_scope/fda-press-release-seed-plan.md`):
+
+- **No bulk presence flag.** The 33-column bulk-POST datagroup carries no `pressrelease*` field and no `pressreleaseindicator` (the `*indicator` fields are UI truncation toggles, K0.3); the four PR columns 406 on the bulk POST (Finding K0).
+- **No list-all / windowed PR endpoint.** `/search/pressreleaseurls/` requires a numeric `{eventid}` path param (STATUSCODE 421 otherwise) — there is no no-eventid or date-range form.
+- **No alternate bulk source.** openFDA enforcement (`/food`, `/drug`, `/device`) is bulk + joinable on `event_id`/`recall_number` but carries **no press-release URL field at all**, and has **no animal/veterinary enforcement endpoint** (the one confirmed PR, `ucm542265.htm`, is a CVM/AnimalVet release). The fda.gov recalls feed exposes URLs but no usable join key.
+- **`createdt` (`GET /recalls/event/{eventid}`) ≈ `posted_internet_dt`** ("date recall was first posted") — redundant with the Tier-1 field already captured + lifted to silver `recall_event.first_posted_at`; its only marginal value is backfilling that date for pre-2022 recalls (where `posted_internet_dt` is NULL). The whole `/recalls/event/{eventid}` endpoint is a separate per-event fan-out whose other fields are already captured via the bulk POST → **deferred, out of (b)-scope** (see `documentation/audit/capture_expansion_backlog.md`).
+
+**Consequence:** the historical seed is one GET per candidate event (~50.5K). A 2026-06-07 stratified sample estimated **~1,760 PRs, all in 2018+ recalls**. Execution = the checkpointed recent-first seed (`FdaPressReleaseCheckpointedSeedLoader`).
+
+---
+
 ## Cardinality observations
 
 Useful for sizing decisions in Phase 5a (batch sizes, historical-load runtime estimates, daily-delta expectations):

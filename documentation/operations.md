@@ -215,6 +215,21 @@ Review the census before applying. `--dry-run` and `--apply` are mutually exclus
 
 ---
 
+### FDA press-release historical seed (checkpointed, one-shot)
+
+The FDA Tier-3 press-release backfill is per-event (`GET /search/pressreleaseurls/{eventid}`, ~50.5K events, ~17 h at the polite 1 req/s) — too long for a single GitHub Actions job (6 h cap) and too long to risk losing to a laptop sleep or Neon blip. `FdaPressReleaseCheckpointedSeedLoader` (CLI `--checkpointed`) sweeps **recent-first** (`recall_initiation_dt` DESC — press releases concentrate in 2018+, so value front-loads) in batches that land+load+checkpoint per batch; the resume cursor is co-committed with each batch's bronze rows in `deep_rescan_checkpoints`, so a crash/throttle costs at most one batch.
+
+```bash
+alembic upgrade head    # ensure migration 0030 (deep_rescan_checkpoints) is applied
+systemd-inhibit --what=sleep:idle --mode=block --why="FDA PR seed" \
+  recalls deep-rescan fda_press_releases --checkpointed --change-type historical_seed \
+  2>&1 | tee logs/seed_pr_checkpointed_$(date +%Y%m%dT%H%M%S).log
+```
+
+**Resume:** re-run the *exact same command* — it continues from the committed DB cursor (a `complete` checkpoint is a no-op). **Akamai:** the loader sends the Mozilla `IRES_USER_AGENT` (the default python-httpx UA trips the anti-abuse 302 on the first request, Finding N); a throttle exits the process — wait ≥30 min, then re-run to resume. Knobs: `--batch-size` (default 250 events ≈ ~5 min), `--since YYYY-MM-DD` (floor the work-list; date-unknown events kept). **Verify on completion:** re-run → `already complete`, then `dbt build` the press-release silver. Supersedes the legacy `scripts/fda_press_releases/seed_chunked.sh` (ascending-id, log-grep cursor).
+
+---
+
 ## Production (`main`) backfill / cutover
 
 A **controlled manual op** (the kind [ADR 0005](decisions/0005-storage-tier-neon-and-r2.md) sanctions as the only non-CI writer to `main`) for the rare case of seeding the production branch from a local shell — e.g. the Phase 6a.5 historical backfill, or any time `main` must be populated/re-seeded outside the scheduled workflows.

@@ -7,7 +7,7 @@ variables:
   - name: fda_root_uri
     value: https://www.accessdata.fda.gov/rest/iresapi
   - name: event_id
-    value: "98815"
+    value: "76385"
   - name: product_id
     value: "194258"
   - name: edited_event_id

@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime  # noqa: TC003 — Pydantic evaluates the PrivateAttr annotation
+from datetime import UTC, date, datetime  # noqa: TC003 — Pydantic evaluates annotations
 from typing import Any
 
 import httpx
@@ -65,6 +65,7 @@ from src.extractors._fda_base import (
     STATUS_SUCCESS,
     FdaIresExtractor,
 )
+from src.extractors._tables import deep_rescan_checkpoints as _deep_rescan_checkpoints
 from src.landing.r2 import R2LandingClient
 from src.schemas.fda import FdaPressReleaseRecord
 
@@ -105,6 +106,9 @@ _fda_recalls_bronze = sa.Table(
     sa.Column("id", sa.Integer, primary_key=True),
     sa.Column("recall_event_id", sa.BigInteger),
     sa.Column("event_lmd", sa.TIMESTAMP(timezone=True)),
+    # The checkpointed seed orders the work-list recent-first on this (ADR: the real
+    # announcement date, not recall_event_id, is the recency/PR-yield proxy).
+    sa.Column("recall_initiation_dt", sa.TIMESTAMP(timezone=True)),
 )
 
 _SOURCE = "fda_press_releases"
@@ -448,3 +452,261 @@ class FdaPressReleaseDeepRescanLoader(FdaPressReleaseExtractor):
         )
         with self._engine.begin() as conn:
             return loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
+
+
+# Events per checkpointed batch (land+load+checkpoint cadence). ~250 events ≈ ~5 min at
+# 1 req/s, so a crash/throttle costs at most one batch of re-fetch; small enough to bound
+# loss, large enough that the per-batch DB write is negligible.
+_DEFAULT_SEED_BATCH_SIZE = 250
+# Sentinel for events with a NULL recall_initiation_dt: they sort LAST in the recent-first
+# order and the composite cursor stays all-non-null (clean comparison).
+_NULL_INIT_SENTINEL = "1900-01-01T00:00:00+00:00"
+
+
+class FdaPressReleaseCheckpointedSeedLoader(FdaPressReleaseDeepRescanLoader):
+    """Resumable, recent-first historical seed driver (``fda-press-release-seed-plan.md`` S2).
+
+    Sweeps the full distinct-event work-list in **recall_initiation_dt DESC** order (most
+    recent recalls first — that is where press releases concentrate, so value is front-loaded
+    and an interruption never loses the dense recent PRs) in batches of ``batch_size`` events.
+    Each batch is a normal ``run()`` — extract (this batch) → land → validate → invariants →
+    load — reusing all the tested lifecycle + retry + run-recording. The resume cursor is
+    co-committed in the SAME transaction as the bronze load (``deep_rescan_checkpoints``), so:
+
+      - resume reads the cursor from the DB, not from a grepped log (empty events leave no
+        bronze row, so the cursor was never recoverable from bronze — the old chunk-script gap);
+      - a crash/throttle costs at most one partial batch, and re-running resumes cleanly;
+      - a deterministic data/throttle error fails fast (run() records it 'failed' and raises;
+        no blind 30-min cooldown).
+
+    ``since`` optionally floors the work-list by ``recall_initiation_dt`` (None = full sweep;
+    NULL/typo-dated events are kept under a floor — that is where legacy PRs hide). The cursor
+    is ``{"init_dt": <iso ts>, "event_id": <int>}`` = the last event of the last committed
+    batch. The watermark is never advanced (deep-rescan invariant, inherited).
+    """
+
+    batch_size: int = _DEFAULT_SEED_BATCH_SIZE
+    since: date | None = None
+
+    _change_type: str = PrivateAttr(default="historical_seed")
+    _last_batch_event_count: int = PrivateAttr(default=0)
+    _next_cursor: dict[str, Any] | None = PrivateAttr(default=None)
+
+    # --- Checkpoint store ---
+
+    def _read_checkpoint(self, conn: sa.Connection) -> tuple[dict[str, Any] | None, str | None]:
+        """Return ``(cursor, status)`` for this ``(source, change_type)``, or ``(None, None)``."""
+        t = _deep_rescan_checkpoints
+        row = conn.execute(
+            sa.select(t.c.cursor, t.c.status).where(
+                sa.and_(t.c.source == self.source_name, t.c.change_type == self._change_type)
+            )
+        ).fetchone()
+        if row is None:
+            return None, None
+        return row.cursor, row.status
+
+    def _write_checkpoint(
+        self,
+        conn: sa.Connection,
+        *,
+        cursor: dict[str, Any],
+        events_delta: int,
+        loaded_delta: int,
+    ) -> None:
+        """Upsert the resume cursor + bump counters. Called INSIDE ``load_bronze``'s txn so the
+        cursor commits atomically with its batch's bronze rows and can never lead them."""
+        t = _deep_rescan_checkpoints
+        now = datetime.now(UTC)
+        stmt = postgresql.insert(t).values(
+            source=self.source_name,
+            change_type=self._change_type,
+            cursor=cursor,
+            status="in_progress",
+            batches_done=1,
+            events_processed=events_delta,
+            rows_loaded=loaded_delta,
+            started_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["source", "change_type"],
+            set_={
+                "cursor": cursor,
+                "status": "in_progress",
+                "batches_done": t.c.batches_done + 1,
+                "events_processed": t.c.events_processed + events_delta,
+                "rows_loaded": t.c.rows_loaded + loaded_delta,
+                "updated_at": now,
+            },
+        )
+        conn.execute(stmt)
+
+    def _mark_complete(self) -> None:
+        t = _deep_rescan_checkpoints
+        with self._engine.begin() as conn:
+            conn.execute(
+                sa.update(t)
+                .where(
+                    sa.and_(t.c.source == self.source_name, t.c.change_type == self._change_type)
+                )
+                .values(status="complete", updated_at=datetime.now(UTC))
+            )
+
+    # --- Work-list (recent-first, resume strictly past the committed cursor) ---
+
+    def _build_seed_work_list(
+        self, conn: sa.Connection, cursor: dict[str, Any] | None
+    ) -> list[dict[str, Any]]:
+        """Next ``batch_size`` distinct events past ``cursor``, recent-first.
+
+        Order: ``coalesce(max(recall_initiation_dt), sentinel) DESC, recall_event_id DESC``.
+        Resume predicate (the row-value comparison, written out explicitly to avoid any
+        ``tuple_`` operator ambiguity): an event is past the cursor in DESC order iff its
+        ``init_key < cursor.init_dt`` OR (``init_key == cursor.init_dt`` AND
+        ``recall_event_id < cursor.event_id``).
+        """
+        fb = _fda_recalls_bronze
+        init_key = sa.func.coalesce(
+            sa.func.max(fb.c.recall_initiation_dt),
+            sa.cast(sa.literal(_NULL_INIT_SENTINEL), sa.TIMESTAMP(timezone=True)),
+        )
+        stmt = (
+            sa.select(
+                fb.c.recall_event_id.label("recall_event_id"),
+                init_key.label("init_key"),
+                sa.func.max(fb.c.event_lmd).label("event_lmd"),
+            )
+            .where(fb.c.recall_event_id.is_not(None))
+            .group_by(fb.c.recall_event_id)
+        )
+        if self.since is not None:
+            # Keep date-unknown events under a floor (legacy-PR cohort hides there).
+            stmt = stmt.having(
+                sa.or_(
+                    sa.func.max(fb.c.recall_initiation_dt) >= self.since,
+                    sa.func.max(fb.c.recall_initiation_dt).is_(None),
+                )
+            )
+        if cursor is not None:
+            cur_dt = sa.cast(sa.literal(cursor["init_dt"]), sa.TIMESTAMP(timezone=True))
+            cur_id = sa.literal(int(cursor["event_id"]))
+            stmt = stmt.having(
+                sa.or_(
+                    init_key < cur_dt,
+                    sa.and_(init_key == cur_dt, fb.c.recall_event_id < cur_id),
+                )
+            )
+        stmt = stmt.order_by(init_key.desc(), fb.c.recall_event_id.desc()).limit(self.batch_size)
+        rows = conn.execute(stmt).all()
+        return [
+            {
+                "recall_event_id": int(r.recall_event_id),
+                "init_key": r.init_key,
+                "event_lmd": r.event_lmd,
+            }
+            for r in rows
+        ]
+
+    # --- Lifecycle overrides (one batch per run()) ---
+
+    def extract(self) -> list[dict[str, Any]]:
+        with self._engine.connect() as conn:
+            cursor, _status = self._read_checkpoint(conn)
+            work = self._build_seed_work_list(conn, cursor)
+        self._last_batch_event_count = len(work)
+        if work:
+            last = work[-1]
+            init_key = last["init_key"]
+            self._next_cursor = {
+                "init_dt": init_key.isoformat() if init_key is not None else _NULL_INIT_SENTINEL,
+                "event_id": last["recall_event_id"],
+            }
+        else:
+            self._next_cursor = None
+        logger.info(
+            "fda_press_releases.seed.batch",
+            events=len(work),
+            batch_size=self.batch_size,
+            since=self.since.isoformat() if self.since else None,
+            resume_from=cursor,
+            next_cursor=self._next_cursor,
+        )
+        return self._fetch_all(work)
+
+    def load_bronze(
+        self,
+        records: list[FdaPressReleaseRecord],
+        quarantined: list[QuarantineRecord],
+        raw_landing_path: str,
+    ) -> int:
+        """Load this batch's bronze rows AND co-commit the resume cursor in one txn."""
+        loader = BronzeLoader.from_contract(
+            DEDUP_CONTRACT_BY_SOURCE_NAME[_SOURCE],
+            bronze_table=_press_releases_bronze,
+            rejected_table=_press_releases_rejected,
+        )
+        with self._engine.begin() as conn:
+            count = loader.load(conn, records, quarantined, raw_landing_path)  # type: ignore[arg-type]
+            if self._next_cursor is not None:
+                self._write_checkpoint(
+                    conn,
+                    cursor=self._next_cursor,
+                    events_delta=self._last_batch_event_count,
+                    loaded_delta=count,
+                )
+        return count
+
+    # --- Driver ---
+
+    def run_checkpointed(
+        self,
+        *,
+        change_type: str = "historical_seed",
+        batch_size: int | None = None,
+        since: date | None = None,
+    ) -> dict[str, Any]:
+        """Sweep to completion in resumable recent-first batches.
+
+        Idempotent across re-runs: resumes from the committed cursor; a ``complete``
+        checkpoint is a no-op. Each batch is a ``run()`` (its own ``extraction_runs`` row); a
+        deterministic/throttle error in a batch propagates (the cursor stays at the last good
+        batch, so re-running resumes there).
+        """
+        if batch_size is not None:
+            self.batch_size = batch_size
+        self.since = since
+        self._change_type = change_type
+
+        with self._engine.connect() as conn:
+            _cursor, status = self._read_checkpoint(conn)
+        if status == "complete":
+            logger.info("fda_press_releases.seed.already_complete", change_type=change_type)
+            return {"batches": 0, "events": 0, "loaded": 0, "already_complete": True}
+
+        total_loaded = 0
+        total_events = 0
+        batches = 0
+        while True:
+            result = self.run(change_type=change_type)
+            batches += 1
+            total_loaded += result.records_loaded
+            total_events += self._last_batch_event_count
+            logger.info(
+                "fda_press_releases.seed.batch_done",
+                batch=batches,
+                events=self._last_batch_event_count,
+                loaded=result.records_loaded,
+                cumulative_events=total_events,
+                cumulative_loaded=total_loaded,
+            )
+            # A short batch means the work-list past the cursor is exhausted → done.
+            if self._last_batch_event_count < self.batch_size:
+                self._mark_complete()
+                break
+        return {
+            "batches": batches,
+            "events": total_events,
+            "loaded": total_loaded,
+            "already_complete": False,
+        }
