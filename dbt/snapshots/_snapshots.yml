@@ -75,3 +75,34 @@ snapshots:
             combination_of_columns:
               - firm_fei_num
               - dbt_valid_from
+
+  - name: nhtsa_recall_product_snapshot
+    description: >
+      SCD-2 product-grain history for NHTSA recall products, keyed on the stable 7-tuple
+      recall_product_id anchor (ADR 0033 + 2026-06-06 amendment / 0034; Phase 6c.6 Layer 2).
+      strategy='check' over the genuinely drift-prone fields (mfr_comp_desc, mfr_comp_name, bgman,
+      endman — Pierce + batch-window classes — WIDENED per the ADR 0034 refinement to also cover
+      rcltype, potaff, mfgname, mfgtxt, fmvss so the current view never goes stale on an isolated
+      non-check edit). mfr_comp_ptno is in the ANCHOR, NOT check_cols: the full-corpus finding showed
+      the 6-tuple's demotion of ptno collapsed 126k STRUCTURAL multi-part rows (legitimate facts).
+      The 7 anchor fields, model_year, and the extraction_timestamp heartbeat are deliberately NOT
+      check_cols — see the snapshot header. Current view (dbt_valid_to is null) feeds
+      recall_product_v15 (and recall_product after the 6c.7 cutover); the full table is the queryable
+      peer history (recall_product_history, Policy C). silver_snapshots schema (ADR 0007
+      pruning-exempt). Re-run on an unchanged corpus must bank 0 new versions (idempotency — the
+      Layer 2 gate).
+    columns:
+      - name: recall_product_id
+        description: v1.5 7-tuple md5 — the SCD anchor (single-homed in stg_nhtsa_recalls_current).
+        tests:
+          - not_null
+      - name: dbt_scd_id
+        tests:
+          - unique
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - recall_product_id
+              - dbt_valid_from

@@ -1,0 +1,18 @@
+version: 2
+
+models:
+  - name: stg_nhtsa_recalls_current
+    description: >
+      7-tuple "current per logical product" projection over stg_nhtsa_recalls (Phase 6c.6 Layer 2,
+      ADR 0033 + 2026-06-06 amendment). One row per stable anchor (campno, normalize_maketxt(maketxt),
+      modeltxt, yeartxt, compname, rcl_cmpt_id, mfr_comp_ptno), latest extraction's attribute values.
+      Input to nhtsa_recall_product_snapshot and, post-6c.7-cutover, recall_product's NHTSA branch.
+      The recall_product_id (7-tuple md5) is single-homed here.
+    columns:
+      - name: recall_product_id
+        description: >
+          v1.5 7-tuple md5 — must be row-unique at this grain (the distinct-on collapses each anchor
+          to one row). This is the single strongest guard that the v1.5 anchor recipe is sound.
+        tests:
+          - not_null
+          - unique

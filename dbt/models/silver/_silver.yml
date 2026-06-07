@@ -68,6 +68,52 @@ models:
               arguments:
                 values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
 
+  - name: recall_product_v15
+    description: >
+      Parallel v1.5 current-state view of NHTSA recall products (Phase 6c.6 Layer 2, ADR 0033 +
+      2026-06-06 amendment) — the snapshot's current rows (dbt_valid_to is null) in recall_product's
+      exact column shape, NHTSA only, for the compare_v1_v15_cardinality diff. Dropped at the 6c.7
+      cutover (its SELECT folds into recall_product). recall_product_id is the 7-tuple md5.
+    columns:
+      - name: recall_product_id
+        description: v1.5 7-tuple md5 — row-unique in the current view (verifies the anchor pre-cutover).
+        tests:
+          - not_null
+          - unique
+      - name: recall_event_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('recall_event')
+                field: recall_event_id
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['NHTSA']
+
+  - name: recall_product_history
+    description: >
+      Full product-grain version history for NHTSA recall products (Phase 6c.6 Layer 2, ADR 0033) —
+      every snapshot version with dbt_valid_from/to + an is_current flag (Policy C peer of the
+      current view). Kept through the 6c.7 cutover. Forward-only reach (starts at first snapshot
+      run); bronze is the deeper audit trail.
+    columns:
+      - name: recall_product_id
+        description: v1.5 7-tuple md5 — repeats across versions (NOT unique here).
+        tests:
+          - not_null
+      - name: dbt_scd_id
+        description: dbt-generated surrogate, one per version.
+        tests:
+          - not_null
+          - unique
+      - name: is_current
+        tests:
+          - not_null
+
   - name: firm
     description: >
       Conformed firm dimension, deduped by normalized name across all 5 sources

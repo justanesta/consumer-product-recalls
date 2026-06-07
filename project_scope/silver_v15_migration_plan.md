@@ -187,6 +187,7 @@ Update this table when status changes. Append a brief log entry below for materi
 ### Status log
 
 - **2026-05-15** — Plan created. ADR 0033 drafted in parallel. Both ship in `docs/findings-2025-05-w3` branch alongside Pierce-event documentation work.
+- **2026-06-06** — **Layer 2 executed within Phase 6c.6** (folded into the `feature/phase-6c-history-lifecycle` branch, not the originally-planned `feature/silver-v15-scd-prototype`). The first full-corpus build surfaced the **6-tuple over-collapse** (`recall_product` 321,540 → 194,377, −127,163; `characterize_v15_collapse.sql` = 99.4% structural `mfr_comp_ptno` multi-part, not temporal drift), so the **anchor was revised to the 7-tuple** (ADR 0033 amendment 2026-06-06; `mfr_comp_ptno` restored to the key, only `mfr_comp_desc`/`mfr_comp_name`/`bgman`/`endman` demoted to snapshot attributes). Rebuilt: v1.5 ≈ v1 (1,237 residual / 0.38%, all simultaneous `desc`/`name` variation, no model/part coverage loss — `characterize_v15_residual.sql` + `inspect_v15_residual_modeltxt.sql`). Snapshot idempotent (2nd `dbt snapshot` = 0 new). The **~2-week observation window is waived** — a re-seeded corpus + forward-only snapshots can't populate it; the full-corpus diff + the 6c.8 simulated-drift test are the substituted Layer-2 → Layer-3 evidence. **Layer 3 cutover = Phase 6c.7**; the Status header + status table flip (and Open-Questions resolution) land with that commit.
 
 ## Open questions
 

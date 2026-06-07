@@ -201,6 +201,7 @@ Per-source bronze + rejected tables, the shared `extraction_runs` and `source_wa
 | `staging/stg_<source>_*.sql` | Per-source views over bronze with type casting, latest-version dedup, value-level normalization |
 | `silver/recall_event.sql` etc. | Unified cross-source models — one row per recall event regardless of source |
 | `silver/recall_event_history.sql` | Field-level edit history (ADR 0022 / 6c.1) — `LAG()` over **all** bronze snapshots (not the latest-only staging views), excluding re-baseline waves (ADR 0027). The fact-history half of Phase 6c; the dimension half is the SCD-2 snapshots in `silver_snapshots` |
+| `snapshots/nhtsa_recall_product_snapshot.sql` + `silver/recall_product_v15.sql` + `recall_product_history.sql` | NHTSA **product-grain** SCD-2 (ADR 0033 7-tuple / 6c.6) — demotes the drift-prone attributes (Pierce class) to Type-2 history while keeping the structural 7-tuple in the key, so an editorial edit versions instead of fragmenting. Built parallel to v1 `recall_product`; the cutover folds `recall_product_v15` into `recall_product` at 6c.7. The product-grain peer of the event-grain `recall_event_history` |
 | `gold/recalls_by_month.sql` etc. | Aggregate views and search materializations |
 
 Generic dbt tests (`not_null`, `unique`, `accepted_values`, `relationships`) and singular tests (orphan detection, source count baselines) are configured per [ADR 0015](decisions/0015-testing-strategy.md).

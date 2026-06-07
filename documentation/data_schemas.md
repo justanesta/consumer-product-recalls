@@ -60,18 +60,22 @@ Bronze tables follow the [ADR 0027](decisions/0027-bronze-storage-forced-transfo
 | `silver/recall_event_history` | `recall_event_history.sql` (Phase 6c.1) | `_silver.yml` + `recall_event_history_unit_tests.yml` + `assert_recall_event_history_real_changes.sql` | LAG() over bronze, 5 sources, per [ADR 0022](decisions/0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) + [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md); see [`silver_design_notes.md`](silver_design_notes.md) |
 | `silver/recall_lifecycle` | `recall_lifecycle.sql` (Phase 6c.2) | `_silver.yml` + `recall_lifecycle_unit_tests.yml` | 1:1 with recall_event; bronze-derived first/last_seen + edit_count (all 5 sources) + manifest-derived is_currently_active / was_ever_retracted (USDA-only v1), per [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md); see [`silver_design_notes.md`](silver_design_notes.md) |
 | `silver/uscg_mic_reassignment_years` | `uscg_mic_reassignment_years.sql` (Phase 6c.5) | `_silver.yml` | Per-MIC `current_holder_since_year` parsed from the detail-page `(OOB YYYY)` lineage; feeds the `recall_event_firm` as-of-build-year resolution ([ADR 0035](decisions/0035-cross-source-scd2-silver-dimensions.md) §5) |
+| `staging/stg_nhtsa_recalls_current` | `stg_nhtsa_recalls_current.sql` (Phase 6c.6) | `stg_nhtsa_recalls_current.yml` | Distinct-on-7-tuple latest projection; single-homes the v1.5 `recall_product_id`; input to `nhtsa_recall_product_snapshot`; see [`silver_design_notes.md`](silver_design_notes.md) §12 |
+| `silver/recall_product_v15` | `recall_product_v15.sql` (Phase 6c.6) | `_silver.yml` | NHTSA-only parallel v1.5 current view (snapshot `dbt_valid_to is null`) in `recall_product`'s column shape; dropped at the 6c.7 cutover. 7-tuple anchor per [ADR 0033](decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md) (2026-06-06 amendment); see [`silver_design_notes.md`](silver_design_notes.md) §12 |
+| `silver/recall_product_history` | `recall_product_history.sql` (Phase 6c.6) | `_silver.yml` | Full product-grain version history (all snapshot versions + `is_current`); kept through the 6c.7 cutover; see [`silver_design_notes.md`](silver_design_notes.md) §12 |
 
 ### Silver snapshots (SCD-2 history — `silver_snapshots` schema, dbt-managed, ADR 0035)
 
-dbt snapshots (`strategy='check'`) bank attribute history per stable anchor; each firm sidecar's `dbt_valid_to is null` current view is the dim, the full table is the queryable peer history (Policy C). The `silver_snapshots` schema is exempt from ADR 0007 bronze-snapshot pruning. See [`silver_design_notes.md`](silver_design_notes.md) §10.
+dbt snapshots (`strategy='check'`) bank attribute history per stable anchor. The three firm sidecars follow Policy C (the `dbt_valid_to is null` current view is the dim, the full table is the queryable peer history); the NHTSA `nhtsa_recall_product_snapshot` is the v1.5 **product-grain** track (not a firm sidecar — see §12). The `silver_snapshots` schema is exempt from ADR 0007 bronze-snapshot pruning. See [`silver_design_notes.md`](silver_design_notes.md) §10 (firm sidecars) + §12 (NHTSA product).
 
 | Snapshot | dbt | Anchor | Feeds | Type |
 |---|---|---|---|---|
 | `uscg_manufacturer_attributes_snapshot` | `dbt/snapshots/uscg_manufacturer_attributes_snapshot.sql` | `mic` | `firm_manufacturer_attributes` | Type-2 **NEED** (MIC reassignment; 6b.5) |
 | `firm_establishment_attributes_snapshot` | `dbt/snapshots/firm_establishment_attributes_snapshot.sql` | `establishment_number` | `firm_establishment_attributes` | Type-2 **BENEFIT** (6c.4) |
 | `firm_fda_attributes_snapshot` | `dbt/snapshots/firm_fda_attributes_snapshot.sql` | `firm_fei_num` | `firm_fda_attributes` | Type-2 **BENEFIT** (6c.4) |
+| `nhtsa_recall_product_snapshot` | `dbt/snapshots/nhtsa_recall_product_snapshot.sql` | 7-tuple `recall_product_id` | `recall_product_v15` / `recall_product_history` (→ `recall_product` at 6c.7) | Type-2 **product-grain** (NHTSA v1.5; [ADR 0033](decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md) + 2026-06-06 amendment, 6c.6) |
 
-(NHTSA `recall_product` Type-2 is the separate v1.5 track — `silver_v15_migration_plan.md`. CPSC has no firm sidecar.)
+(CPSC has no firm sidecar. NHTSA's row is product-grain, not a firm dim — the v1.5 track, now built in 6c.6 on the 7-tuple anchor per `project_scope/silver_v15_migration_plan.md`.)
 
 ### Enrichment (Python-written, dbt source)
 
