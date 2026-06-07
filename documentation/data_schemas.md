@@ -2,7 +2,7 @@
 
 A reader's index for "what does column X mean, where is it defined, and what does this domain term refer to?" The authoritative definitions for the schemas themselves live in code (`src/schemas/`) and dbt configuration (`dbt/models/`). This document is the glossary, the cross-reference, and the quick-lookup — not a copy of the schemas.
 
-> ⚠️ **Note (2026-06-01):** the bronze-table list below was extended inline to include NHTSA + the three USCG tables (previously omitted). Glossary additions (MIC as a temporal SCD anchor; HIN ⊃ MIC) and silver/gold schema coverage are scheduled in the Phase 6f doc-sync (`project_scope/phase-6-execution-plan.md` §6f).
+> ⚠️ **Note:** the bronze-table list below was extended inline 2026-06-01 (NHTSA + the three USCG tables); the **gold** table list was filled in 2026-06-07 (Phase 6e.6). Glossary additions (MIC as a temporal SCD anchor; HIN ⊃ MIC) and the column-level silver/gold ERD remain scheduled for the Phase 6f doc-sync (`project_scope/phase-6-execution-plan.md` §6f).
 
 For:
 - **System-level architecture** — see [`architecture.md`](architecture.md).
@@ -84,12 +84,30 @@ dbt snapshots (`strategy='check'`) bank attribute history per stable anchor. The
 
 The resolution *method* that populates it is in [`architecture.md`](architecture.md#srcenrichment--firm-resolution-stage-adr-0037); the *why* (a Python stage, not in-warehouse SQL) is [ADR 0037](decisions/0037-firm-resolution-python-stage-not-sql-fuzzy.md); the operator runbook is [`operations.md`](operations.md#firm-resolution-recalls-resolve-firms). Column contract = the DDL in the three migrations + the `build_crosswalk_rows` row dict in `crosswalk_writer.py`. Key columns: `firm_id` (PK, `md5(upper(trim(name)))`), `canonical_firm_id`, `canonical_name`, `clean_name`, `alternate_names` (jsonb), `match_confidence`, `match_score`, `resolver_version`, `resolved_at`. See the **Firm resolution** glossary section below for what each means.
 
-### Gold (denormalized, dbt-managed)
+### Gold (consumer-shaped, dbt-managed)
 
-| Model | dbt SQL | Tests |
+Built on the corrected silver layer (Phase 6e). Policy = [ADR 0038](decisions/0038-gold-layer-modeling-and-indexing-strategy.md);
+narrative = [`gold_design_notes.md`](gold_design_notes.md); per-model contracts = `dbt/models/gold/_gold.yml`.
+
+**Serving marts** (denormalized "one big table", materialized `table` + indexed — feed the Phase 8 API):
+
+| Model | Grain | Feeds |
 |---|---|---|
-| `gold/recalls_by_month` | `dbt/models/gold/recalls_by_month.sql` | `_gold.yml` |
-| (more gold views in Phase 6) | — | — |
+| `mart_recall_summary` | one row per recall_event | `GET /recalls` (list + detail) |
+| `mart_firm_profile` | one row per canonical firm | `GET /firms/{id}` (cross-source rollup) |
+| `mart_product_search` | one row per recall_product (+ FTS `search_vector`) | `GET /products/search` |
+
+**Aggregate marts** (`fct_`, materialized `view` — feed dashboards):
+
+| Model | Grain |
+|---|---|
+| `fct_recalls_by_week` / `_by_month` / `_by_year` | recall count per period × source (+ `'ALL'`) |
+| `fct_recalls_monthly_trend` | per source × month + rolling 3/12-mo avgs + YoY |
+| `fct_recalls_by_firm` | most-recalled-firm leaderboard (rank) |
+| `fct_recalls_by_classification` | per source × classification / risk_level |
+| `fct_recall_status` | active / inactive / unknown per source |
+| `fct_recalls_by_geography` | per US state — distribution + firm-location lenses |
+| `fct_units_recalled` | per source × month — NHTSA vehicles + USCG boats only |
 
 ---
 
