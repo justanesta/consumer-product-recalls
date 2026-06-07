@@ -3,7 +3,8 @@
     indexes=[
       {'columns': ['mic'], 'unique': True},
       {'columns': ['state']},
-    ]
+    ],
+    post_hook="analyze {{ this }}"
 ) }}
 
 -- USCG-registered boat-manufacturer attributes — the CURRENT view (dbt_valid_to is

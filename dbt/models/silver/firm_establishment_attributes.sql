@@ -3,7 +3,8 @@
     indexes=[
       {'columns': ['establishment_id'], 'unique': True},
       {'columns': ['state']},
-    ]
+    ],
+    post_hook="analyze {{ this }}"
 ) }}
 
 -- FSIS-regulated establishment attributes — demographic + geolocation + regulatory metadata

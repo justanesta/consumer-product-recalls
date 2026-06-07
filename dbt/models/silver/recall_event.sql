@@ -95,14 +95,21 @@ fda_events as (
         md5('FDA' || '|' || recall_event_id::text)                       as recall_event_id,
         'FDA'                                                            as source,
         recall_event_id::text                                            as source_recall_id,
-        -- announced_at is the TRUE recall-initiation date, left NULLABLE by design:
-        -- 6 events (13 product rows) are early-2000s archive recalls whose
-        -- recall_initiation_dt FDA's iRES never carried forward. We do NOT fabricate
-        -- a date — their bulk-migration timestamp lives honestly in published_at
-        -- (= event_lmd) below, the hard NOT-NULL contract date downstream sorts on.
-        -- announced_at's not_null is relaxed to severity=warn (~6 archive-tail
-        -- baseline) so the count stays a visible watch-list without faking data.
-        recall_initiation_dt                                             as announced_at,
+        -- announced_at is the TRUE recall-initiation date, left NULLABLE by design.
+        -- Two null classes: (a) ~6 early-2000s archive recalls whose recall_initiation_dt
+        -- FDA's iRES never carried forward; (b) ~14 recalls with a DROPPED-CENTURY typo in
+        -- recall_initiation_dt (parsed year 7/12/13/212 — e.g. Z-0660-2013 initiated "year 13"),
+        -- nulled via the >= 1940 guard below rather than trusting a garbage year
+        -- (precision-over-recall; the recall NUMBER carries the real year, and published_at
+        -- (= event_lmd) is the hard NOT-NULL contract date downstream sorts on). We do NOT
+        -- fabricate a date. announced_at's not_null is severity=warn (~20 baseline), a visible
+        -- watch-list. Provenance: bronze check_date_sanity DID quarantine these (its >70yr-past
+        -- branch, invariants.py); they are genuine recalls deliberately reinstated by
+        -- `recalls recover-rejected fda` (false-positive quarantine, recovery.py), kept faithful
+        -- to source per ADR 0027. Bronze stays the source of truth; this guard is the correct
+        -- silver-side normalization of the source typo.
+        case when recall_initiation_dt >= '1940-01-01'
+             then recall_initiation_dt end                               as announced_at,
         -- event_lmd is nullable as of migration 0020: ~197 un-edited records have
         -- null EVENTLMD (Finding H). Coalesce to recall_initiation_dt (mirrors the
         -- USDA branch) so silver published_at stays non-null per the strict-silver

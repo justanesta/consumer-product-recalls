@@ -4,7 +4,8 @@
       {'columns': ['recall_event_id', 'firm_id', 'role'], 'unique': True},
       {'columns': ['recall_event_id']},
       {'columns': ['firm_id']},
-    ]
+    ],
+    post_hook="analyze {{ this }}"
 ) }}
 
 -- Many-to-many association between recall events and firms with role (ADR 0002).

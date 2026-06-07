@@ -97,6 +97,34 @@ amended to reflect the empirical 13.3%-structurally-non-atomic reality.
 - **`recall_api_observations.md:163-164` correction**: amend the "atomic update" claim with the 13.31% empirical figure and a note that gaps are structural (years), not transient.
 - **Phase 6 `recall_event_history` model spec**: add explicit handling for the three populations above. Bilingual-desynced edits should generate two parallel lifecycle event streams.
 
+#### ES-newer direction — delayed Spanish translation, not content drift (2026-06-07, Phase 6e.5)
+
+The "EN is always ahead of ES, never reversed" interpretation above reflects the **top-10-by-gap**
+sample (all EN-newer, 740–1,701 days). A full re-measure of the non-atomic set during Phase 6e.5
+splits the 105 non-atomic pairs three ways: **40 EN-newer, 18 ES-newer, 47 one-side-null** (the
+42%-null `last_modified_date` from Finding D). So the ES-newer direction **does** occur — the earlier
+"never reversed" claim was incomplete (it described the largest gaps, which are all EN-newer).
+
+The 18 ES-newer gaps run **3–399 days — none are <2-day timestamp skew** — and cluster as **delayed
+bulk Spanish translation republishes**: 7 share `es_modified = 2023-10-24` (a Spanish-side republish
+batch), others annual-ish (`085-2015` +366d, `058-2018` +399d). Probe:
+`scripts/sql/usda_recalls/bronze/investigate_spanish_newer.sql`.
+
+**Empirical confirmation on the worst case (`058-2018`, +399 days).** A full English-vs-Spanish
+recall-text comparison (2026-06-07) shows the Spanish is a **faithful, complete translation** of the
+English — identical firm (Nueske's), weight (12,946 lbs / 12 946 libras), hazard (undeclared brown
+rice flour + glycerin), packaging window, **lot codes**, EST. 20341, discovery date, and contacts.
+**Zero new content.** So a later Spanish `last_modified_date` reflects **translation timing, not a
+content edit**.
+
+**Implication (confirmed, not inferred).** English remains the authoritative + complete version, so
+**English-only silver is not stale** for ES-newer recalls. Bilingual non-atomicity in *both* directions
+is benign for an English-only silver layer (EN-newer = English edited without retranslating; ES-newer =
+Spanish translated/republished later). The dbt `assert_usda_bilingual_atomic_update` monitor stays
+`severity=warn` as a benign **source-behavior watch**, not a pending defect. (Caveat: confirmed on the
+worst case + the bulk-date pattern; a per-recall content diff of every ES-newer case would be exhaustive
+but the evidence is strong.)
+
 ### U3 — last_modified_date reliability on edits
 
 | Transition class | Observed count | Notes |

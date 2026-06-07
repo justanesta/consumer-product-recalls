@@ -1,10 +1,15 @@
 -- Singular test: USDA EN/ES bilingual siblings are atomically updated
 -- (last_modified_date matches between the latest English and Spanish
 -- versions of the same recall). Returns rows for each non-atomic pair.
--- Severity=warn via dbt_project.yml — ADR 0026 references a 13.3%
--- non-atomic baseline, so this is expected to surface ongoing warnings
--- until Phase 6 reconciliation. Rich version with date-gap analysis
--- at scripts/sql/usda_recalls/bronze/assert_bilingual_atomic_update.sql.
+-- Severity=warn via dbt_project.yml — a benign SOURCE-BEHAVIOR MONITOR, not a
+-- pending defect. Silver consumes English-only (that IS the "reconciliation"),
+-- and the ~13.3% non-atomicity is benign for it in BOTH directions: EN-newer =
+-- FSIS edits English without retranslating; ES-newer = delayed Spanish
+-- translation republish (confirmed a faithful, content-identical translation on
+-- the 399-day worst case 058-2018). English stays authoritative + complete, so
+-- English-only silver is not stale. Findings: documentation/usda/
+-- bilingual_and_lmd_findings.md (ES-newer subsection, 2026-06-07). Rich version
+-- with date-gap analysis at scripts/sql/usda_recalls/bronze/assert_bilingual_atomic_update.sql.
 
 with latest as (
     select
