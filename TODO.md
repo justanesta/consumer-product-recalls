@@ -68,6 +68,7 @@ This is why it's not a clean call. A prior holder without an OOB marker can be a
   BRYANT BOATS (DBA). → flagging these is a true false positive.
 - [ ] USDA changed a number of string values in their API to lists as well as added a new column and removed another. Surfaced on 2026-06-06 run on feature/phase-6c-history-lifecycle branch. A fix for the data validation, schema, extractor, and bronze table was shipped in that branch but it required re-transforming new list values back into string so no silver/dbt code could be changed. After some time observing that this change is permenant, let's update this so that silver consumes new newly-reliable list-type values.
 - [ ] Open question: How (and should we) expand track_presence to all sources outside of USDA? I know we don't do entire extracts daily for FDA, CPSC, USCG but we will/probably should do entire (or chunked) deep-rescans at some point and wouldn't having "is_currently_active" and "was_ever_retracted" versions be helpful?
+- [ ] "Extractors build their loader inline (no persistent self._loader)" Validate if this is true, and if it is, should we have a `self._loader` for all extractors?
 
 
 

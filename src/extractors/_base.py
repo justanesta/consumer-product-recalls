@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 import hashlib
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -237,6 +238,22 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
         Writes quarantined records to the source _rejected table.
         Returns count of rows actually inserted (dedup excluded).
         """
+
+    def parse_landed_payload(self, raw_bytes: bytes) -> list[dict[str, Any]]:
+        """Inverse of :meth:`land_raw`: rebuild the ``raw_records`` list from a landed payload.
+
+        Used by the re-ingest path (``src/bronze/reingest.py``) to replay a payload already in
+        R2 through ``validate_records`` → ``check_invariants`` → bronze load, without contacting
+        the source (ADR 0014 / ADR 0028 Mechanism B). Default raises: only the JSON REST sources
+        round-trip cleanly (``RestApiExtractor`` overrides with ``json.loads`` — their ``land_raw``
+        writes ``json.dumps(raw_records)``). Flat-file (NHTSA) and scraped (USCG) payloads are not
+        JSON arrays of records and are cheaply re-fetchable via ``recalls deep-rescan`` instead, so
+        they keep this raising default.
+        """
+        raise NotImplementedError(
+            f"re-ingest (R2 replay) is not supported for {self.source_name!r}; "
+            "use 'recalls deep-rescan' (the source is cheaply re-fetchable)."
+        )
 
     def _record_run(
         self,
@@ -496,6 +513,20 @@ class RestApiExtractor[T: BaseModel](Extractor[T]):
             None if response.status_code == 304 else hashlib.sha256(body_bytes).hexdigest()
         )
         self._captured_response_headers = dict(response.headers)
+
+    def parse_landed_payload(self, raw_bytes: bytes) -> list[dict[str, Any]]:
+        """REST JSON sources land ``json.dumps(raw_records)``, so the inverse is ``json.loads``.
+
+        Returns the same ``list[dict]`` shape ``validate_records`` consumes (see each concrete
+        REST extractor's ``land_raw`` — ``content = json.dumps(raw_records, default=str)``).
+        """
+        decoded: Any = json.loads(raw_bytes)
+        if not isinstance(decoded, list):
+            raise ValueError(
+                f"{self.source_name}: landed payload is not a JSON array of records "
+                f"(got {type(decoded).__name__})."
+            )
+        return decoded
 
 
 # NOTE: ``HtmlScrapingExtractor`` lives in ``src/extractors/_html_scraping.py``

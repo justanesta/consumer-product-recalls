@@ -67,9 +67,11 @@ uv run recalls extract <source>                           # incremental run; use
 uv run recalls extract <source> --lookback-days 7         # override watermark with a window
 uv run recalls extract <source> --change-type=schema_rebaseline    # mark as re-baseline
 uv run recalls extract <source> --change-type=historical_seed      # one-time CPSC backfill
-uv run recalls re-ingest <source> \                       # R2 replay (Phase 6)
+uv run recalls re-ingest <source> \                       # R2 replay (Phase 6d); JSON sources only
     --from-date 2026-01-01 --to-date 2026-01-31 \
-    --change-type=schema_rebaseline
+    --change-type=schema_rebaseline                       # required: schema_rebaseline | hash_helper_rebaseline
+uv run recalls recover-rejected <source>                  # un-quarantine invariant false-positives
+python scripts/backfill_manifest.py [--dry-run|--apply]   # USDA presence-manifest backfill (ADR 0028 Mech C)
 ```
 
 Sources: `cpsc`, `fda`, `usda`, `usda_establishments`, `nhtsa`, and `uscg`.

@@ -67,6 +67,10 @@ extraction_runs = sa.Table(
     sa.Column("error_message", sa.Text),
     sa.Column("raw_landing_path", sa.Text),
     sa.Column("change_type", sa.Text),
+    # Phase 6d (migration 0029): on a re-ingest replay run, the run_id of the ORIGINAL run whose
+    # landed payload was replayed. NULL for every non-replay run. Distinguishes a re-ingest
+    # rebaseline from an extract-path rebaseline (both carry change_type='schema_rebaseline').
+    sa.Column("replayed_from_run_id", sa.Text),
     sa.Column("response_status_code", sa.Integer),
     sa.Column("response_etag", sa.Text),
     sa.Column("response_last_modified", sa.Text),
