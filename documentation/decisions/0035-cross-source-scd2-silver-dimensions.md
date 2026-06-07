@@ -1,12 +1,12 @@
 # 0035 — Cross-source SCD-2 for silver dimensions
 
-- **Status:** Proposed — **decision recorded 2026-06-05 on the A scope** (cross-source policy = Policy C; the only instance *built* now is USCG `firm_manufacturer_attributes`). Ratifies → **Accepted** at PR 6b.5 merge, per the PR-merge status-flip convention (mirrors ADR 0036). The 2026-06-01 stub rationale and the 2026-06-02 applicability verdict are retained below as history.
+- **Status:** Accepted — **ratified at the #59 merge** (which carried the PR 6b.5 USCG `firm_manufacturer_attributes` SCD-2 build), per the PR-merge status-flip convention (mirrors ADR 0036); status flip recorded 2026-06-06 (catch-up — the flip was missed at merge time). **Decision recorded 2026-06-05 on the A scope** (cross-source policy = Policy C; the only instance *built* is USCG `firm_manufacturer_attributes`). The Phase-6c follow-on refinements deferred in §5 (rename-vs-recycle tier, historical-interval backfill, as-of-build-date HIN join) are owned by `project_scope//archive/phase-6c-execution-plan.md` (commit 6c.5). The 2026-06-01 stub rationale and the 2026-06-02 applicability verdict are retained below as history.
 - **Date:** 2026-06-01 (number reserved) · 2026-06-02 (SCD-applicability verdict, W3) · 2026-06-05 (decision)
 - **Supersedes:** —
 - **Superseded by:** —
 - **Generalizes:** [ADR 0033](0033-silver-row-versioning-via-scd-on-stable-anchor.md) (SCD-on-stable-anchor, proven NHTSA-first for `recall_product`) to the silver *firm* dimensions. ADR 0033's "Cross-source implications → USCG" subsection is the design seed for this ADR.
 - **Clarifies / companion changes (land in PR 6b.5):** [ADR 0031](0031-silver-row-fragmentation-strategy.md) — fill its TBD USCG per-source row; [ADR 0007](0007-lineage-via-bronze-snapshots-and-content-hashing.md) — exempt `silver_snapshots` from bronze-snapshot pruning.
-- **Companion documents:** `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 (the USCG SCD-2 build spec); `project_scope/archive/phase-6b-execution-plan.md` PR 6b.5; `project_scope/implementation_plan.md` Phase 6 (cross-source SCD-2 item, `:707`, Policy C `:715`); `project_scope/silver_v15_migration_plan.md` cross-source section; `documentation/audit/scd_field_designations.md` (the per-field NEED/BENEFIT verdicts + validating monitors).
+- **Companion documents:** `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 (the USCG SCD-2 build spec); `project_scope/archive/phase-6b-execution-plan.md` PR 6b.5; `project_scope/implementation_plan.md` Phase 6 (cross-source SCD-2 item, `:707`, Policy C `:715`); `project_scope/archive/silver_v15_migration_plan.md` cross-source section; `documentation/audit/scd_field_designations.md` (the per-field NEED/BENEFIT verdicts + validating monitors).
 
 ## Context
 
@@ -129,3 +129,38 @@ The `feature/silver-field-remap` audit measured, per source, **whether** SCD-2 i
 - **Not SCD (Type-1 + bronze as audit trail):** `recall_reason` narrative + `firm.normalized_name` — corrections, not history; the fragmentation concern is solved by 6b *normalization*, not SCD.
 
 **Implication for the build decision:** prioritize `firm_manufacturer_attributes` (the confirmed NEED) + its as-of-build-date join; the BENEFIT dims are deferrable features whose monitors will quantify the payoff before the build commits. *(Settled 2026-06-05: build the USCG flag now; defer the as-of-build-date join + the BENEFIT dims.)*
+
+## Amendment 2026-06-06 — Phase 6c.4: FDA + USDA BENEFIT dims built
+
+§3 scoped the *build* to USCG only ("no snapshot for FDA/CPSC/USDA now"), and the 2026-06-05 Decision deferred the BENEFIT dims. **Phase 6c.4 overrides that deferral for FDA + USDA** per the Phase 6c scope decision (the user chose "build all BENEFIT dims now" for portfolio breadth; `project_scope//archive/phase-6c-execution-plan.md` §6c.4). The two dims are now SCD-2:
+
+- `dbt/snapshots/firm_establishment_attributes_snapshot.sql` — anchor `establishment_number`; `check_cols` = the demographic/regulatory attributes EXCLUDING `latest_mpi_active_date` (heartbeat, ADR 0032). `firm_establishment_attributes.sql` repointed to its `dbt_valid_to is null` current view (column contract unchanged → `recall_event_establishment_resolution` unaffected).
+- `dbt/snapshots/firm_fda_attributes_snapshot.sql` — anchor `firm_fei_num`; `check_cols` = firm name/address/succession fields; driver keeps the DISTINCT-ON-event_lmd latest-per-FEI collapse. `firm_fda_attributes.sql` repointed to its current view.
+
+Both use the same primitive as USCG (`strategy='check'`, `silver_snapshots` schema, ADR 0007 pruning-exempt). **Forward-banking, not corrective:** these anchors are stable with **0 edit-versions** post-6a.5-reseed (the snapshot-hypothesis verdict holds), so each banks one version per anchor now and grows as incrementals re-bank history; the §4 measure-forward monitors quantify the payoff. **CPSC stays monitors-only** — its firm dim is name-keyed (no stable structured anchor for a sidecar; fragmentation is a 6b normalization concern, not SCD). The cross-source policy (C) and the deferred USCG refinements (§5) are unchanged.
+
+## Amendment 2026-06-06 — Phase 6c.5: the §5 USCG refinements built (all dbt-SQL)
+
+§5 deferred three refinements to "Phase-6c follow-on." All three shipped in 6c.5, gated by
+`scripts/sql/cross_source/scd_monitors/probe_uscg_refinement_gates.sql` and built **entirely in
+dbt-SQL — no Python** (a HIN decode is a deterministic `substring`+`CASE` transform → ADR 0027's
+dbt-SQL venue, not the ADR 0037 Python stage; and `model_year` is a first-class recall field, so a
+HIN parse is at most a fallback, which the gate showed unnecessary). Gate verdict confirmed all
+three are marginal (as predicted) — built for completeness/technique-breadth, not live volume:
+
+- **(a) rename-vs-recycle tier.** `firm_manufacturer_attributes.mic_renamed_not_recycled` = a prior
+  holder whose every slot is a source-tagged `(previous name)` rename, none OOB. `recall_event_firm`
+  downgrades those from `uscg_mic_time_sensitive_unresolved` → `uscg_mic_unambiguous`. Gate Q1: **2
+  recalled MICs** (ACB, CEC). The ~16% unmarked-rename tail stays (correctly over-)flagged.
+- **(b) historical-interval backfill.** New model `uscg_mic_reassignment_years` parses the
+  `(OOB YYYY)` markers → per-MIC `current_holder_since_year`. Gate Q2: **23 of 221** OOB MICs carry a
+  parseable year; the rest are undated (excluded). `In Business` unused (heartbeat).
+- **(c) as-of-build-year join.** `recall_event_firm` stamps `uscg_mic_build_date_resolved` when a
+  recall's `model_year` ≥ the MIC's `current_holder_since_year` (built during the current holder's
+  tenure → current attribution confirmed). Gate Q3: `model_year` (566/857) > `hin` (491), so
+  **no HIN macro** — `model_year` only. Resolves ~a few dozen recalls; the rest stay on the (a)/6b.5 flag.
+
+`assert_uscg_mic_reassignment_flag_present` updated: an OOB-recycled MIC must be HANDLED —
+`time_sensitive_unresolved` OR `build_date_resolved` (a bare `unambiguous` is still the failure).
+The `match_confidence` enum (incl. `uscg_mic_build_date_resolved`) was reserved in 6b.0, so no enum
+edit. `firm_id` recipe untouched → the `firm.sql` ↔ `recall_event_firm.sql` lockstep is preserved.

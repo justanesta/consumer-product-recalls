@@ -51,6 +51,34 @@ def _parse_nullable_usda_date(v: Any) -> datetime | None:
     return _parse_usda_date(v)
 
 
+def _to_str_list(v: Any) -> list[str] | None:
+    """Coerce USDA's multi-value fields to ``list[str] | None`` (2026-06 API change, Finding S).
+
+    FSIS flipped ten previously-scalar fields from comma-joined strings to native JSON
+    arrays (e.g. ``field_states`` ``"California, Nevada"`` → ``["California", "Nevada"]``).
+    This validator accepts BOTH shapes so the schema is robust to the change AND to
+    R2-replay of pre-change payloads / cassettes (ADR 0028), which still carry scalars:
+
+      - ``None``       → ``None``  (key omitted or null)
+      - ``""``         → ``[]``    (the old empty-scalar sentinel = empty)
+      - ``"a, b"``     → ``["a, b"]``  (old scalar wrapped **verbatim, not split** — silver
+                                        owns any tokenization, per ADR 0027)
+      - ``[]``         → ``[]``    (new empty array)
+      - ``["a", "b"]`` → passthrough
+
+    Storage-forced only (coerce the source's representation into the column's array type);
+    no business normalization. Element-level ``str`` typing is enforced by the field's
+    ``list[str]`` annotation under strict mode, so a non-string array element fails loudly.
+    """
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return [] if v == "" else [v]
+    if isinstance(v, list):
+        return v
+    raise ValueError(f"Cannot coerce {v!r} to list[str] — expected str, list, or null")
+
+
 # Annotated types — BeforeValidator runs before strict mode so the source's
 # string serializations get coerced before Pydantic's type checks reject them.
 # Per ADR 0027, only storage-forced transforms live here. Empty-string-to-None
@@ -59,6 +87,9 @@ _UsdaBool = Annotated[bool, BeforeValidator(_to_bool)]
 _UsdaNullableBool = Annotated[bool | None, BeforeValidator(_to_nullable_bool)]
 _UsdaDate = Annotated[datetime, BeforeValidator(_parse_usda_date)]
 _UsdaNullableDate = Annotated[datetime | None, BeforeValidator(_parse_nullable_usda_date)]
+# 2026-06 API change (Finding S): ten multi-value fields became JSON arrays. Stored as
+# jsonb in bronze; accepts scalar OR list for replay safety. See _to_str_list.
+_UsdaStrList = Annotated[list[str] | None, BeforeValidator(_to_str_list)]
 
 
 class UsdaFsisRecord(BaseModel):
@@ -111,6 +142,10 @@ class UsdaFsisRecord(BaseModel):
     last_modified_date: _UsdaNullableDate = Field(
         default=None, validation_alias="field_last_modified_date"
     )
+    # 2026-06 API change (Finding S): field_closed_date is no longer returned (absent on
+    # 0/2006 records). Retained — default=None tolerates the absence, historical bronze
+    # rows keep their values, and a restore needs no schema change. New rows: NULL (a
+    # data-availability regression tracked in recall_api_observations.md Finding S).
     closed_date: _UsdaNullableDate = Field(default=None, validation_alias="field_closed_date")
 
     # --- Optional booleans (Finding C: related_to_outbreak 25% empty) ---
@@ -118,27 +153,40 @@ class UsdaFsisRecord(BaseModel):
         default=None, validation_alias="field_related_to_outbreak"
     )
 
-    # --- Optional strings — '' preserved verbatim per ADR 0027; silver staging normalizes ---
+    # --- Optional SCALAR strings — '' preserved verbatim per ADR 0027; silver normalizes ---
     closed_year: str | None = Field(default=None, validation_alias="field_closed_year")
     year: str | None = Field(default=None, validation_alias="field_year")
     risk_level: str | None = Field(default=None, validation_alias="field_risk_level")
-    recall_reason: str | None = Field(default=None, validation_alias="field_recall_reason")
-    processing: str | None = Field(default=None, validation_alias="field_processing")
-    states: str | None = Field(default=None, validation_alias="field_states")
-    establishment: str | None = Field(default=None, validation_alias="field_establishment")
-    labels: str | None = Field(default=None, validation_alias="field_labels")
     qty_recovered: str | None = Field(default=None, validation_alias="field_qty_recovered")
     summary: str | None = Field(default=None, validation_alias="field_summary")
-    product_items: str | None = Field(default=None, validation_alias="field_product_items")
-    distro_list: str | None = Field(default=None, validation_alias="field_distro_list")
     media_contact: str | None = Field(default=None, validation_alias="field_media_contact")
-    company_media_contact: str | None = Field(
-        default=None, validation_alias="field_company_media_contact"
-    )
     # Undocumented field — observed Finding H. Kept Optional[str] in case it is
     # absent on some records (PDF docs do not list it, suggesting late addition).
     recall_url: str | None = Field(default=None, validation_alias="field_recall_url")
-    # Dead fields — 100% / 99.9% empty per Finding C; excluded from content hash
-    # by the loader so they cannot trigger spurious "changes" if FSIS ever populates them.
-    en_press_release: str | None = Field(default=None, validation_alias="field_en_press_release")
-    press_release: str | None = Field(default=None, validation_alias="field_press_release")
+
+    # --- Multi-value ARRAY fields (2026-06 API change, Finding S) ---
+    # FSIS flipped these ten fields from comma-joined scalars to JSON arrays. Stored as
+    # jsonb in bronze (migration 0028); _UsdaStrList accepts scalar OR list for replay
+    # safety. Silver staging (stg_usda_fsis_recalls) collapses them back to CSV for the
+    # current downstream contract; exploiting the native arrays is deferred follow-up.
+    recall_reason: _UsdaStrList = Field(default=None, validation_alias="field_recall_reason")
+    processing: _UsdaStrList = Field(default=None, validation_alias="field_processing")
+    states: _UsdaStrList = Field(default=None, validation_alias="field_states")
+    establishment: _UsdaStrList = Field(default=None, validation_alias="field_establishment")
+    labels: _UsdaStrList = Field(default=None, validation_alias="field_labels")
+    product_items: _UsdaStrList = Field(default=None, validation_alias="field_product_items")
+    distro_list: _UsdaStrList = Field(default=None, validation_alias="field_distro_list")
+    company_media_contact: _UsdaStrList = Field(
+        default=None, validation_alias="field_company_media_contact"
+    )
+    # Dead fields — historically 100% / 99.9% empty per Finding C, now empty arrays;
+    # excluded from the content hash by the loader so they cannot trigger spurious changes.
+    en_press_release: _UsdaStrList = Field(default=None, validation_alias="field_en_press_release")
+    press_release: _UsdaStrList = Field(default=None, validation_alias="field_press_release")
+
+    # Added by the 2026-06 API change (Finding S) — a scalar export form of the recall
+    # number (observed identical to field_recall_number). Captured for parity; no silver
+    # consumer yet. Optional so pre-change payloads (which lack it) still validate.
+    recall_number_export: str | None = Field(
+        default=None, validation_alias="field_recall_number_export"
+    )

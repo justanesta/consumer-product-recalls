@@ -68,6 +68,26 @@ models:
               arguments:
                 values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
 
+  - name: recall_product_history
+    description: >
+      Full product-grain version history for NHTSA recall products (Phase 6c.6 Layer 2, ADR 0033) —
+      every snapshot version with dbt_valid_from/to + an is_current flag (Policy C peer of the
+      current view). Kept through the 6c.7 cutover. Forward-only reach (starts at first snapshot
+      run); bronze is the deeper audit trail.
+    columns:
+      - name: recall_product_id
+        description: v1.5 7-tuple md5 — repeats across versions (NOT unique here).
+        tests:
+          - not_null
+      - name: dbt_scd_id
+        description: dbt-generated surrogate, one per version.
+        tests:
+          - not_null
+          - unique
+      - name: is_current
+        tests:
+          - not_null
+
   - name: firm
     description: >
       Conformed firm dimension, deduped by normalized name across all 5 sources
@@ -360,3 +380,111 @@ models:
           FDA's own successor-FEI pointer for renamed/merged firms (NULL for most). A live
           (firm_fei_num -> firm_surviving_fei) pair is a directed succession edge; 6b.4's
           clusterer interprets it (ignores null/self/dangling, guards cycles). Nullable, untested.
+
+  - name: recall_event_history
+    description: >
+      Field-level edit history of the recall EVENT (ADR 0022 / Phase 6c.1). One row per changed
+      tracked field per snapshot interval, synthesized via LAG() over content-hash-deduped bronze
+      across all five sources. Re-baseline runs are excluded (ADR 0027) and cosmetic (whitespace,
+      ''/NULL) changes are folded out (norm_text_for_change macro). Curated v1 field set:
+      recall_reason, classification, lifecycle_status, title, terminated_at. SPARSE post-6a.5-reseed
+      (~1 version per identity); grows as incrementals re-bank versions. See silver_design_notes.md.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - source
+              - source_recall_id
+              - langcode
+              - field_name
+              - changed_at
+    columns:
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
+      - name: source_recall_id
+        description: Event identity — RecallNumber (CPSC), RECALLEVENTID (FDA), field_recall_number (USDA), campno (NHTSA, NOT the regen-unstable RECORD_ID), USCG Number.
+        tests:
+          - not_null
+      - name: field_name
+        description: Canonical event field whose value changed.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['recall_reason', 'classification', 'lifecycle_status', 'title', 'terminated_at']
+      - name: changed_at
+        description: Snapshot extraction_timestamp at which the new value was first observed.
+        tests:
+          - not_null
+      - name: change_type
+        description: The changing snapshot's run change_type; always a non-rebaseline value (ADR 0027 exclusion). old_value/new_value are RAW (un-normalized).
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['routine', 'historical_seed', 'etag_audit']
+
+  - name: recall_lifecycle
+    description: >
+      Per-recall lifecycle summary (ADR 0026 / Phase 6c.2), one row per recall_event.
+      first_seen_at / last_seen_at / edit_count are bronze-derived (all 5 sources, manifest-
+      independent — but bounded by the 6a.5 reseed; use announced_at for recall age).
+      is_currently_active / was_ever_retracted come from the presence manifest and are USDA-only
+      in v1 (NULL elsewhere until a source's track_presence manifest lands). See silver_design_notes.md.
+    columns:
+      - name: recall_event_id
+        description: FK to recall_event (1:1).
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: ref('recall_event')
+                field: recall_event_id
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
+      - name: source_recall_id
+        tests:
+          - not_null
+      - name: first_seen_at
+        description: First bronze observation since the 6a.5 reseed (pipeline-observation, NOT recall age).
+        tests:
+          - not_null
+      - name: last_seen_at
+        description: Last bronze version's timestamp (last change). Presence "now" is is_currently_active.
+        tests:
+          - not_null
+      - name: edit_count
+        description: Distinct content versions observed (1 = never changed since first seen).
+        tests:
+          - not_null
+      - name: is_currently_active
+        description: USDA-only (v1) — identity present in the latest enumerating run's manifest. NULL for other sources.
+      - name: was_ever_retracted
+        description: USDA-only (v1) — absent from some enumerating run since first appearance. NULL for other sources.
+
+  - name: uscg_mic_reassignment_years
+    description: >
+      USCG MIC reassignment boundary per MIC (ADR 0035 §5 historical backfill; Phase 6c.5 (b)).
+      current_holder_since_year = latest parsed "(OOB YYYY)" year from the detail-page Past Company
+      lineage = roughly when the current holder took over a recycled MIC. recall_event_firm's
+      as-of-build-year join (6c.5 c) compares a recall's model_year to it. Thin by nature: only the
+      ~23 of 221 OOB-recycled MICs that carry a parseable year appear (gate Q2); the rest are undated.
+    columns:
+      - name: mic
+        description: MIC anchor (upper(trim), from firm_manufacturer_attributes).
+        tests:
+          - not_null
+          - unique
+      - name: current_holder_since_year
+        description: Latest parsed reassignment year (NOT NULL — undated MICs are excluded).
+        tests:
+          - not_null

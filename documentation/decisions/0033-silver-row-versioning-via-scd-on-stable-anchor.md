@@ -1,11 +1,11 @@
 # 0033 — Silver row versioning via SCD on stable anchor (NHTSA `recall_product_id` migration to 6-tuple + Type 2 snapshot)
 
-- **Status:** Proposed (2026-05-15; amended 2026-06-03 — Phase 6b PR 6b.3 deterministic discharge of the Normalization class for the whitespace/case sub-case, see "Amendment 2026-06-03" below)
+- **Status:** **Accepted** (2026-06-06 — Layer 3 cutover authorized + executed per [ADR 0034](0034-nhtsa-silver-v15-migration.md) / Phase 6c.7; the implemented anchor is the **7-tuple**, see "Amendment 2026-06-06" below). Prior: Proposed (2026-05-15; amended 2026-06-03 — Phase 6b PR 6b.3 deterministic discharge of the Normalization class for the whitespace/case sub-case, see "Amendment 2026-06-03" below; amended 2026-06-06 — Phase 6c.6 Layer 2 full-corpus finding: the 6-tuple over-collapses structural multi-part rows; anchor revised to the 7-tuple, see "Amendment 2026-06-06" below)
 - **Date:** 2026-05-15
 - **Supersedes:** —
 - **Superseded by:** —
 - **Clarifies:** ADR 0031 (concrete forward path for silver-grain after the 9-tuple migration sunset of 2026-05-15); ADR 0030 (bronze 11-tuple identity unchanged — bronze stays audit-quality at the leaf grain; this ADR addresses the silver layer only); ADR 0022 (event-grain `recall_event_history` via `LAG()` over snapshots is unchanged; this ADR adds a parallel product-grain history layer via dbt snapshot); ADR 0007 (extends with an explicit Type 2 history-table mechanism at the silver product grain, alongside the existing bronze content-hash snapshot store)
-- **Companion documents:** `project_scope/silver_v15_migration_plan.md` (3-layer rollout plan with decision gates); `documentation/nhtsa/incremental_delta_findings.md` Section K (Pierce event empirical record)
+- **Companion documents:** `project_scope/archive/silver_v15_migration_plan.md` (3-layer rollout plan with decision gates); `documentation/nhtsa/incremental_delta_findings.md` Section K (Pierce event empirical record)
 
 ## Context
 
@@ -40,11 +40,13 @@ The 11-tuple recipe conflated the first axis. The 9-tuple migration tried to mak
 
 ## Decision
 
-**Silver `recall_product` for NHTSA migrates to a 6-tuple stable-anchor surrogate key with Type 1 latest-wins attribute updates, backed by a dbt snapshot table providing Type 2 product-grain history. Migration is phased over three layers with explicit decision gates per the companion `silver_v15_migration_plan.md`.**
+**Silver `recall_product` for NHTSA migrates to a 6-tuple stable-anchor surrogate key with Type 1 latest-wins attribute updates, backed by a dbt snapshot table providing Type 2 product-grain history. Migration is phased over three layers with explicit decision gates per the companion `archive/silver_v15_migration_plan.md`.**
 
 This ADR records the *architectural decision*. The companion plan doc records the *execution phasing*. Both ship together (Layer 1 of the migration plan).
 
 ### The 6-tuple stable anchor
+
+> **Superseded by the 2026-06-06 amendment below.** The full-corpus Layer-2 build showed the 6-tuple over-collapses — it drops ~126k legitimate structural `mfr_comp_ptno` multi-part rows. The implemented anchor is the **7-tuple** (this 6-tuple + `mfr_comp_ptno`). The recipe and `check_cols` in this section are retained for the decision record but are NOT the cut that shipped — see "Amendment 2026-06-06".
 
 ```python
 # Silver `recall_product_id` recipe (proposed; replaces ADR 0031:84's 11-tuple)
@@ -136,7 +138,7 @@ Across Sections H/I/K/M of `documentation/nhtsa/incremental_delta_findings.md`, 
 
 **Why this matters for v1.5 architecture:** the first three classes (Population, Depopulation, Value edit) are **handled transparently by the Type 1 + Type 2 mechanism above** — the snapshot collapses pre- and post-amendment versions into one canonical current row plus a Type 2 history entry. The fourth class (Normalization on a 6-tuple anchor field) is the **only known class that v1.5 does NOT solve** and remains a Phase 6b deliverable. This is the precise scope boundary this ADR commits to: the "~99% of observed fragmentation" addressed claim (per the "Empirical evidence" section below) refers to the first three classes; the remaining ~1% is the Normalization class needing fuzzy reconciliation.
 
-**Forward integration with Phase 6c `recall_event_history`:** when Phase 6c implements the event-grain history model, the `event_type` enum should include the four values in this table. The model's source data should be the dbt snapshot table (Layer 2 deliverable per `project_scope/silver_v15_migration_plan.md`), which exposes pre/post values per attribute change as Type 2 versions. Phase 6c's classifier then maps each version transition to its `event_type` per this table's "Reconciliation rule" column. This is open question #3 in the migration plan ("`recall_event_history` integration mode") — answering "snapshot directly" cleanly slots into this taxonomy without rework.
+**Forward integration with Phase 6c `recall_event_history`:** when Phase 6c implements the event-grain history model, the `event_type` enum should include the four values in this table. The model's source data should be the dbt snapshot table (Layer 2 deliverable per `project_scope/archive/silver_v15_migration_plan.md`), which exposes pre/post values per attribute change as Type 2 versions. Phase 6c's classifier then maps each version transition to its `event_type` per this table's "Reconciliation rule" column. This is open question #3 in the migration plan ("`recall_event_history` integration mode") — answering "snapshot directly" cleanly slots into this taxonomy without rework.
 
 ### Amendment 2026-06-03 (Phase 6b PR 6b.3) — deterministic discharge of the Normalization class (whitespace/case sub-case)
 
@@ -146,6 +148,37 @@ The Normalization row above pencils in "v1: manual review. ML-assisted later." f
 - **Genuinely-fuzzy residual (abbreviation/synonym, e.g. `VW`↔`VOLKSWAGEN`) + any NEW unhandled drift stays deferred — but DETECTED, not silently accepted.** `dbt/tests/assert_nhtsa_maketxt_drift_caught.sql` (severity=warn, ADR 0031 Tier-2) trips when one logical product (identical on all 10 non-`maketxt` identity fields) carries >1 distinct `normalize_maketxt(maketxt)` value in bronze. The Phase 6a.5 full historical seed (1966-present) is expected to surface more classes here; the monitor is how we SEE them and decide per-class (extend the macro, add a targeted alias, or send to the 6b.4 fuzzy layer) rather than re-fragment blind.
 
 Net: "the only class v1.5 does NOT solve" shrinks to "the *fuzzy residual* of that class." The common whitespace/case case is solved deterministically on the anchor; the rest is defensively detected. The dbt-snapshot `unique_key` in this ADR's body should adopt `normalize_maketxt(maketxt)` when Layer 2 builds, for the same anchor-stability reason. ADR 0031's per-source NHTSA row stays current (recipe unchanged in spirit — `maketxt` is now canonicalized before hashing, not raw).
+
+### Amendment 2026-06-06 (Phase 6c.6 Layer 2) — full-corpus finding: 6-tuple over-collapses; anchor revised to the 7-tuple
+
+**What changed.** Layer 2 (the parallel prototype, per `archive/silver_v15_migration_plan.md`) built the snapshot + `recall_product_v15` against the FULL NHTSA corpus for the first time — the original 6-tuple was cut on a dev slice plus the single Pierce event. The full-corpus diff (`scripts/sql/nhtsa/silver/compare_v1_v15_cardinality.sql`) showed the 6-tuple collapses `recall_product` (NHTSA) **321,540 → 194,377 rows (−127,163, −40%)**.
+
+**Why that is wrong.** `characterize_v15_collapse.sql` attributed the collapse: **126,417 rows (99.4%) are STRUCTURAL `mfr_comp_ptno` variation**, only **35 rows (0.03%) are pure temporal `mfr_comp_desc`/`mfr_comp_name` drift**. The structural rows are the documented §G multi-part fan-out — e.g. Takata-class tire recall `24T014000` = 139 components × 139 part numbers = 19,321 rows; the Fortune Tormenta `LT235/75R15` (`mfr_comp_ptno 9235030006`) one-part-→-many-component-IDs case from `flat_file_observations.md` Finding G / `incremental_delta_findings.md §G`. These are **legitimate distinct facts** — `incremental_delta_findings.md` line 795 classifies `mfr_comp_ptno` structural multi-batch as "silver-correct," and the 11-tuple was designed (ADR 0030) to carry them. The 6-tuple demoted `mfr_comp_ptno` to an attribute, so its `DISTINCT ON` kept one arbitrary part per component and **discarded ~126k recalled-part associations.**
+
+This ADR's "eliminates ~99% of fragmentation" claim was measured only against the **113 temporal real_drift rows** (96 Pierce `mfr_comp_desc` + 17 batch-window) — it never accounted for the 126k STRUCTURAL rows the 6-tuple *also* sweeps away. The 6-tuple conflated two phenomena the full corpus cleanly separates: temporal drift (should collapse) vs. structural multi-part (must not).
+
+**Revised decision — the 7-tuple anchor.** The implemented `recall_product_id` for NHTSA is:
+
+```python
+md5(
+    'NHTSA' || '|' || campno
+        || '|' || normalize_maketxt(maketxt)   # AC DELCO class folded (2026-06-03 amendment)
+        || '|' || coalesce(modeltxt, '')
+        || '|' || coalesce(yeartxt, '')
+        || '|' || coalesce(compname, '')
+        || '|' || coalesce(rcl_cmpt_id, '')
+        || '|' || coalesce(mfr_comp_ptno, '')  # RESTORED to the anchor (structural part identity)
+)
+```
+
+This is ADR 0030's *original* 7-tuple identity. `mfr_comp_ptno` (the structural part dimension, populated from its 2020 introduction) is identity, not attribute. Only the genuinely-drift-prone fields are demoted to the snapshot's `check_cols` (Type-1 current + Type-2 history): `mfr_comp_desc`, `mfr_comp_name` (the Pierce field-population class) and `bgman`, `endman` (the batch-window edit class) — WIDENED per ADR 0034 to also carry `rcltype`, `potaff`, `mfgname`, `mfgtxt`, `fmvss` so the current view never goes stale on an isolated business-field edit. The 7-tuple discharges **all 113 real_drift fragments** (an edit updates-in-place + banks a version) **without discarding the 126k structural rows.**
+
+**Consequences.**
+- v1.5 row count ≈ v1 (the migration's value is now the SCD-2 attribute history + a stable consumer-facing id, NOT row reduction). Residual collapse ~hundreds: ~822 corpus rows differing only on `desc`/`name`/`bgman`/`endman` within a 7-tuple (Finding L's 822 anomalies — 0.3%, simultaneous batches, latest-wins) + the 35 pure desc/name-drift rows. Far below the 6-tuple's 40%.
+- **Graceful degeneration for old records.** `mfr_comp_ptno` was added 2020, `rcl_cmpt_id` 2008 (Finding F). Pre-2020 rows have ptno empty (7-tuple → effective 6-tuple); pre-2008 rows have both empty (→ effective 5-tuple). Those cohorts carried no part granularity to begin with, so the degenerate anchor loses nothing the source provided. Guarded by `assert_pre_2008_seven_tuple_unique.sql`.
+- The "6-tuple" framing in this ADR's body + the Empirical-evidence table's "v1.5 (6-tuple)" column are superseded by this amendment. (That table's "0 fragmented" entries treated the structural rows as fragmentation to eliminate — they are not.)
+
+**Method note.** This is the `archive/silver_v15_migration_plan.md` Layer-2 gate working as designed: validate the schema cut against the full corpus before the irreversible cutover. The 6-tuple would have shipped a 40% silver data-loss event had Layer 2 not run. Evidence: `compare_v1_v15_cardinality.sql`, `characterize_v15_collapse.sql` (both under `scripts/sql/nhtsa/silver/`).
 
 ### Silver consumer surfaces
 
@@ -216,7 +249,7 @@ dbt snapshots are a stable, well-documented dbt-core feature: https://docs.getdb
 
 ## Implementation
 
-Per the companion `project_scope/silver_v15_migration_plan.md`, the implementation is phased over three layers with explicit decision gates. The plan doc is the source of truth for execution; this ADR is the architectural record.
+Per the companion `project_scope/archive/silver_v15_migration_plan.md`, the implementation is phased over three layers with explicit decision gates. The plan doc is the source of truth for execution; this ADR is the architectural record.
 
 **Layer 1 (this commit):** This ADR + migration plan doc. Conceptual scaffolding. No code changes.
 
@@ -232,6 +265,6 @@ Per the companion `project_scope/silver_v15_migration_plan.md`, the implementati
 
 **USDA** — `recall_product_id = recall_event_id` (1:1 grain). No product-level fragmentation possible at this layer. SCD framework doesn't apply at the product grain; existing `recall_event_history` covers what's needed.
 
-**USCG** — Phase 5d (landed 2026-05-30). **Confirmed cross-source SCD case** — and the one that stresses this framework hardest. The `AXY`/`COP` MIC reassignments are *whole-entity succession* under a stable anchor (`mic`), not single-field drift; and uniquely among our sources USCG **publishes its own succession lineage** (detail-page `Past Company N (OOB year)` + `In Business` + `Date Modified`), predating our observation window by decades. So the `firm_manufacturer_attributes` SCD-2 dim **seeds historical intervals from the source-native lineage and extends them forward with our own snapshots** (a hybrid NHTSA does not need), and the decision-forcing recall→manufacturer join is as-of-*build-date* (HIN chars 9–12), not as-of-recall-date. v1 treatment: flag-as-time-sensitive (surface is 221 recalled MICs `(OOB)`-recycled — paren 205 + dash-form `- OOB` 16, OOB detection broadened to word-boundary 2026-06-05 — and 365 with any prior holder per the 2026-05-30 probe; the bridge flag fires on the broad 365, and the source's reassignment dates are too sparse for precise resolution). Specified for **new ADR 0035** (cross-source SCD-2; 0034 reserved for this ADR's Layer 3), built in **Phase 6b** bundled with `firm.sql`/`recall_event_firm.sql`. Bronze-side detail capture landed on `feature/uscg-manufacturers-detail-addition`. Full design: `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 + the Phase-6 cross-source SCD-2 item in `implementation_plan.md` + the cross-source application section of `silver_v15_migration_plan.md`. **Done (6b.5, 2026-06-05):** ADR 0035 accepts the build; ADR 0031's per-source USCG row is filled (1:1 product grain; the firm-anchor MIC-recycle SCD-2 is ADR 0035's, not 0031's product framework).
+**USCG** — Phase 5d (landed 2026-05-30). **Confirmed cross-source SCD case** — and the one that stresses this framework hardest. The `AXY`/`COP` MIC reassignments are *whole-entity succession* under a stable anchor (`mic`), not single-field drift; and uniquely among our sources USCG **publishes its own succession lineage** (detail-page `Past Company N (OOB year)` + `In Business` + `Date Modified`), predating our observation window by decades. So the `firm_manufacturer_attributes` SCD-2 dim **seeds historical intervals from the source-native lineage and extends them forward with our own snapshots** (a hybrid NHTSA does not need), and the decision-forcing recall→manufacturer join is as-of-*build-date* (HIN chars 9–12), not as-of-recall-date. v1 treatment: flag-as-time-sensitive (surface is 221 recalled MICs `(OOB)`-recycled — paren 205 + dash-form `- OOB` 16, OOB detection broadened to word-boundary 2026-06-05 — and 365 with any prior holder per the 2026-05-30 probe; the bridge flag fires on the broad 365, and the source's reassignment dates are too sparse for precise resolution). Specified for **new ADR 0035** (cross-source SCD-2; 0034 reserved for this ADR's Layer 3), built in **Phase 6b** bundled with `firm.sql`/`recall_event_firm.sql`. Bronze-side detail capture landed on `feature/uscg-manufacturers-detail-addition`. Full design: `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 + the Phase-6 cross-source SCD-2 item in `implementation_plan.md` + the cross-source application section of `archive/silver_v15_migration_plan.md`. **Done (6b.5, 2026-06-05):** ADR 0035 accepts the build; ADR 0031's per-source USCG row is filled (1:1 product grain; the firm-anchor MIC-recycle SCD-2 is ADR 0035's, not 0031's product framework).
 
 **Standing requirement for future sources:** apply the SCD framing (key/attribute decomposition + Type 1 attribute updates + Type 2 history) from initial silver design rather than starting with an all-fields-in-key recipe and migrating later. Update the per-source table in ADR 0031 with each new source's anchor + attribute decision.

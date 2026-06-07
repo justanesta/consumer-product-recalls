@@ -11,6 +11,7 @@ from src.schemas.usda import (
     _parse_usda_date,
     _to_bool,
     _to_nullable_bool,
+    _to_str_list,
 )
 
 # ---------------------------------------------------------------------------
@@ -53,10 +54,58 @@ _FULL_ROW: dict = {
     "field_press_release": "",
 }
 
+# Post-2026-06 API shape (Finding S): the 10 multi-value fields are JSON arrays,
+# field_recall_number_export is present, field_closed_date is gone.
+_NEW_API_ROW: dict = {
+    **_REQUIRED,
+    "field_last_modified_date": "2020-05-20",
+    "field_related_to_outbreak": "False",
+    "field_closed_year": "",
+    "field_year": "2020",
+    "field_risk_level": "High - Class I",
+    "field_recall_reason": ["Misbranding", "Unreported Allergens"],
+    "field_processing": ["Fully Cooked - Not Shelf Stable"],
+    "field_states": ["California", "Nevada"],
+    "field_establishment": ["Acme Meats, LLC"],
+    "field_labels": ["recall-004-2020-labels"],
+    "field_qty_recovered": "1,000 lbs",
+    "field_summary": "<p>Summary HTML...</p>",
+    "field_product_items": ["Ground beef 1lb tubes"],
+    "field_distro_list": [],
+    "field_media_contact": "",
+    "field_company_media_contact": ["\n  Company Contact\n  ...\n"],
+    "field_recall_url": "http://www.fsis.usda.gov/recalls-alerts/sample-slug",
+    "field_en_press_release": [],
+    "field_press_release": [],
+    "field_recall_number_export": "004-2020",
+}
+
 
 # ---------------------------------------------------------------------------
 # Validator unit tests
 # ---------------------------------------------------------------------------
+
+
+class TestToStrList:
+    def test_none_returns_none(self) -> None:
+        assert _to_str_list(None) is None
+
+    def test_empty_string_to_empty_list(self) -> None:
+        assert _to_str_list("") == []
+
+    def test_scalar_string_wrapped(self) -> None:
+        # Old-shape scalar wrapped verbatim — NOT split (silver owns tokenization).
+        assert _to_str_list("California, Nevada") == ["California, Nevada"]
+
+    def test_empty_list_passthrough(self) -> None:
+        assert _to_str_list([]) == []
+
+    def test_list_passthrough(self) -> None:
+        assert _to_str_list(["a", "b"]) == ["a", "b"]
+
+    def test_int_raises(self) -> None:
+        with pytest.raises(ValueError):
+            _to_str_list(123)
 
 
 class TestToBool:
@@ -168,14 +217,14 @@ class TestUsdaFsisRecord:
         with pytest.raises(ValidationError):
             UsdaFsisRecord.model_validate(row)
 
-    def test_empty_string_optional_str_preserved(self) -> None:
-        # Per ADR 0027 (bronze keeps storage-forced transforms only): nullable
-        # text fields preserve the source's '' representation verbatim. Silver
-        # staging normalizes via nullif(col, '') in stg_usda_fsis_recalls.sql.
-        row = {**_REQUIRED, "field_summary": "", "field_states": ""}
+    def test_empty_string_scalar_str_preserved(self) -> None:
+        # Per ADR 0027 (bronze keeps storage-forced transforms only): scalar text
+        # fields preserve the source's '' representation verbatim. Silver staging
+        # normalizes via nullif(col, '') in stg_usda_fsis_recalls.sql. (summary stayed
+        # scalar in the 2026-06 change; states became an array — see the array tests.)
+        row = {**_REQUIRED, "field_summary": ""}
         record = UsdaFsisRecord.model_validate(row)
         assert record.summary == ""
-        assert record.states == ""
 
     def test_empty_string_optional_date_becomes_none(self) -> None:
         row = {**_REQUIRED, "field_last_modified_date": "", "field_closed_date": ""}
@@ -239,10 +288,55 @@ class TestUsdaFsisRecord:
         assert "field_recall_date" not in dumped
 
     def test_dead_fields_kept_for_shape(self) -> None:
-        # en_press_release / press_release are 100% / 99.9% empty per Finding C
-        # — schema accepts them; per ADR 0027 the '' is preserved verbatim
-        # and silver staging would normalize via nullif (these fields aren't
-        # consumed by current silver, but the bronze posture is consistent).
+        # en_press_release / press_release are 100% / 99.9% empty per Finding C and
+        # became arrays in the 2026-06 change — schema accepts them; the old-shape ''
+        # in _FULL_ROW coerces to [] (replay-safe). Excluded from the content hash by
+        # the loader; not consumed by current silver, but the bronze posture stays consistent.
         record = UsdaFsisRecord.model_validate(_FULL_ROW)
-        assert record.en_press_release == ""
-        assert record.press_release == ""
+        assert record.en_press_release == []
+        assert record.press_release == []
+
+    # --- 2026-06 API change: array fields + recall_number_export (Finding S) ---
+
+    def test_new_api_array_shape_validates(self) -> None:
+        record = UsdaFsisRecord.model_validate(_NEW_API_ROW)
+        assert record.recall_reason == ["Misbranding", "Unreported Allergens"]
+        assert record.states == ["California", "Nevada"]
+        assert record.establishment == ["Acme Meats, LLC"]
+        assert record.distro_list == []  # new empty array
+        assert record.recall_number_export == "004-2020"
+        # field_closed_date dropped by the new API → schema default applies.
+        assert record.closed_date is None
+
+    def test_scalar_array_field_wrapped_for_replay(self) -> None:
+        # Pre-change payloads (R2 replay / old cassettes) carry scalars; accept + wrap.
+        row = {**_REQUIRED, "field_states": "California, Nevada"}
+        record = UsdaFsisRecord.model_validate(row)
+        assert record.states == ["California, Nevada"]  # verbatim, not split
+
+    def test_array_field_empty_string_to_empty_list(self) -> None:
+        row = {**_REQUIRED, "field_states": ""}
+        record = UsdaFsisRecord.model_validate(row)
+        assert record.states == []
+
+    def test_array_field_omitted_defaults_to_none(self) -> None:
+        record = UsdaFsisRecord.model_validate(_REQUIRED)
+        assert record.states is None
+        assert record.recall_reason is None
+
+    def test_array_field_non_string_element_raises(self) -> None:
+        # strict list[str] rejects a non-string element — loud failure on shape drift.
+        row = {**_REQUIRED, "field_states": [1, 2]}
+        with pytest.raises(ValidationError):
+            UsdaFsisRecord.model_validate(row)
+
+    def test_recall_number_export_omitted_defaults_to_none(self) -> None:
+        record = UsdaFsisRecord.model_validate(_REQUIRED)
+        assert record.recall_number_export is None
+
+    def test_model_dump_arrays_serialize_as_lists(self) -> None:
+        record = UsdaFsisRecord.model_validate(_NEW_API_ROW)
+        dumped = record.model_dump(mode="json")
+        assert dumped["recall_reason"] == ["Misbranding", "Unreported Allergens"]
+        assert dumped["distro_list"] == []
+        assert dumped["recall_number_export"] == "004-2020"

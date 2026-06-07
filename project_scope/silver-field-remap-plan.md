@@ -66,6 +66,6 @@ W0 → **W3 measurement (read-only)** → **W1 profiling** (wave-by-wave: FDA/CP
 ## Related
 
 - `documentation/audit/methodology.md`, `documentation/audit/capture_expansion_backlog.md` (the sibling "(b) PR" parking lot) — the audit framework.
-- `project_scope/phase-6-execution-plan.md` (parent), `project_scope/branch_sequencing_strategy.md` (cross-branch order), `project_scope/silver_v15_migration_plan.md` (NHTSA SCD workstream that consumes the remapped silver).
+- `project_scope/phase-6-execution-plan.md` (parent), `project_scope/branch_sequencing_strategy.md` (cross-branch order), `project_scope/archive/silver_v15_migration_plan.md` (NHTSA SCD workstream that consumes the remapped silver).
 - `project_scope/freetext-enrichment-backlog.md` — Tier-2 structured-extraction enrichment deferred out of this branch (Phase 6/7).
 - ADRs 0036 / 0035 / 0033 / 0031 / 0027 / 0002 as above.

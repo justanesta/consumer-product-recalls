@@ -27,7 +27,14 @@ Plus a transformation workflow scheduled to run after the latest extraction comp
 |---|---|---|
 | `transform.yml` | Daily, time-shifted ~30 min after the latest daily extractor | `dbt build --project-dir dbt` + `dbt test --project-dir dbt`. Posts dbt docs to Cloudflare Pages on success. |
 
-Pipeline state — per-source watermarks (last-seen publication timestamps, ETags, pagination cursors) and per-run metadata (status, counts, duration, `change_type`) — lives in two Neon Postgres tables: `source_watermarks` and `extraction_runs`. Full rationale in [ADR 0020](decisions/0020-pipeline-state-tracking.md). The queries below are written against these tables.
+Pipeline state — per-source watermarks (last-seen publication timestamps, ETags, pagination cursors) and per-run metadata (status, counts, duration, `change_type`) — lives in Neon Postgres: `source_watermarks` and `extraction_runs`. For presence-tracked sources (USDA initially, [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md)) a third table, `extraction_run_identities` (migration 0027), records which recall identities each successful run returned — written automatically inside the run's `_record_run` transaction, **no operator action**. Retention: keep-forever for now (~2K rows per USDA run); revisit a TTL only if disk growth becomes material. Full rationale in [ADR 0020](decisions/0020-pipeline-state-tracking.md). The queries below are written against these tables.
+
+### SCD-2 snapshots (dbt-managed history)
+
+The silver SCD-2 history tables live in the `silver_snapshots` schema — the firm sidecars ([ADR 0035](decisions/0035-cross-source-scd2-silver-dimensions.md)) plus the NHTSA `nhtsa_recall_product_snapshot` v1.5 product-grain track ([ADR 0033](decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md), 6c.6). They are **dbt snapshots**, so two operational rules apply:
+
+- **`transform.yml` runs `dbt build`, which executes snapshots in DAG order.** Never substitute `dbt run` for the silver layer — `dbt run` skips snapshots, leaving the snapshot-backed current surfaces (`firm_*_attributes`, `recall_product`'s NHTSA branch + `recall_product_history`) reading a stale snapshot. `dbt build` (or `dbt snapshot`) is the only correct invocation.
+- **Snapshots are intentionally exempt from `--full-refresh`** (history protection). Resetting one — needed only when its `unique_key`/recipe changes, never in normal forward operation — is a manual `DROP` of the snapshot table plus any dependent views in dependency order, then `dbt build` re-initializes it. The NHTSA reset is scripted at `scripts/sql/nhtsa/silver/reset_nhtsa_recall_product_snapshot.sql`. A reset discards accumulated history, so it is a dev-only operation; on `main` it requires a deliberate decision.
 
 ### Alerting strategy
 

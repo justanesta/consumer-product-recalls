@@ -1,6 +1,6 @@
 # Silver v1.5 migration plan — SCD on stable anchor for NHTSA `recall_product`
 
-- **Status:** Layer 1 complete — merged in PR #32 (2026-05-25). Layer 2 (`feature/silver-v15-scd-prototype`) not started; gated on the post-6a.5 full-corpus NHTSA bronze baseline (sequencing owned by [`branch_sequencing_strategy.md`](branch_sequencing_strategy.md)).
+- **Status:** **COMPLETE / SUNSET (2026-06-06).** All three layers executed within **Phase 6c** (Layer 1 docs in PR #32; Layer 2 in 6c.6; Layer 3 cutover in 6c.7) — not on the originally-planned `feature/silver-v15-*` branches. The implemented anchor is the **7-tuple** (ADR 0033's 7-tuple amendment, after the full-corpus 6-tuple over-collapse finding), authorized by [ADR 0034](../documentation/decisions/0034-nhtsa-silver-v15-migration.md). This plan is now a historical record; live status is in the status table + log below.
 - **Architectural decision:** [ADR 0033](../documentation/decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md)
 - **Triggering event:** Pierce ARROW XT family `26V217000` `mfr_comp_desc` population event, 2026-05-15 (see `documentation/nhtsa/incremental_delta_findings.md` Section K)
 - **Sunset prerequisite:** ADR 0031 9-tuple migration evaluation (sunset 2026-05-15 per Stop criterion #1 firing)
@@ -44,7 +44,7 @@ This plan executes the architectural decision in ADR 0033 — migrate NHTSA silv
 | Artifact | Purpose | Status |
 |---|---|---|
 | `documentation/decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md` | Architectural decision (SCD framing, 6-tuple anchor, snapshot mechanism, cross-source applicability, empirical evidence) | Draft complete 2026-05-15 |
-| `project_scope/silver_v15_migration_plan.md` (this file) | 3-layer rollout plan with gates, deliverables, risks, branching, status tracking | Draft complete 2026-05-15 |
+| `project_scope/archive/silver_v15_migration_plan.md` (this file) | 3-layer rollout plan with gates, deliverables, risks, branching, status tracking | Draft complete 2026-05-15 |
 
 ### Cost
 
@@ -132,7 +132,7 @@ If answers are favorable, proceed to Layer 3 with a new ADR (0034) citing the ev
 | Downstream models | Any model joining on `recall_product_id` re-keys against the new 6-tuple recipe; primarily the Phase 6 `recall_event_history` model and any future Phase 8 API contracts |
 | `documentation/decisions/0031-silver-row-fragmentation-strategy.md` | Update per-source table NHTSA row to reflect new recipe; status note "migrated 2026-MM-DD per ADR 0034" |
 | `documentation/decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md` | Status update: Proposed → Accepted |
-| `project_scope/silver_v15_migration_plan.md` (this file) | Status update: Layer 3 complete; sunset the plan or transition to "monitoring" mode |
+| `project_scope/archive/silver_v15_migration_plan.md` (this file) | Status update: Layer 3 complete; sunset the plan or transition to "monitoring" mode |
 
 ### Cost
 
@@ -179,14 +179,16 @@ If any pre-condition fails at gate-2 evaluation time, defer Layer 3 (keep v1.5 p
 | Layer | Status | Last update | Next action | Owner |
 |---|---|---|---|---|
 | Layer 1 — Documentation | Complete | 2026-05-25 | Merged in PR #32 (d14d609); ADR 0033 + this plan landed. Layer 2 gate now evaluates against the post-6a.5 full-corpus baseline | — |
-| Layer 2 — Parallel prototype | Not started | 2026-06-01 | Starts after Phase 6a.5 — the snapshot baseline must initialize against full-corpus NHTSA bronze (per branch_sequencing_strategy.md) | — |
-| Layer 3 — Migration | Not started | 2026-05-15 | Gated on Layer 2 evidence | (TBD) |
+| Layer 2 — Parallel prototype | **Complete (6c.6)** | 2026-06-06 | Full-corpus build surfaced the 6-tuple over-collapse (−127,163, 99.4% structural); anchor revised to the **7-tuple** (ADR 0033 amendment). v1.5 ≈ v1; residual 1,237 / 0.38% benign; snapshot idempotent. | Phase 6c |
+| Layer 3 — Migration | **Complete (6c.7)** | 2026-06-06 | `recall_product` cut over to the 7-tuple snapshot current view; `recall_product_v15` dropped, `recall_product_history` kept; deterministic tiebreaker added. Authorized by [ADR 0034](../documentation/decisions/0034-nhtsa-silver-v15-migration.md). | Phase 6c |
 
 Update this table when status changes. Append a brief log entry below for material decisions or evidence captures.
 
 ### Status log
 
 - **2026-05-15** — Plan created. ADR 0033 drafted in parallel. Both ship in `docs/findings-2025-05-w3` branch alongside Pierce-event documentation work.
+- **2026-06-06** — **Layer 2 executed within Phase 6c.6** (folded into the `feature/phase-6c-history-lifecycle` branch, not the originally-planned `feature/silver-v15-scd-prototype`). The first full-corpus build surfaced the **6-tuple over-collapse** (`recall_product` 321,540 → 194,377, −127,163; `characterize_v15_collapse.sql` = 99.4% structural `mfr_comp_ptno` multi-part, not temporal drift), so the **anchor was revised to the 7-tuple** (ADR 0033 amendment 2026-06-06; `mfr_comp_ptno` restored to the key, only `mfr_comp_desc`/`mfr_comp_name`/`bgman`/`endman` demoted to snapshot attributes). Rebuilt: v1.5 ≈ v1 (1,237 residual / 0.38%, all simultaneous `desc`/`name` variation, no model/part coverage loss — `characterize_v15_residual.sql` + `inspect_v15_residual_modeltxt.sql`). Snapshot idempotent (2nd `dbt snapshot` = 0 new). The **~2-week observation window is waived** — a re-seeded corpus + forward-only snapshots can't populate it; the full-corpus diff + the 6c.8 simulated-drift test are the substituted Layer-2 → Layer-3 evidence. **Layer 3 cutover = Phase 6c.7**; the Status header + status table flip (and Open-Questions resolution) land with that commit.
+- **2026-06-06 (Layer 3 / 6c.7)** — **Cutover executed.** `recall_product`'s NHTSA branch now selects `nhtsa_recall_product_snapshot` where `dbt_valid_to is null` (7-tuple `recall_product_id`); `recall_product_v15` dropped (its SELECT folded in), `recall_product_history` kept. Added a deterministic tiebreaker to `stg_nhtsa_recalls_current` so snapshot idempotency is structural, not just empirical. Authorized by **ADR 0034 (Accepted)**; ADR 0033 flipped Proposed→Accepted; ADR 0031's NHTSA row marked migrated. Blast radius: `recall_product` + its own tests only (no gold/firm/event consumer joins on `recall_product_id`; no `firm.sql` lockstep). Observation window waived (re-seeded corpus + forward-only snapshots can't populate it; full-corpus diff + the 6c.8 simulated-drift test substitute). **Plan sunset.**
 
 ## Open questions
 
@@ -198,6 +200,15 @@ These need resolution before or during the indicated layer:
 4. **Cross-source rollout order** — post-Layer 3. CPSC is the next candidate (ordinality-shift hazard). FDA and USDA are low-priority (already well-anchored or 1:1 grain). USCG should be designed with SCD framing from the start. USCG manufacturers now has a concrete confirmed reassignment case (2026-05-30) and a unique source-native-history property — see the "Cross-source application" section below. Sequence and timing TBD.
 5. **dbt snapshot conventions for this project** — Layer 2. Where in the dbt project structure do snapshots live? `dbt/snapshots/` is the dbt-default convention; confirm the project's preferences match.
 6. **Schema location for snapshot table** — Layer 2. ADR 0033 proposes `silver_snapshots` schema. Confirm this fits the existing dbt schema-naming conventions (or pick an alternative).
+
+### Open-question resolutions (2026-06-06, Phase 6c)
+
+1. **Snapshot retention** — indefinite (audit purpose); `silver_snapshots` is ADR 0007 pruning-exempt. Confirmed.
+2. **Snapshot initialization** — one version per 7-tuple on first run; idempotent (2nd `dbt snapshot` = 0 new versions). Verified in 6c.6.
+3. **`recall_event_history` integration mode** — **stays on `LAG()`-over-bronze** (event-grain). The snapshot is product-grain; the two are complementary, not competing (ADR 0034). `recall_event_history` does NOT consume the snapshot.
+4. **Cross-source rollout** — still future work. The USCG firm-anchor SCD-2 shipped separately (ADR 0035, 6b.5); CPSC/FDA/USDA *product-grain* SCD remains out of scope.
+5. **Snapshot location in the dbt project** — `dbt/snapshots/` (confirmed; matches the firm snapshots).
+6. **Schema for snapshot tables** — `silver_snapshots` (confirmed; routed by the `generate_schema_name` macro, ADR 0035).
 
 ## Cross-source application — USCG manufacturers MIC reassignment (added 2026-05-30)
 

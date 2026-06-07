@@ -717,6 +717,22 @@ Per `probe_recall_id_storage.sql` Q2: 5 distinct ids with whitespace (0.41% of 1
 
 ---
 
+## API Schema Evolution
+
+### Finding S — 2026-06 breaking API change: 10 fields scalar→array, +`recall_number_export`, −`closed_date`
+
+Discovered 2026-06-06: a routine `recalls extract usda` rejected **2006/2006** records at the `validate` stage (the schema's `extra='forbid' + strict=True` posture surfaced it loudly; raw landed in R2, all rows quarantined to `usda_fsis_recalls_rejected`, the rejection-rate guard aborted the run — no bad data in bronze). Diagnosed with `scripts/sql/usda_recalls/bronze/diagnose_validation_failures.sql`. Three distinct changes, all **uniform across the corpus** (Q6 per-field type tally showed no heterogeneity — every field is one type across all 2006 rows):
+
+1. **Ten fields flipped scalar string → JSON array.** `recall_reason`, `processing`, `states`, `establishment`, `labels`, `product_items`, `distro_list`, `company_media_contact`, `en_press_release`, `press_release`. Even empty values are arrays (`[]`), and single values are wrapped (`["Pegasus Foods Inc."]`). This is FSIS moving the multi-value fields off delimited strings — the same fields the W2/6b audit was building comma-splitting for.
+2. **One new field:** `field_recall_number_export` (scalar, observed identical to `field_recall_number`, e.g. `"006-2020"`).
+3. **One field dropped:** `field_closed_date` is no longer returned (0/2006 records). Harmless to validation (the field is `Optional`/`default=None`), but **new rows land `closed_date = NULL`** — a data-availability regression (see follow-up below).
+
+**Fix (2026-06-06, Phase 6c branch — migration `0028`).** Bronze stores the arrays faithfully as `jsonb` (the 10 columns moved `TEXT → JSONB`); `src/schemas/usda.py` `_UsdaStrList` makes those fields `list[str] | None` via a `BeforeValidator` that **accepts both scalar and list** — robust to the change *and* to R2-replay of pre-change payloads/cassettes (ADR 0028), wrapping a scalar verbatim (`"a, b"` → `["a, b"]`, **not** split — silver owns tokenization) and mapping `""` → `[]`. `recall_number_export` added as a scalar TEXT column. **Silver staging (`stg_usda_fsis_recalls.sql`) collapses the arrays back to the comma-joined text the current downstream contract expects** via the `jsonb_array_to_csv` macro, so no downstream silver model changed; exploiting the native arrays (retiring the `field_states` tokenization / `recall_reason`→`reason_category` / comma-enum→`text[]` backlog) is a deferred follow-up.
+
+**Re-version wave.** Every USDA record's `content_hash` changes on the next successful extract (text-hash → list-hash). The recovery extract must run as `recalls deep-rescan usda --change-type=schema_rebaseline` so Phase 6c's `recall_event_history` excludes the wave from edit detection (ADR 0027).
+
+---
+
 ## Open Items
 
 - [x] Document total cardinality and field nullability map (Findings B, C) — confirmed 2026-04-29
@@ -728,3 +744,5 @@ Per `probe_recall_id_storage.sql` Q2: 5 distinct ids with whitespace (0.41% of 1
 - [x] Document Drupal taxonomy ID mapping for all selection filters (Finding K) — confirmed from PDF Appendix A; full mapping documented above including `field_processing_id` and `field_states_id`; no empirical probe needed
 - [ ] Verify `field_last_modified_date` reliability on known-edited recall (Finding E)
 - [ ] Optionally probe `field_closed_date_value` behavior (Finding K text filters) — documented as YYYY-MM-DD exact date filter on close date; test whether it works server-side (unlike `field_last_modified_date`)
+- [ ] **Finding S follow-up — `field_closed_date` disappearance.** Investigate whether FSIS dropped it permanently, renamed it, or moved it to another endpoint; until resolved, `closed_at` is NULL for all post-2026-06 USDA recalls (silver `recall_event.terminated_at`/lifecycle `closed_at` go stale).
+- [ ] **Finding S follow-up — exploit native arrays.** Now that the 10 multi-value fields are jsonb arrays in bronze, retire the downstream comma-splitting (`field_states` tokenization, `recall_reason`→`reason_category`, comma-enum→`text[]`) and consume the arrays directly in silver. Deferred from the 2026-06-06 drift fix, which only collapses arrays→CSV to preserve the current contract.

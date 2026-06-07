@@ -363,7 +363,7 @@ Our extractor is listing-only (Path A, Finding C), so the source-native lineage 
 - The two-gate short-circuit (Finding K: `Records Found` count + page-0 MIC membership) is **blind to same-MIC reassignment** — neither gate changes — so under an active short-circuit these are caught only by the weekly safety-net deep-rescan. Today's catch happened only because the first-incremental forced a full walk.
 - `Date Modified` would be a far better incremental/change signal than re-walking + re-hashing 16k listing rows, but it is detail-page-only.
 
-What to *do* about this (Path B detail enrichment, SCD-2 modeling of `firm_manufacturer_attributes`, and a HIN-build-date time-aware recall↔manufacturer join) is future work tracked in `project_scope/implementation_plan.md` (Phase 6 cross-source SCD-2 item + Step 7 follow-up) and `project_scope/silver_v15_migration_plan.md` (cross-source SCD application), per the findings-vs-plan separation.
+What to *do* about this (Path B detail enrichment, SCD-2 modeling of `firm_manufacturer_attributes`, and a HIN-build-date time-aware recall↔manufacturer join) is future work tracked in `project_scope/implementation_plan.md` (Phase 6 cross-source SCD-2 item + Step 7 follow-up) and `project_scope/archive/silver_v15_migration_plan.md` (cross-source SCD application), per the findings-vs-plan separation.
 
 ### M.6 — Quantified resolution: reassignment is material, and recalled MICs are disproportionately affected
 

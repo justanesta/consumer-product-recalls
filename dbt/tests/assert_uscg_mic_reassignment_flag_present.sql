@@ -1,7 +1,10 @@
 {{ config(severity='warn') }}
 
 -- ADR 0035 flag-wiring guard: every USCG bridge row for a recall on an OOB-recycled MIC
--- (the high-confidence 205 set) should carry uscg_mic_time_sensitive_unresolved. This
+-- (the high-confidence ~221 set) must be HANDLED — either uscg_mic_time_sensitive_unresolved
+-- OR, as of 6c.5 (c), uscg_mic_build_date_resolved (the boat's model_year confirms it was built
+-- during the current holder's tenure, so the current attribution is correct, not time-sensitive).
+-- A bare uscg_mic_unambiguous on an OOB-recycled MIC would be the wiring failure. This
 -- reconstructs the bridge key the SAME way recall_event_firm.uscg_event_firms does
 -- (md5 of the 3-way name coalesce), applies the SAME firm_crosswalk canonical remap, then
 -- inspects the resulting bridge row's match_confidence. A non-empty result = a recycle that
@@ -53,4 +56,4 @@ join {{ ref('recall_event_firm') }} ref
     on ref.recall_event_id = me.recall_event_id
    and ref.firm_id = me.firm_id
    and ref.role = 'manufacturer'
-where ref.match_confidence <> 'uscg_mic_time_sensitive_unresolved'
+where ref.match_confidence not in ('uscg_mic_time_sensitive_unresolved', 'uscg_mic_build_date_resolved')

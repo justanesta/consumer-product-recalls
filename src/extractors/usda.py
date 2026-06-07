@@ -6,6 +6,7 @@ from typing import Any
 import sqlalchemy as sa
 import structlog
 from pydantic import ValidationError
+from sqlalchemy.dialects import postgresql
 
 from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
 from src.bronze.invariants import (
@@ -48,20 +49,24 @@ _usda_bronze = sa.Table(
     sa.Column("closed_year", sa.Text),
     sa.Column("year", sa.Text),
     sa.Column("risk_level", sa.Text),
-    sa.Column("recall_reason", sa.Text),
-    sa.Column("processing", sa.Text),
-    sa.Column("states", sa.Text),
-    sa.Column("establishment", sa.Text),
-    sa.Column("labels", sa.Text),
+    # Multi-value fields are JSONB as of the 2026-06 USDA API change (migration 0028,
+    # Finding S) — FSIS flipped them from comma-joined scalars to JSON arrays.
+    sa.Column("recall_reason", postgresql.JSONB),
+    sa.Column("processing", postgresql.JSONB),
+    sa.Column("states", postgresql.JSONB),
+    sa.Column("establishment", postgresql.JSONB),
+    sa.Column("labels", postgresql.JSONB),
     sa.Column("qty_recovered", sa.Text),
     sa.Column("summary", sa.Text),
-    sa.Column("product_items", sa.Text),
-    sa.Column("distro_list", sa.Text),
+    sa.Column("product_items", postgresql.JSONB),
+    sa.Column("distro_list", postgresql.JSONB),
     sa.Column("media_contact", sa.Text),
-    sa.Column("company_media_contact", sa.Text),
+    sa.Column("company_media_contact", postgresql.JSONB),
     sa.Column("recall_url", sa.Text),
-    sa.Column("en_press_release", sa.Text),
-    sa.Column("press_release", sa.Text),
+    sa.Column("en_press_release", postgresql.JSONB),
+    sa.Column("press_release", postgresql.JSONB),
+    # Added by the 2026-06 API change (Finding S); scalar export form of the recall number.
+    sa.Column("recall_number_export", sa.Text),
 )
 
 _usda_rejected = sa.Table(

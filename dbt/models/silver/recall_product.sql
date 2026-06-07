@@ -8,13 +8,15 @@
 -- USDA: product_items is a free-text blob; ADR 0002 defers structured parsing.
 --   Emit one product row per recall event (recall_product_id = recall_event_id)
 --   so referential integrity holds and downstream queries don't silently skip USDA.
--- NHTSA: each bronze row IS a product instance at 11-tuple grain (vehicle ×
---   component × part × batch); recall_product_id = md5(11-tuple) per ADR 0031.
---   Mirrors CPSC's md5(parent || distinguishing_fields || disambiguator)
---   recipe structurally — bgman/endman serve as NHTSA's batch-level
---   disambiguator (analog to CPSC's product_ordinal). v1 fragmentation rate
---   ~0.0004%/day (AC DELCO maketxt normalization observed 2026-05-08); see
---   ADR 0031 + documentation/nhtsa/incremental_delta_findings.md Section G.
+-- NHTSA: consumes the v1.5 SCD-2 snapshot's CURRENT view (Phase 6c.7 cutover, ADR 0034).
+--   recall_product_id = md5(7-tuple) — (campno, normalize_maketxt(maketxt), modeltxt, yeartxt,
+--   compname, rcl_cmpt_id, mfr_comp_ptno), single-homed in stg_nhtsa_recalls_current. The
+--   drift-prone fields (mfr_comp_desc/name, bgman, endman, + widened business fields) are demoted
+--   to snapshot attributes (Type-1 current + Type-2 history via nhtsa_recall_product_snapshot) so
+--   an editorial edit versions instead of fragmenting (Pierce 26V217000); the structural part
+--   dimension mfr_comp_ptno stays in the key (ADR 0033 7-tuple amendment 2026-06-06, after the
+--   full-corpus 6-tuple over-collapse finding). Product-grain history peer: recall_product_history;
+--   event-grain history stays recall_event_history (LAG, ADR 0022).
 -- USCG: one row per recall in bronze; mirror USDA's one-product-per-recall
 --   grain (recall_product_id = recall_event_id). USCG has no separate product
 --   array — the recall row itself names a single boat model + manufacturer.
@@ -124,37 +126,29 @@ usda_products as (
 ),
 
 nhtsa_products as (
+    -- Phase 6c.7 cutover (ADR 0034): selects the v1.5 snapshot's CURRENT rows (dbt_valid_to is null)
+    -- — the former recall_product_v15 SELECT, inlined here. recall_product_id is the 7-tuple md5
+    -- (single-homed in stg_nhtsa_recalls_current); the snapshot already canonicalized maketxt via
+    -- normalize_maketxt for the anchor and carries the latest-wins attribute values. Column shape is
+    -- byte-identical to the pre-cutover CTE, so UNION parity with the other four branches holds.
     select
-        md5(
-            'NHTSA' || '|' || campno
-            -- ADR 0033 Normalization class (Phase 6b 6b.3): hash the normalize_maketxt-
-            -- canonicalized make so 'AC DELCO' -> 'ACDELCO' (and any whitespace/case make
-            -- drift) yields ONE recall_product_id. SAME macro as stg_nhtsa_recalls' identity
-            -- partition (one row survives there; this keeps its surrogate stable). The
-            -- DISPLAYED maketxt in the source_specific_attrs blob below stays RAW (critic C14).
-            || '|' || {{ normalize_maketxt('maketxt') }}
-            || '|' || coalesce(modeltxt, '')
-            || '|' || coalesce(yeartxt, '')        || '|' || coalesce(compname, '')
-            || '|' || coalesce(rcl_cmpt_id, '')    || '|' || coalesce(mfr_comp_ptno, '')
-            || '|' || coalesce(mfr_comp_desc, '')  || '|' || coalesce(mfr_comp_name, '')
-            || '|' || coalesce(bgman::text, '')    || '|' || coalesce(endman::text, '')
-        )                                             as recall_product_id,
+        recall_product_id,
         md5('NHTSA' || '|' || campno)                 as recall_event_id,
-        'NHTSA'                                       as source,
+        'NHTSA'                                        as source,
         campno                                        as source_recall_id,
-        compname                                      as product_name,
-        mfr_comp_desc                                 as product_description,
-        modeltxt                                      as model,
+        compname                                       as product_name,
+        mfr_comp_desc                                  as product_description,
+        modeltxt                                       as model,
         -- Bug 1 fix: type is the recall-type code (rcltype), previously NULL.
-        rcltype                                       as type,
-        cast(null as text)                            as category_id,
-        potaff                                        as number_of_units,
+        rcltype                                        as type,
+        cast(null as text)                             as category_id,
+        potaff                                         as number_of_units,
         case when potaff ~ '^[0-9]+$' then potaff::integer end as unit_count,
-        model_year                                    as model_year,
-        cast(null as text)                            as hin,
-        cast(null as text)                            as label_artifact_name,
-        cast(null as text)                            as distribution_list_artifact_name,
-        cast(null as text)                            as upc,
+        model_year                                     as model_year,
+        cast(null as text)                             as hin,
+        cast(null as text)                             as label_artifact_name,
+        cast(null as text)                             as distribution_list_artifact_name,
+        cast(null as text)                             as upc,
         jsonb_build_object(
             'maketxt',       maketxt,
             'yeartxt',       yeartxt,
@@ -166,8 +160,9 @@ nhtsa_products as (
             'bgman',         bgman,
             'endman',        endman,
             'fmvss',         fmvss
-        )                                             as source_specific_attrs
-    from {{ ref('stg_nhtsa_recalls') }}
+        )                                              as source_specific_attrs
+    from {{ ref('nhtsa_recall_product_snapshot') }}
+    where dbt_valid_to is null
 ),
 
 uscg_products as (

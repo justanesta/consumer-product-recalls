@@ -52,19 +52,28 @@ select
     archive_recall,
     active_notice,
     related_to_outbreak,
+    -- 2026-06 USDA API change (migration 0028 / Finding S): these fields are now jsonb
+    -- arrays in bronze. jsonb_array_to_csv() collapses them back to the comma-joined text
+    -- the current downstream silver contract expects (nullif then normalizes empty→null,
+    -- same as before). Exploiting the native arrays is deferred follow-up. summary,
+    -- qty_recovered, risk_level, url stayed scalar and are unchanged.
     nullif(
-        replace(replace(establishment, '&#039;', E'\''), '&amp;', '&'),
+        replace(
+            replace({{ jsonb_array_to_csv('establishment') }}, '&#039;', E'\''),
+            '&amp;', '&'
+        ),
         ''
     )                               as establishment,
-    nullif(recall_reason, '')       as recall_reason,
-    nullif(processing, '')          as processing,
-    nullif(states, '')              as states,
+    nullif({{ jsonb_array_to_csv('recall_reason') }}, '')  as recall_reason,
+    nullif({{ jsonb_array_to_csv('processing') }}, '')     as processing,
+    nullif({{ jsonb_array_to_csv('states') }}, '')         as states,
     nullif(summary, '')             as summary,
-    nullif(product_items, '')       as product_items,
-    nullif(distro_list, '')         as distro_list,
-    nullif(labels, '')              as labels,
+    nullif({{ jsonb_array_to_csv('product_items') }}, '')  as product_items,
+    nullif({{ jsonb_array_to_csv('distro_list') }}, '')    as distro_list,
+    nullif({{ jsonb_array_to_csv('labels') }}, '')         as labels,
     nullif(qty_recovered, '')       as qty_recovered,
-    nullif(company_media_contact, '') as company_media_contact,  -- W4 Phase A: → recall_event.firm_contact_block_text
+    -- W4 Phase A: → recall_event.firm_contact_block_text
+    nullif({{ jsonb_array_to_csv('company_media_contact') }}, '') as company_media_contact,
     nullif(recall_url, '')          as url,
     content_hash,
     extraction_timestamp,

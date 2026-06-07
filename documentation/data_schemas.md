@@ -44,7 +44,7 @@ Bronze tables follow the [ADR 0027](decisions/0027-bronze-storage-forced-transfo
 |---|---|---|---|
 | `source_watermarks` | `0001_baseline.py` (+ per-source seeds in `0008_seed_usda_establishments_watermark.py`) | Cursor state — where the next incremental query should start | [ADR 0020](decisions/0020-pipeline-state-tracking.md) |
 | `extraction_runs` | `0001_baseline.py` (+ `change_type` column added by Phase 5b.2 per ADR 0027) | Run metadata — `started_at`, `status`, `records_extracted`, `records_inserted`, `change_type` | [ADR 0020](decisions/0020-pipeline-state-tracking.md), [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md) |
-| `extraction_run_identities` | (Phase 6 — not yet shipped) | Per-run identity manifest for lifecycle dimensions | [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md) |
+| `extraction_run_identities` | `0027_extraction_run_identities.py` (Phase 6c) | Per-run **presence** manifest — one row per `(run_id, source, source_recall_id, langcode)` returned by a successful run; substrate for the `recall_lifecycle` silver dims. USDA-only initially (`DedupContract.default_track_presence`). Written in-txn by `Extractor._record_run`. | [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md) |
 
 ### Silver (unified across sources, dbt-managed)
 
@@ -54,10 +54,27 @@ Bronze tables follow the [ADR 0027](decisions/0027-bronze-storage-forced-transfo
 | `staging/stg_fda_recalls` | `stg_fda_recalls.sql` | `stg_fda_recalls.yml` | n/a |
 | `staging/stg_usda_fsis_recalls` | `stg_usda_fsis_recalls.sql` | `stg_usda_fsis_recalls.yml` | n/a |
 | `silver/recall_event` | `recall_event.sql` | `_silver.yml` | [`silver_design_notes.md`](silver_design_notes.md) |
-| `silver/recall_product` | `recall_product.sql` | `_silver.yml` | [`silver_design_notes.md`](silver_design_notes.md) |
+| `silver/recall_product` | `recall_product.sql` | `_silver.yml` | NHTSA branch consumes `nhtsa_recall_product_snapshot` (7-tuple, `dbt_valid_to is null`) since the 6c.7 cutover ([ADR 0034](decisions/0034-nhtsa-silver-v15-migration.md)); other 4 sources unchanged. See [`silver_design_notes.md`](silver_design_notes.md) §12 |
 | `silver/firm` | `firm.sql` | `_silver.yml` | [`silver_design_notes.md`](silver_design_notes.md) |
 | `silver/recall_event_firm` | `recall_event_firm.sql` | `_silver.yml` | [`silver_design_notes.md`](silver_design_notes.md) |
-| `silver/recall_event_history` | (Phase 6 — not yet shipped) | (TBD) | per [ADR 0022](decisions/0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) |
+| `silver/recall_event_history` | `recall_event_history.sql` (Phase 6c.1) | `_silver.yml` + `recall_event_history_unit_tests.yml` + `assert_recall_event_history_real_changes.sql` | LAG() over bronze, 5 sources, per [ADR 0022](decisions/0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) + [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md); see [`silver_design_notes.md`](silver_design_notes.md) |
+| `silver/recall_lifecycle` | `recall_lifecycle.sql` (Phase 6c.2) | `_silver.yml` + `recall_lifecycle_unit_tests.yml` | 1:1 with recall_event; bronze-derived first/last_seen + edit_count (all 5 sources) + manifest-derived is_currently_active / was_ever_retracted (USDA-only v1), per [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md); see [`silver_design_notes.md`](silver_design_notes.md) |
+| `silver/uscg_mic_reassignment_years` | `uscg_mic_reassignment_years.sql` (Phase 6c.5) | `_silver.yml` | Per-MIC `current_holder_since_year` parsed from the detail-page `(OOB YYYY)` lineage; feeds the `recall_event_firm` as-of-build-year resolution ([ADR 0035](decisions/0035-cross-source-scd2-silver-dimensions.md) §5) |
+| `staging/stg_nhtsa_recalls_current` | `stg_nhtsa_recalls_current.sql` (Phase 6c.6) | `stg_nhtsa_recalls_current.yml` | Distinct-on-7-tuple latest projection; single-homes the v1.5 `recall_product_id`; input to `nhtsa_recall_product_snapshot`; see [`silver_design_notes.md`](silver_design_notes.md) §12 |
+| `silver/recall_product_history` | `recall_product_history.sql` (Phase 6c.6) | `_silver.yml` | Full product-grain version history (all snapshot versions + `is_current`); the audit peer of `recall_product`'s NHTSA branch (Policy C). See [`silver_design_notes.md`](silver_design_notes.md) §12 |
+
+### Silver snapshots (SCD-2 history — `silver_snapshots` schema, dbt-managed, ADR 0035)
+
+dbt snapshots (`strategy='check'`) bank attribute history per stable anchor. The three firm sidecars follow Policy C (the `dbt_valid_to is null` current view is the dim, the full table is the queryable peer history); the NHTSA `nhtsa_recall_product_snapshot` is the v1.5 **product-grain** track (not a firm sidecar — see §12). The `silver_snapshots` schema is exempt from ADR 0007 bronze-snapshot pruning. See [`silver_design_notes.md`](silver_design_notes.md) §10 (firm sidecars) + §12 (NHTSA product).
+
+| Snapshot | dbt | Anchor | Feeds | Type |
+|---|---|---|---|---|
+| `uscg_manufacturer_attributes_snapshot` | `dbt/snapshots/uscg_manufacturer_attributes_snapshot.sql` | `mic` | `firm_manufacturer_attributes` | Type-2 **NEED** (MIC reassignment; 6b.5) |
+| `firm_establishment_attributes_snapshot` | `dbt/snapshots/firm_establishment_attributes_snapshot.sql` | `establishment_number` | `firm_establishment_attributes` | Type-2 **BENEFIT** (6c.4) |
+| `firm_fda_attributes_snapshot` | `dbt/snapshots/firm_fda_attributes_snapshot.sql` | `firm_fei_num` | `firm_fda_attributes` | Type-2 **BENEFIT** (6c.4) |
+| `nhtsa_recall_product_snapshot` | `dbt/snapshots/nhtsa_recall_product_snapshot.sql` | 7-tuple `recall_product_id` | `recall_product` (NHTSA branch, current view) + `recall_product_history` | Type-2 **product-grain** (NHTSA v1.5; [ADR 0033](decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md) + amendment / [ADR 0034](decisions/0034-nhtsa-silver-v15-migration.md), cutover 6c.7) |
+
+(CPSC has no firm sidecar. NHTSA's row is product-grain, not a firm dim — the v1.5 track; since the 6c.7 cutover ([ADR 0034](decisions/0034-nhtsa-silver-v15-migration.md)) its current view **is** `recall_product`'s NHTSA branch, with `recall_product_history` as the audit peer.)
 
 ### Enrichment (Python-written, dbt source)
 
@@ -109,7 +126,7 @@ Terms for the cross-source firm entity-resolution overlay (Phase 6b, [ADR 0037](
 - **Deep rescan.** Re-fetch from a source over a wide window, ignoring the watermark. Per-source workflow at `.github/workflows/deep-rescan-<source>.yml`. Used for edit detection on weak-watermark sources and for one-time historical backfill. See [ADR 0010](decisions/0010-ingestion-cadence-and-github-actions-cron.md), [ADR 0023](decisions/0023-fda-deep-rescan-required-archive-migration-detected.md), [ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md).
 - **R2 replay.** Re-run the bronze loader against raw payloads already in R2, without contacting the source. Used for schema-drift recovery, normalizer changes, hashing-helper updates. See [ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md) Mechanism B.
 - **Re-baseline.** A wave of bronze inserts produced by an our-side change (Pydantic normalizer or hashing helper change) where the source was unchanged. Marked `change_type='schema_rebaseline'` or `'hash_helper_rebaseline'` to distinguish from real edits. See [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md), `documentation/operations/re_baseline_playbook.md`.
-- **Run identity manifest.** Per-run record of which `(source_recall_id, [identity-suffix])` tuples were present in the response. Substrate for silver lifecycle dimensions. USDA-only initially. See [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md).
+- **Run identity (presence) manifest.** Per-run record of which `(source_recall_id, [langcode])` tuples were present in a successful run's response — stored in `extraction_run_identities` (migration 0027), written by `Extractor._record_run` in the **same transaction** as the `extraction_runs` row it FKs to. It is the one signal bronze cannot infer: a retraction (record absent upstream) produces zero new bronze rows, identical to "content unchanged, dedup skipped." Substrate for the `recall_lifecycle` silver dims (`is_currently_active`, `was_ever_retracted`). USDA-only initially (`DedupContract.default_track_presence`). See [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md).
 
 ### Failure routing
 

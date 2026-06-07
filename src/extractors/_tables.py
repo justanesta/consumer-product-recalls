@@ -83,3 +83,19 @@ extraction_runs = sa.Table(
     sa.Column("response_inner_content_sha256_by_archive", postgresql.JSONB),
     sa.Column("was_short_circuited", sa.Boolean),
 )
+
+# Per-run presence manifest (ADR 0026 Option A; migration 0027). One row per
+# (run_id, source_recall_id [, langcode]) actually returned by a successful run, written
+# by Extractor._record_run in the same transaction as the extraction_runs row its run_id
+# references. Recall-grain (source_recall_id + optional langcode), NOT bronze-identity
+# grain — see src/bronze/manifest.py. Constraints (run_id FK, the composite UNIQUE) live
+# in the migration; this object is the column view for inserts (id autoincrements).
+extraction_run_identities = sa.Table(
+    "extraction_run_identities",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("run_id", sa.Text, nullable=False),
+    sa.Column("source", sa.Text, nullable=False),
+    sa.Column("source_recall_id", sa.Text, nullable=False),
+    sa.Column("langcode", sa.Text, nullable=True),
+)
