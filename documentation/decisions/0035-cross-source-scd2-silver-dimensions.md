@@ -1,12 +1,12 @@
 # 0035 — Cross-source SCD-2 for silver dimensions
 
-- **Status:** Accepted — **ratified at the #59 merge** (which carried the PR 6b.5 USCG `firm_manufacturer_attributes` SCD-2 build), per the PR-merge status-flip convention (mirrors ADR 0036); status flip recorded 2026-06-06 (catch-up — the flip was missed at merge time). **Decision recorded 2026-06-05 on the A scope** (cross-source policy = Policy C; the only instance *built* is USCG `firm_manufacturer_attributes`). The Phase-6c follow-on refinements deferred in §5 (rename-vs-recycle tier, historical-interval backfill, as-of-build-date HIN join) are owned by `project_scope/phase-6c-execution-plan.md` (commit 6c.5). The 2026-06-01 stub rationale and the 2026-06-02 applicability verdict are retained below as history.
+- **Status:** Accepted — **ratified at the #59 merge** (which carried the PR 6b.5 USCG `firm_manufacturer_attributes` SCD-2 build), per the PR-merge status-flip convention (mirrors ADR 0036); status flip recorded 2026-06-06 (catch-up — the flip was missed at merge time). **Decision recorded 2026-06-05 on the A scope** (cross-source policy = Policy C; the only instance *built* is USCG `firm_manufacturer_attributes`). The Phase-6c follow-on refinements deferred in §5 (rename-vs-recycle tier, historical-interval backfill, as-of-build-date HIN join) are owned by `project_scope//archive/phase-6c-execution-plan.md` (commit 6c.5). The 2026-06-01 stub rationale and the 2026-06-02 applicability verdict are retained below as history.
 - **Date:** 2026-06-01 (number reserved) · 2026-06-02 (SCD-applicability verdict, W3) · 2026-06-05 (decision)
 - **Supersedes:** —
 - **Superseded by:** —
 - **Generalizes:** [ADR 0033](0033-silver-row-versioning-via-scd-on-stable-anchor.md) (SCD-on-stable-anchor, proven NHTSA-first for `recall_product`) to the silver *firm* dimensions. ADR 0033's "Cross-source implications → USCG" subsection is the design seed for this ADR.
 - **Clarifies / companion changes (land in PR 6b.5):** [ADR 0031](0031-silver-row-fragmentation-strategy.md) — fill its TBD USCG per-source row; [ADR 0007](0007-lineage-via-bronze-snapshots-and-content-hashing.md) — exempt `silver_snapshots` from bronze-snapshot pruning.
-- **Companion documents:** `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 (the USCG SCD-2 build spec); `project_scope/archive/phase-6b-execution-plan.md` PR 6b.5; `project_scope/implementation_plan.md` Phase 6 (cross-source SCD-2 item, `:707`, Policy C `:715`); `project_scope/silver_v15_migration_plan.md` cross-source section; `documentation/audit/scd_field_designations.md` (the per-field NEED/BENEFIT verdicts + validating monitors).
+- **Companion documents:** `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 (the USCG SCD-2 build spec); `project_scope/archive/phase-6b-execution-plan.md` PR 6b.5; `project_scope/implementation_plan.md` Phase 6 (cross-source SCD-2 item, `:707`, Policy C `:715`); `project_scope/archive/silver_v15_migration_plan.md` cross-source section; `documentation/audit/scd_field_designations.md` (the per-field NEED/BENEFIT verdicts + validating monitors).
 
 ## Context
 
@@ -132,7 +132,7 @@ The `feature/silver-field-remap` audit measured, per source, **whether** SCD-2 i
 
 ## Amendment 2026-06-06 — Phase 6c.4: FDA + USDA BENEFIT dims built
 
-§3 scoped the *build* to USCG only ("no snapshot for FDA/CPSC/USDA now"), and the 2026-06-05 Decision deferred the BENEFIT dims. **Phase 6c.4 overrides that deferral for FDA + USDA** per the Phase 6c scope decision (the user chose "build all BENEFIT dims now" for portfolio breadth; `project_scope/phase-6c-execution-plan.md` §6c.4). The two dims are now SCD-2:
+§3 scoped the *build* to USCG only ("no snapshot for FDA/CPSC/USDA now"), and the 2026-06-05 Decision deferred the BENEFIT dims. **Phase 6c.4 overrides that deferral for FDA + USDA** per the Phase 6c scope decision (the user chose "build all BENEFIT dims now" for portfolio breadth; `project_scope//archive/phase-6c-execution-plan.md` §6c.4). The two dims are now SCD-2:
 
 - `dbt/snapshots/firm_establishment_attributes_snapshot.sql` — anchor `establishment_number`; `check_cols` = the demographic/regulatory attributes EXCLUDING `latest_mpi_active_date` (heartbeat, ADR 0032). `firm_establishment_attributes.sql` repointed to its `dbt_valid_to is null` current view (column contract unchanged → `recall_event_establishment_resolution` unaffected).
 - `dbt/snapshots/firm_fda_attributes_snapshot.sql` — anchor `firm_fei_num`; `check_cols` = firm name/address/succession fields; driver keeps the DISTINCT-ON-event_lmd latest-per-FEI collapse. `firm_fda_attributes.sql` repointed to its current view.

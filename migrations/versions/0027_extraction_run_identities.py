@@ -4,7 +4,7 @@ Revision ID: 0027
 Revises: 0026
 Create Date: 2026-06-06
 
-Phase 6c history/lifecycle (``project_scope/phase-6c-execution-plan.md`` commit 6c.0).
+Phase 6c history/lifecycle (``project_scope//archive/phase-6c-execution-plan.md`` commit 6c.0).
 Bronze (ADR 0007) is a Type-4 store of *what content* we saw, but it cannot signal a
 *retraction*: a record absent from a run's response produces zero new bronze rows,
 identical to "content unchanged, dedup skipped." The presence manifest records, per

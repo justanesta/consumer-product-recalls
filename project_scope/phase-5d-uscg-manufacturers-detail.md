@@ -5,7 +5,7 @@
 - **Branch:** `feature/uscg-manufacturers-detail-addition`.
 - **Parent plan:** `project_scope/implementation_plan.md` Phase 5d Step 7 follow-up (lines 482–490).
 - **Sibling plan:** `project_scope/phase-5d-uscg-manufacturers.md` (the listing-only Step 7 plan this mirrors).
-- **Deferred-half home (Phase 6):** `implementation_plan.md:707` (cross-source SCD-2 item) + `project_scope/silver_v15_migration_plan.md:229–247` (cross-source application section).
+- **Deferred-half home (Phase 6):** `implementation_plan.md:707` (cross-source SCD-2 item) + `project_scope/archive/silver_v15_migration_plan.md:229–247` (cross-source application section).
 - **Sequencing doc:** `project_scope/branch_sequencing_strategy.md` (updated alongside this doc to register the branch).
 - **Empirical source-of-truth:** `documentation/uscg/manufacturer_scraping_observations.md` §M (M.1–M.6) + `documentation/uscg/field_audit_2026_w22.md`.
 - **Sunset:** ✅ branch merged (#42); remaining trigger — the §11 SCD-2 design migrates into Phase 6 / ADR 0035, then archive this doc.
@@ -33,10 +33,10 @@
 
 | Deferred item | Home |
 |---|---|
-| SCD-2 `firm_manufacturer_attributes` (snapshot) | `implementation_plan.md:707`; `silver_v15_migration_plan.md:243`; new **ADR 0035** |
-| HIN-build-date as-of-build-date join | `implementation_plan.md:707`; `silver_v15_migration_plan.md:245`; Phase 6+ |
+| SCD-2 `firm_manufacturer_attributes` (snapshot) | `implementation_plan.md:707`; `archive/silver_v15_migration_plan.md:243`; new **ADR 0035** |
+| HIN-build-date as-of-build-date join | `implementation_plan.md:707`; `archive/silver_v15_migration_plan.md:245`; Phase 6+ |
 | `recall_event_firm` flag-as-time-sensitive column + `match_confidence` | Phase 6b (bundled to avoid `firm.sql` collision) |
-| The cross-source SCD-2 **ADR 0035** | Filed early in Phase 6 (0034 reserved for NHTSA Layer-3 — `silver_v15_migration_plan.md:128`) |
+| The cross-source SCD-2 **ADR 0035** | Filed early in Phase 6 (0034 reserved for NHTSA Layer-3 — `archive/silver_v15_migration_plan.md:128`) |
 
 **Why the split.** Bundling the silver half here would "un-focus the branch and collide with Phase 6b on `firm.sql`" (`implementation_plan.md:490`). The USCG firm join lives at `firm.sql` `uscg_normalized` (line 103+) and `recall_event_firm.sql` `uscg_event_firms` (line 89+), which Phase 6b edits and which must stay in **lockstep** (the lockstep comment lives at `recall_event_firm.sql:22` and `:98`; `firm.sql` carries no explicit lockstep warning). This branch touches none of those files.
 
@@ -172,12 +172,12 @@ One logical entity (a manufacturer, keyed by `mic`); two extraction sources for 
 - **Mechanism (recommended):** SCD on the stable anchor `mic` (1-tuple) + Type-1 latest-wins attributes (`company_name`, `address`, `city`, `state`, + the Path B detail fields) + **Type-2 via dbt snapshot `strategy='check'`** — option (a) of `implementation_plan.md:707`, matching ADR 0033's NHTSA pattern. Reject the `LAG()` model and the "defer entirely" options.
 - **Snapshot config:** `dbt/snapshots/uscg_manufacturer_attributes_snapshot.sql`; `unique_key = mic` **alone** (a reassignment is a *new version of the same anchor*; `mic+company` would wrongly fork lineage); `check_cols = [company_name, address, city, state, …]`; `target_schema = silver_snapshots`; driven from `stg_uscg_manufacturer_details` (latest-per-MIC).
 - **MIC casing:** the snapshot/anchor must normalize casing — the 7 lowercase recall MICs (`cec, blb, kis, lbb, ser, vky, zep`) join via `upper(trim())` in `firm.sql` / `recall_event_firm.sql`; without normalization they miss the SCD table.
-- **Hybrid seed (the USCG twist NHTSA lacks):** forward-only from 2026-05-30 (our snapshots) **plus** a one-time backfill of historical intervals from the source-native lineage (`Past Company (OOB year)` + `In Business`). Undated `Past Company` entries get **open-ended low-confidence intervals** (`silver_v15_migration_plan.md:243`).
-- **Flag-as-time-sensitive join (v1 treatment):** because dates are mostly unusable (~13/205 parseable OOB years; `In Business` contaminated), v1 attributes to the **current** MIC holder but **flags** any recall whose MIC has a `Past Company` as "manufacturer attribution time-sensitive" (`implementation_plan.md:707`; `silver_v15_migration_plan.md:245`).
+- **Hybrid seed (the USCG twist NHTSA lacks):** forward-only from 2026-05-30 (our snapshots) **plus** a one-time backfill of historical intervals from the source-native lineage (`Past Company (OOB year)` + `In Business`). Undated `Past Company` entries get **open-ended low-confidence intervals** (`archive/silver_v15_migration_plan.md:243`).
+- **Flag-as-time-sensitive join (v1 treatment):** because dates are mostly unusable (~13/205 parseable OOB years; `In Business` contaminated), v1 attributes to the **current** MIC holder but **flags** any recall whose MIC has a `Past Company` as "manufacturer attribution time-sensitive" (`implementation_plan.md:707`; `archive/silver_v15_migration_plan.md:245`).
   - **Mechanism:** a `match_confidence` value on `recall_event_firm` (parallel to the USDA/CPSC `match_confidence` from Phase 6b — `phase-6-execution-plan.md:213, 252`): e.g. `mic_unambiguous` / `mic_time_sensitive_unresolved` / `mic_build_date_resolved`. v1 sets `mic_time_sensitive_unresolved` for any MIC in `recalled_reassigned_mics.json`.
   - **Lockstep constraint (load-bearing):** any change to `firm.sql` `uscg_normalized` (line 103+) must be replicated to `recall_event_firm.sql` `uscg_event_firms` (line 89+; lockstep comment at `recall_event_firm.sql:22` and `:98` — `firm.sql` carries none) — a break orphans `firm_id`s. **Recommend bundling the SCD-2 + flag work into the single Phase 6b PR** that already edits both files, to eliminate rebase-conflict risk (this is the same reason it is kept off the current branch).
 - **As-of-build-date (Phase 6+, NOT Phase 6b):** correct attribution joins on the **boat build date** (HIN chars 9–12; recalls staging carries `hin` + `model_year` — `stg_uscg_recalls.sql`), not the recall date. ~52.8% of USCG recalls have a populated HIN (`field_audit_2026_w22.md §4`). A **later refinement**; OOB dates are too sparse for v1.
-- **ADR 0035 (new) — required.** `implementation_plan.md:707` says "File as an ADR before implementing." 0034 is reserved for NHTSA Layer-3 (`silver_v15_migration_plan.md:128`). ADR 0035 covers all four SCD-2 dims + the value-selection Policy (leaning Policy C — `implementation_plan.md:715`) + the USCG-specific whole-entity-succession-under-a-stable-anchor + the as-of-build-date surface NHTSA lacks. **Also:** fill ADR 0031's TBD USCG per-source row, and exempt the `silver_snapshots` table from ADR 0007's bronze-snapshot pruning policy.
+- **ADR 0035 (new) — required.** `implementation_plan.md:707` says "File as an ADR before implementing." 0034 is reserved for NHTSA Layer-3 (`archive/silver_v15_migration_plan.md:128`). ADR 0035 covers all four SCD-2 dims + the value-selection Policy (leaning Policy C — `implementation_plan.md:715`) + the USCG-specific whole-entity-succession-under-a-stable-anchor + the as-of-build-date surface NHTSA lacks. **Also:** fill ADR 0031's TBD USCG per-source row, and exempt the `silver_snapshots` table from ADR 0007's bronze-snapshot pruning policy.
 - **Retired/sentinel MICs** (`111`, `999`, `777`, `N/A`, mic-only-no-name): no directory row — omit from the SCD dim, document as known non-joinable orphans in `_silver.yml`.
 
 ---
@@ -244,7 +244,7 @@ Every captured field earns its place in the final product (FastAPI per Phase 8 /
 ## 17. References
 
 - `project_scope/implementation_plan.md:482–490` (Step 7 follow-up + branch scope), `:704` (`recall_event_history` / re-baseline), `:707` (cross-source SCD-2 item + flag-as-time-sensitive), `:715` (Policy C), Phase 8/9 (FastAPI/frontend).
-- `project_scope/silver_v15_migration_plan.md:128` (ADR 0034 reservation), `:229–247` (cross-source application).
+- `project_scope/archive/silver_v15_migration_plan.md:128` (ADR 0034 reservation), `:229–247` (cross-source application).
 - `project_scope/phase-6-execution-plan.md` (Phase 6b firm resolution + `match_confidence`; sequencing constraints).
 - `project_scope/phase-5d-uscg-manufacturers.md` (sibling listing-only plan); `project_scope/branch_sequencing_strategy.md`.
 - `documentation/uscg/manufacturer_scraping_observations.md` §M (M.1–M.6); `documentation/uscg/field_audit_2026_w22.md` §3/§4/§6/§8.

@@ -17,7 +17,7 @@ The headline cross-source SCD-2 work (the only *measured* Type-2 NEED) already l
 - **USCG `firm_manufacturer_attributes` SCD-2** — `dbt/snapshots/uscg_manufacturer_attributes_snapshot.sql` (`strategy='check'`, `unique_key='mic'`, `check_cols` = company/dba/parent/past_company_1-3/address/city/state/zip/country/status/out_of_business, **excludes** `date_modified`/`in_business` heartbeats; `schema='silver_snapshots'` via `dbt/macros/generate_schema_name.sql`). `firm_manufacturer_attributes.sql` repointed to the snapshot current-view (`dbt_valid_to is null`) + derived `mic_has_prior_holder` / `mic_oob_recycled` (word-boundary `\yOOB\y`) / `prior_holders` jsonb. `recall_event_firm.sql` USCG branch stamps `match_confidence ∈ {uscg_mic_unambiguous, uscg_mic_time_sensitive_unresolved}`. Tests `assert_uscg_mic_reassignment_flag_present` + `assert_uscg_scd2_no_forked_lineage`.
 - **ADR 0033** (SCD-on-stable-anchor, NHTSA proof) + **ADR 0035** (cross-source SCD-2, Policy C, dbt-snapshot mechanism, USCG-only build scope) written. The W3 SCD verdict is single-homed in `documentation/audit/scd_field_designations.md` (per-field NEED/BENEFIT catalogue + monitor registry) + `documentation/audit/cross_source_consolidation.md` §8.
 - **SCD monitor SQL** exists (read-only, measure-forward): `scripts/sql/cross_source/scd_monitors/{assert_classification_stable,assert_lifecycle_stable,assert_mic_holder_stable,probe_mic_prior_holder_not_oob}.sql`.
-- **NHTSA v1.5 Layer 1** (ADR 0033 + `silver_v15_migration_plan.md`) merged in #32.
+- **NHTSA v1.5 Layer 1** (ADR 0033 + `archive/silver_v15_migration_plan.md`) merged in #32.
 
 **Doc-staleness fix (do now):** ADR 0035 still reads `Status: Proposed` although its PR 6b.5 work merged in #59 → flip to **Accepted** per the merge-status-flip convention.
 
@@ -34,7 +34,7 @@ All three are genuinely pending and remain the core of 6c. Each needs deltas fol
 ### 1.3 SCD/6c work swept in from elsewhere (was scattered)
 
 - **ADR 0035 §5 "Phase-6c follow-on"** (all three included per the scope decision): (i) historical-interval backfill seeding SCD intervals from source-native `Past Company (OOB year)` + `In Business`; (ii) the as-of-**build-date** HIN→holder attribution join (HIN chars 9–12); (iii) a rename-vs-recycle flag tier (`(previous name)` marker; the probe `probe_mic_prior_holder_not_oob.sql` already measured ~84% genuine reassignments / ~16% same-entity renames).
-- **NHTSA v1.5 Layer 2 + Layer 3** (`silver_v15_migration_plan.md`; ADR 0034 stub) — folded into 6c per the scope decision. Layer 2 is unblocked now that Phase 6a.5 is complete (snapshot baseline initializes against full-corpus bronze).
+- **NHTSA v1.5 Layer 2 + Layer 3** (`archive/silver_v15_migration_plan.md`; ADR 0034 stub) — folded into 6c per the scope decision. Layer 2 is unblocked now that Phase 6a.5 is complete (snapshot baseline initializes against full-corpus bronze).
 - **SCD-monitor governance** (`scd_field_designations.md` §4): promote the existing monitor SQLs to `severity=warn` dbt singular tests; add the join-key erasure tripwire (`implementation_plan.md:739`).
 - **BENEFIT SCD-2 dims** (`cross_source_consolidation.md` §8; ADR 0035 §3): the "nice-to-have for the other sources" — scope decision was **build all now** for portfolio breadth, reconciled in 6c.4 to avoid redundancy with `recall_event_history`.
 
@@ -234,9 +234,9 @@ Mirror the shipped USCG pattern exactly (`uscg_manufacturer_attributes_snapshot.
 
 ## Commit 6c.6 — NHTSA v1.5 Layer 2 (parallel prototype)
 
-> **As-built (2026-06-06):** the full-corpus Layer-2 build showed the 6-tuple **over-collapses** (`recall_product` −127,163 / −40%, 99.4% structural `mfr_comp_ptno` multi-part — not drift), so the anchor shipped as the **7-tuple** (+`mfr_comp_ptno`; ADR 0033 amendment 2026-06-06) with `check_cols` = `desc`/`name`/`bgman`/`endman` + widened business fields, and the ~2-week observation window was **waived** (re-seeded corpus + forward-only snapshots can't populate it; full-corpus diff + the 6c.8 sim-drift test substitute). The 6-tuple / window / `compare_v1_v15_cardinality` / `assert_pre_2008_six_tuple_unique` items below are the plan-as-conceived; the as-built record is [ADR 0034](../documentation/decisions/0034-nhtsa-silver-v15-migration.md) + `silver_v15_migration_plan.md` + `silver_design_notes.md` §12.
+> **As-built (2026-06-06):** the full-corpus Layer-2 build showed the 6-tuple **over-collapses** (`recall_product` −127,163 / −40%, 99.4% structural `mfr_comp_ptno` multi-part — not drift), so the anchor shipped as the **7-tuple** (+`mfr_comp_ptno`; ADR 0033 amendment 2026-06-06) with `check_cols` = `desc`/`name`/`bgman`/`endman` + widened business fields, and the ~2-week observation window was **waived** (re-seeded corpus + forward-only snapshots can't populate it; full-corpus diff + the 6c.8 sim-drift test substitute). The 6-tuple / window / `compare_v1_v15_cardinality` / `assert_pre_2008_six_tuple_unique` items below are the plan-as-conceived; the as-built record is [ADR 0034](../documentation/decisions/0034-nhtsa-silver-v15-migration.md) + `archive/silver_v15_migration_plan.md` + `silver_design_notes.md` §12.
 
-**Scope.** The `silver_v15_migration_plan.md` Layer-2 deliverables — a product-grain SCD running **alongside** v1 silver, reversible, no consumer impact. Now unblocked (Phase 6a.5 complete → the snapshot baseline initializes against full-corpus NHTSA bronze).
+**Scope.** The `archive/silver_v15_migration_plan.md` Layer-2 deliverables — a product-grain SCD running **alongside** v1 silver, reversible, no consumer impact. Now unblocked (Phase 6a.5 complete → the snapshot baseline initializes against full-corpus NHTSA bronze).
 
 **Files — new.**
 - `dbt/snapshots/nhtsa_recall_product_snapshot.sql` — 6-tuple `unique_key (campno, maketxt, modeltxt, yeartxt, compname, rcl_cmpt_id)`, `strategy='check'`, `check_cols` = the 5 attribute fields, `schema='silver_snapshots'`.
@@ -268,7 +268,7 @@ Mirror the shipped USCG pattern exactly (`uscg_manufacturer_attributes_snapshot.
 
 **Pre-conditions to fire (all four, per the migration plan):** Layer-2 gate passes; ≥1 additional novel drift event observed in the window; 6c.1's `recall_event_history` grain settled (it is — event-grain, no dependency on the product key); no consumer blocker.
 
-**Files — modified.** `recall_product.sql` (rewrite); ADRs `0034` (Proposed→Accepted, cite Layer-2 evidence), `0033` (Proposed→Accepted), `0031` (NHTSA per-source row → "migrated per ADR 0034"); `silver_v15_migration_plan.md` (Layer 3 complete).
+**Files — modified.** `recall_product.sql` (rewrite); ADRs `0034` (Proposed→Accepted, cite Layer-2 evidence), `0033` (Proposed→Accepted), `0031` (NHTSA per-source row → "migrated per ADR 0034"); `archive/silver_v15_migration_plan.md` (Layer 3 complete).
 
 **No migration.**
 
@@ -348,7 +348,7 @@ Every 6c change documents **what the table/view/mechanism is, how it works, and 
 ## References
 
 - `project_scope/implementation_plan.md` Phase 6 (`:701–776`) — master deliverables + the Policy-C sub-decision.
-- `project_scope/silver_v15_migration_plan.md` — NHTSA v1.5 Layer 1/2/3.
+- `project_scope/archive/silver_v15_migration_plan.md` — NHTSA v1.5 Layer 1/2/3.
 - `documentation/decisions/{0022,0026,0027,0031,0032,0033,0034,0035,0036}.md`.
 - `documentation/audit/{scd_field_designations,cross_source_consolidation}.md` — the W3 SCD verdict + monitor registry.
 - `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 — the USCG SCD-2 build spec (the §5 refinements built in 6c.5).

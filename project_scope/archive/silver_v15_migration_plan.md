@@ -44,7 +44,7 @@ This plan executes the architectural decision in ADR 0033 — migrate NHTSA silv
 | Artifact | Purpose | Status |
 |---|---|---|
 | `documentation/decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md` | Architectural decision (SCD framing, 6-tuple anchor, snapshot mechanism, cross-source applicability, empirical evidence) | Draft complete 2026-05-15 |
-| `project_scope/silver_v15_migration_plan.md` (this file) | 3-layer rollout plan with gates, deliverables, risks, branching, status tracking | Draft complete 2026-05-15 |
+| `project_scope/archive/silver_v15_migration_plan.md` (this file) | 3-layer rollout plan with gates, deliverables, risks, branching, status tracking | Draft complete 2026-05-15 |
 
 ### Cost
 
@@ -132,7 +132,7 @@ If answers are favorable, proceed to Layer 3 with a new ADR (0034) citing the ev
 | Downstream models | Any model joining on `recall_product_id` re-keys against the new 6-tuple recipe; primarily the Phase 6 `recall_event_history` model and any future Phase 8 API contracts |
 | `documentation/decisions/0031-silver-row-fragmentation-strategy.md` | Update per-source table NHTSA row to reflect new recipe; status note "migrated 2026-MM-DD per ADR 0034" |
 | `documentation/decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md` | Status update: Proposed → Accepted |
-| `project_scope/silver_v15_migration_plan.md` (this file) | Status update: Layer 3 complete; sunset the plan or transition to "monitoring" mode |
+| `project_scope/archive/silver_v15_migration_plan.md` (this file) | Status update: Layer 3 complete; sunset the plan or transition to "monitoring" mode |
 
 ### Cost
 

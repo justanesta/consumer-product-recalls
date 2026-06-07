@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-06-06; number reserved 2026-06-01)
 - **Date:** 2026-06-06
-- **Owning plan:** [`project_scope/silver_v15_migration_plan.md`](../../project_scope/silver_v15_migration_plan.md) — Layer 3 (now complete)
+- **Owning plan:** [`project_scope/archive/silver_v15_migration_plan.md`](../../project_scope/archive/silver_v15_migration_plan.md) — Layer 3 (now complete)
 - **Builds on:** [ADR 0033](0033-silver-row-versioning-via-scd-on-stable-anchor.md) (silver row-versioning via SCD on a stable anchor) **and its 2026-06-06 amendment** (the 6-tuple → 7-tuple correction)
 - **Updates:** [ADR 0031](0031-silver-row-fragmentation-strategy.md) per-source NHTSA row (recipe migrated `md5(11-tuple)` → `md5(7-tuple)`)
 - **Unchanged by this ADR:** [ADR 0030](0030-nhtsa-bronze-identity-composite-tuple-and-within-batch-dedup.md) (bronze 11-tuple identity), [ADR 0022](0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) (`recall_event_history` LAG over bronze)

@@ -383,7 +383,7 @@ The Phase 5c USDA U3 assertion (`scripts/sql/usda_recalls/bronze/assert_field_la
 
 ## Phase 6c implementation note (2026-06-06)
 
-Built in `project_scope/phase-6c-execution-plan.md` commit 6c.0 (migration `0027`). Two
+Built in `project_scope//archive/phase-6c-execution-plan.md` commit 6c.0 (migration `0027`). Two
 resolutions/deviations vs the sketch above, both forced by the code as it stands today:
 
 - **Q1 resolved — manifest written in `Extractor._record_run`, not `load_bronze`.** Neither
