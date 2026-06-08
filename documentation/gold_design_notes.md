@@ -93,7 +93,8 @@ factless bridge.
 
 **The one no-regret early piece is `dim_date`** — a generated calendar that replaces the `date_trunc`
 logic repeated inline across the nine `fct_*` models and unlocks fiscal/holiday calendars cheaply.
-Worth pulling forward independently of the star decision.
+**Decided 2026-06-08:** it will be built pre-Phase-8 regardless of the star call (tracked in
+`project_scope/implementation_plan.md`, Architectural follow-ups).
 
 **When:** decide at Phase 8 framing — [ADR 0024](decisions/README.md) already owns "the relationship
 between API endpoints and dbt gold views" — once the website's feed + chart inventory are known.
