@@ -519,6 +519,8 @@ Cross-cutting work targeted at specific upcoming phases. Each item is gated to a
 | Quarantine-recovery CLI (`recalls recover-rejected`) | **`feature/quarantine-recovery-tool`** — shipped 2026-06-01 | **Implemented** 2026-06-01 (PR #45, v0.10.0) — `src/bronze/recovery.py` + `recalls recover-rejected`; FDA one-off retired. Owning doc: `project_scope/quarantine-recovery-tooling-plan.md`. See section below. |
 | `src/` soundness consolidation (dedup-contract SSOT + DRY) | **`refactor/src-soundness-consolidation`** | Code complete 2026-06-01 — fixes the reachable NHTSA deep-rescan dedup bug (ADR 0030 amended); ~440 lines of duplication removed. NHTSA `main` data remediation pending. Owning doc: `project_scope/archive/src-consolidation-plan.md`; findings: `documentation/audit/src_soundness_audit.md`. |
 | Deep-rescan reliability & workload (Phase-7 GHA readiness) | **`docs/deep-rescan-reliability-audit`** (graduation; impl tiers TBD) | **Phase 7 prerequisite.** Audit complete 2026-06-02 — workload (NHTSA O(corpus) ~21-min no-op) + reliability (Neon mid-txn drops; `pool_pre_ping`-only; USCG-detail exceeds the 6h cap) findings, with an adversarially-verified tiered fix ladder. Owning doc: `project_scope/deep-rescan-reliability-plan.md`; findings: `documentation/audit/deep_rescan_reliability_audit.md`. |
+| Firm-attribute sidecar source-uniform renaming | **`refactor/firm-sidecar-source-naming`** (pre-Phase-7) | Pending — surfaced 2026-06-08 (Phase 6f.1 schema review). The three SCD-2 firm sidecars + their snapshots use three inconsistent naming schemes (by-role vs by-source; the USCG snapshot doesn't mirror its view). Align to source-uniform `firm_{usda,uscg,fda}_attributes` + matching `_snapshot`s. **Zero-cost window:** snapshots bank 0 edit-versions today, so the rename is a code-only find-replace; once Phase 7 cron banks SCD-2 history it becomes a data migration. See section below. |
+| Gold dimensional star schema (vs. extending `fct_*`) | **Phase 8 framing** (ADR 0024 / website data-feed) | Pending — deferred per ADR 0038 §1; `dim_` prefix reserved (§2). Revisit trigger now live: the project website is gold's first BI-esque consumer (surfaced 2026-06-08, Phase 6f.1). **Gating fork:** API- or direct-gold-fed with a *fixed* chart set → the existing `fct_*` aggregate marts already serve it (no star); a BI tool / semantic layer or user-driven cross-dimensional slicing → build the star. `dim_date` is a no-regret early DRY win. Narrative: `gold_design_notes.md` §"Deferred: a dimensional star schema". |
 
 ### ADR 0012 implementation: source-config loader and registry — Wave 2, landed 2026-05-10
 
@@ -695,6 +697,24 @@ If a fourth source's schema reveals a pattern that meaningfully repeats across t
 ### Quarantine-recovery CLI (`recalls recover-rejected`) — implemented 2026-06-01 (PR #45, `feature/quarantine-recovery-tool`)
 
 **Implemented 2026-06-01** (PR #45, v0.10.0, branch `feature/quarantine-recovery-tool`) — owning doc: `project_scope/archive/quarantine-recovery-tooling-plan.md`. Source-agnostic `recalls recover-rejected <source>` reads the uniform `<source>_rejected` table, reconstructs records (datetime-field coercion derived by Pydantic introspection — verified for FDA/NHTSA/CPSC) and loads them via `BronzeLoader.load` directly (no watermark mutation), dispatched through `RECOVERY_CONFIG_BY_SOURCE_NAME` in `src/bronze/recovery.py`; the FDA one-off `scripts/fda/recover_rejected_invariant_records.py` was retired (census SQL kept). **Distinct from — and complementary to — the planned `scripts/re_ingest.py`** (ADR 0014): re-ingest replays R2 raw bytes and *re-runs* `check_invariants()` (so it would re-reject the typo rows); recovery *bypasses* the invariant on purpose, human-in-the-loop (census-first, `--dry-run`, non-destructive), and does **not** change the invariant. First real use: reclaimed the 24 `check_date_sanity` rows (source dropped-century typo `2013→0013` on `recall_initiation_dt`) quarantined by the 2026-06-01 FDA full-corpus seed.
+
+### Firm-attribute sidecar source-uniform renaming — Phase 7 prerequisite (surfaced 2026-06-08, Phase 6f.1)
+
+**Pending — own branch `refactor/firm-sidecar-source-naming`, one commit, before Phase 7 cron turn-on.**
+
+Phase 6f.1's schema walk surfaced three different naming schemes across the per-source SCD-2 firm sidecars and their snapshots:
+
+| Source | Current view | Snapshot | Scheme |
+|---|---|---|---|
+| USDA (FSIS) | `firm_establishment_attributes` | `firm_establishment_attributes_snapshot` | by-role (view + snapshot agree) |
+| USCG | `firm_manufacturer_attributes` | `uscg_manufacturer_attributes_snapshot` | by-role view, **by-source snapshot (mismatch)** |
+| FDA | `firm_fda_attributes` | `firm_fda_attributes_snapshot` | by-source (view + snapshot agree) |
+
+**Decision:** align to a source-uniform scheme — `firm_usda_attributes` / `firm_uscg_attributes` / `firm_fda_attributes` and matching `_snapshot`s. Each sidecar is 1:1 with one source on a source-specific government anchor (`establishment_number` / `mic` / `firm_fei_num`), and FDA already sets the by-source precedent. (Counter-argument considered: the role nouns "establishment"/"manufacturer" carry domain meaning that "usda"/"uscg" hide — but FDA firms are *also* establishments, so the role scheme can't be made uniform without a source qualifier anyway.)
+
+**Why pre-Phase-7 — the zero-cost window.** Every snapshot is forward-banking 0 edit-versions today (`_snapshots.yml`), so the SCD-2 history tables hold only the current state. Right now a rename is a pure code find-replace + a clean rebuild that loses nothing. Once Phase 7 cron starts banking real SCD-2 history, renaming a snapshot orphans its accumulated history and becomes a data migration. Cheapest done now.
+
+**Scope (verified reference counts, excl. `target/`).** Rename 3 current-view models + 3 snapshots; update `ref()`s in the gold marts (`mart_firm_profile`, `fct_recalls_by_geography`), the silver consumers (`recall_event_firm`, `recall_event_establishment_resolution`, `uscg_mic_reassignment_years`), the three current-view bodies, the 3 sidecar tests, `_silver.yml` / `_snapshots.yml`, and the docs (`database_overview.md`, `data_schemas.md`, `silver_design_notes.md`, `gold_design_notes.md`). Mechanical; no logic change. Verify the snapshots re-bank 0 versions on rebuild (idempotency gate) after the rename.
 
 ---
 
