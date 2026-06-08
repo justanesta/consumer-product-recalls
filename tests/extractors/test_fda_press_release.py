@@ -430,11 +430,12 @@ class TestFetchEvent:
     def test_503_html_raises_transient_not_fingerprint_block(
         self, pr_extractor: FdaPressReleaseExtractor
     ) -> None:
-        """THE regression for the overnight-seed crash. A 5xx WITH an HTML body (Akamai's 503
-        "Service Unavailable" reference page) is the edge shedding load — TRANSIENT, like a
-        plain 5xx — not the permanent anti-abuse fingerprint block. It must raise
-        TransientExtractionError so the per-event retry / driver cooldown recover it, not the
-        non-retryable ExtractionError that aborted the seed on a single HTTP 503."""
+        """THE regression for the overnight-seed crash. A 5xx WITH an HTML body (Akamai's cached
+        "Accessdata Error" failover page — a transient origin-side error, verified 2026-06-08
+        from the captured 503) is TRANSIENT, like a plain 5xx — not the permanent anti-abuse
+        fingerprint block. It must raise TransientExtractionError so the per-event retry / driver
+        cooldown recover it, not the non-retryable ExtractionError that aborted the seed on a
+        single HTTP 503."""
         with respx.mock:
             respx.get(_PR_URL + "1").mock(
                 return_value=httpx.Response(

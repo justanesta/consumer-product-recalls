@@ -385,16 +385,21 @@ class FdaPressReleaseExtractor(FdaIresExtractor[FdaPressReleaseRecord]):
 
         is_html = "text/html" in response.headers.get("Content-Type", "")
 
-        # A 5xx WITH an HTML body (e.g. Akamai's 503 "Service Unavailable" reference page) is
-        # the edge shedding load / a momentary throttle — TRANSIENT, exactly like a plain 5xx
-        # below. Raise TransientExtractionError so the per-event retry backs off and recovers a
-        # brief blip in place; a sustained one escapes to run_checkpointed's cooldown+resume.
-        # (This is the misclassification that crashed the overnight seed on one HTTP 503.)
+        # A 5xx WITH an HTML body is a TRANSIENT origin-side error, exactly like a plain 5xx
+        # below: Akamai serves a cached "Accessdata Error" failover page (from NetStorage, no
+        # Retry-After) when the iRES origin hiccups. VERIFIED 2026-06-08 from the captured 503
+        # body — distinct from the anti-abuse FINGERPRINT block (a 302→apology page) handled
+        # next; see finding N.1 in documentation/fda/api_observations.md. Raise
+        # TransientExtractionError so the per-event retry backs off and recovers a brief blip in
+        # place; a sustained one escapes to run_checkpointed's cooldown+resume. (This is the
+        # misclassification that crashed the overnight seed on one HTTP 503; the re-run replayed
+        # the same batch clean, confirming recovery.)
         if is_html and 500 <= response.status_code <= 599:
             self._capture_error_response(url, response)
             raise TransientExtractionError(
-                f"FDA edge returned HTTP {response.status_code} with an HTML body (transient "
-                f"load-shed/throttle; event {event_id}). Backing off and retrying."
+                f"FDA iRES origin returned HTTP {response.status_code} with an HTML body "
+                f"(transient 'Accessdata Error' failover page; event {event_id}). "
+                "Backing off and retrying."
             )
 
         # Anti-abuse FINGERPRINT block: iRES 302-redirects a rejected client to an HTML apology
