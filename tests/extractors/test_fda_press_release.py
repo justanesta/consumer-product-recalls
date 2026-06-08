@@ -12,6 +12,7 @@ import sqlalchemy as sa
 from src.config.settings import Settings
 from src.extractors._base import (
     AuthenticationError,
+    ExtractionAbortedError,
     ExtractionError,
     RateLimitError,
     TransientExtractionError,
@@ -201,6 +202,98 @@ class TestCheckpointedSeedDriver:
         assert loader._last_batch_event_count == 0
         assert loader._next_cursor is None
 
+    def test_transient_batch_failure_cools_down_then_resumes(
+        self, seed_loader: FdaPressReleaseCheckpointedSeedLoader
+    ) -> None:
+        """A transient/throttle batch failure is not fatal: the driver sleeps the cooldown and
+        re-runs the batch (resuming from the committed cursor), then completes normally. The
+        failed attempt does not advance the batch/loaded totals."""
+        loader = seed_loader
+        loader.cooldown_base_seconds = 10.0
+        outcomes = iter(["fail", "ok"])
+
+        def fake_run(change_type: str) -> Any:
+            if next(outcomes) == "fail":
+                raise TransientExtractionError("503 load-shed")
+            loader._last_batch_event_count = 5  # short batch → exhausted → complete
+            result = MagicMock()
+            result.records_loaded = 2
+            return result
+
+        with (
+            patch.object(loader, "_read_checkpoint", return_value=(None, None)),
+            patch.object(self._SEED_CLS, "run", side_effect=fake_run) as run_mock,
+            patch.object(loader, "_mark_complete") as mark_mock,
+            patch("src.extractors.fda_press_release.time.sleep") as sleep_mock,
+        ):
+            summary = loader.run_checkpointed(change_type="historical_seed", batch_size=250)
+
+        assert run_mock.call_count == 2  # one failure, then success
+        sleep_mock.assert_called_once_with(10.0)  # base cooldown, single failure
+        assert mark_mock.call_count == 1
+        assert summary == {"batches": 1, "events": 5, "loaded": 2, "already_complete": False}
+
+    def test_circuit_breaker_aborts_after_max_with_escalating_capped_cooldown(
+        self, seed_loader: FdaPressReleaseCheckpointedSeedLoader
+    ) -> None:
+        """A persistent throttle escalates the cooldown (base * 2**(n-1), capped) and, after
+        max_consecutive_failures, trips the breaker and raises (cursor preserved → re-runnable);
+        the sweep is never marked complete."""
+        loader = seed_loader
+        loader.cooldown_base_seconds = 10.0
+        loader.cooldown_max_seconds = 15.0
+
+        def fake_run(change_type: str) -> Any:
+            raise TransientExtractionError("persistent throttle")
+
+        with (
+            patch.object(loader, "_read_checkpoint", return_value=(None, None)),
+            patch.object(self._SEED_CLS, "run", side_effect=fake_run) as run_mock,
+            patch.object(loader, "_mark_complete") as mark_mock,
+            patch("src.extractors.fda_press_release.time.sleep") as sleep_mock,
+            pytest.raises(TransientExtractionError, match="persistent throttle"),
+        ):
+            loader.run_checkpointed(
+                change_type="historical_seed", batch_size=250, max_consecutive_failures=3
+            )
+
+        # Failures 1,2,3 sleep (10, 20→cap 15, 40→cap 15); failure 4 (>3) trips the breaker.
+        assert run_mock.call_count == 4
+        assert [c.args[0] for c in sleep_mock.call_args_list] == [10.0, 15.0, 15.0]
+        mark_mock.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "make_exc",
+        [
+            pytest.param(lambda: AuthenticationError("creds bad"), id="auth"),
+            pytest.param(
+                lambda: ExtractionAbortedError("fda_press_releases", 0.9, 0.05), id="aborted"
+            ),
+        ],
+    )
+    def test_deterministic_error_surfaces_immediately_without_cooldown(
+        self,
+        seed_loader: FdaPressReleaseCheckpointedSeedLoader,
+        make_exc: Any,
+    ) -> None:
+        """Auth failures and rejection-rate aborts are deterministic — a cooldown+resume can't
+        change them, so the driver re-raises at once (no sleep, no retry)."""
+        loader = seed_loader
+
+        def fake_run(change_type: str) -> Any:
+            raise make_exc()
+
+        with (
+            patch.object(loader, "_read_checkpoint", return_value=(None, None)),
+            patch.object(self._SEED_CLS, "run", side_effect=fake_run) as run_mock,
+            patch("src.extractors.fda_press_release.time.sleep") as sleep_mock,
+            pytest.raises(ExtractionError),
+        ):
+            loader.run_checkpointed(change_type="historical_seed")
+
+        assert run_mock.call_count == 1
+        sleep_mock.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # _rows_from_result — RESULT shape normalisation (array / columnar / empty)
@@ -332,6 +425,40 @@ class TestFetchEvent:
         with respx.mock:
             respx.get(_PR_URL + "1").mock(return_value=httpx.Response(500))
             with httpx.Client() as client, pytest.raises(TransientExtractionError):
+                pr_extractor._fetch_event(client, 1)
+
+    def test_503_html_raises_transient_not_fingerprint_block(
+        self, pr_extractor: FdaPressReleaseExtractor
+    ) -> None:
+        """THE regression for the overnight-seed crash. A 5xx WITH an HTML body (Akamai's 503
+        "Service Unavailable" reference page) is the edge shedding load — TRANSIENT, like a
+        plain 5xx — not the permanent anti-abuse fingerprint block. It must raise
+        TransientExtractionError so the per-event retry / driver cooldown recover it, not the
+        non-retryable ExtractionError that aborted the seed on a single HTTP 503."""
+        with respx.mock:
+            respx.get(_PR_URL + "1").mock(
+                return_value=httpx.Response(
+                    503,
+                    text="<html>Service Unavailable</html>",
+                    headers={"Content-Type": "text/html"},
+                )
+            )
+            with httpx.Client() as client, pytest.raises(TransientExtractionError):
+                pr_extractor._fetch_event(client, 1)
+
+    def test_200_html_fingerprint_raises_non_retryable_extraction_error(
+        self, pr_extractor: FdaPressReleaseExtractor
+    ) -> None:
+        """A 2xx HTML body (a followed 302 → apology page) is the permanent fingerprint block:
+        the client identity is refused, so it stays a non-retryable ExtractionError (the driver
+        applies a long cooldown / trips the breaker rather than fast-retrying)."""
+        with respx.mock:
+            respx.get(_PR_URL + "1").mock(
+                return_value=httpx.Response(
+                    200, text="<html>apology</html>", headers={"Content-Type": "text/html"}
+                )
+            )
+            with httpx.Client() as client, pytest.raises(ExtractionError, match="anti-abuse"):
                 pr_extractor._fetch_event(client, 1)
 
 

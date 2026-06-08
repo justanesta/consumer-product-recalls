@@ -492,6 +492,15 @@ Notable properties of the throttle response:
 
 These will be filled in when surfaced in normal use, or via email back from FDA's iRES support contact (if pursued). Until then, treat any HTML response from `/recalls/` as a hard "stop and wait" signal.
 
+#### N.1 Addendum (2026-06-08): two distinct HTML responses — a permanent fingerprint block vs. a transient 503 edge load-shed
+
+The overnight press-release seed (`FdaPressReleaseCheckpointedSeedLoader`, ~50.5K per-event GETs) ran cleanly for ~6.5 h, then died on a single **`HTTP 503` whose body was `text/html`**, not JSON. This exposed that finding N's "treat *any* HTML response as stop-and-wait" conflated two genuinely different failures:
+
+- **302 → apology page (the original finding N):** Akamai *refuses the client identity* — fires before auth, persists across cache-busting, recovery is time-based. With `follow_redirects=True` a client lands on a `2xx`/`404` HTML apology page. This is **permanent** for the duration of the block; fast retries deepen it. → still a non-retryable `ExtractionError`.
+- **5xx (e.g. 503) *with* an HTML body:** the edge is momentarily *shedding load* — the textbook **transient** signal, indistinguishable in intent from a plain `503` (which the extractor already retried). Aborting an 6.5-hour sweep on one of these is wrong.
+
+**Resolution (refines implication #1 for the per-event path):** `_fetch_event` now branches on status code, not Content-Type alone — `5xx`-with-HTML → `TransientExtractionError` (per-event backoff retry; a sustained one escapes to the driver's escalating cooldown + circuit breaker, see `documentation/operations.md`), while non-5xx HTML stays the permanent-block `ExtractionError`. The bulk-POST `/recalls/` guidance is unchanged (its risk surface is ~27 sequential POSTs, not 50K GETs). Still no `Retry-After` observed on either shape, so backoff is client-driven.
+
 ### O. The cassette suite was trimmed: `multi_page` and `partial_last_page` removed as redundant
 
 Surfaced 2026-04-28 immediately after live cassette recording. The original Phase 5a plan specified four happy-path live cassettes — `single_page`, `multi_page`, `partial_last_page`, plus `empty_result` — assuming the matrix would meaningfully exercise different code paths in `_paginate`. Empirical recording showed otherwise.
