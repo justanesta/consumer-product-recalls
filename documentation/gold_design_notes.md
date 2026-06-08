@@ -61,3 +61,41 @@ the cross-source total).
   went 3s → 130s until ANALYZE was added).
 - **Phase-7 follow-up:** re-profile indexes against real API traffic (`pg_stat_statements`); promote
   warn→error tests where stable; add the statistical/baseline tests that need production data.
+
+## Deferred: a dimensional star schema
+
+Gold deliberately stops short of a formal Kimball star ([ADR 0038](decisions/0038-gold-layer-modeling-and-indexing-strategy.md) §1) —
+silver already supplies fact/dim/bridge, so a star would largely duplicate it. The `dim_` prefix is
+**reserved** (ADR 0038 §2) for the day a star earns its keep. This note records when that day arrives
+and what gets built.
+
+**The gating question is the website's data feed, not the star itself.** The project website will be
+gold's first BI-esque consumer, and *how it reads the data* decides whether a star helps:
+
+- **API-fed (Phase 8 FastAPI) with a fixed chart set** — the existing `fct_*` aggregate marts already
+  *are* the dashboard layer (one query each: by week/month/year, monthly trend, by firm, by
+  classification, by status, by geography, units). A star buys nothing; a missing chart is a new
+  `fct_*` view or API endpoint, not a re-model. **No star.**
+- **Direct-gold, fixed charts** — same conclusion; `fct_*` serves them.
+- **A BI tool / semantic layer over gold** (Metabase, Superset, Cube, the dbt Semantic Layer) **or
+  user-driven cross-dimensional slicing** (a pivot like "recalls by firm × classification × quarter"
+  that no single `fct_*` pre-computes) — *this* is where a conformed star pays off: the tool
+  auto-joins dims↔facts and every chart shares consistent slicers. **Build the star.**
+
+So the prerequisite is not a coding task — it is **enumerating the website's charts**. A fixed/known
+set → extend `fct_*`. An interactive/pivot set fed by a star-consuming tool → build the star.
+
+**If built**, the star is mostly *promotions* of existing silver, not new modeling: `dim_firm`
+(Type-2 — the SCD-2 snapshots are already the hard part), a generated `dim_date` (role-played as
+announced/published), `dim_source` / `dim_classification` from the existing enums, and
+`fct_recall_event` / `fct_recall_product` carrying measures + dim-FKs; `recall_event_firm` becomes a
+factless bridge.
+
+**The one no-regret early piece is `dim_date`** — a generated calendar that replaces the `date_trunc`
+logic repeated inline across the nine `fct_*` models and unlocks fiscal/holiday calendars cheaply.
+Worth pulling forward independently of the star decision.
+
+**When:** decide at Phase 8 framing — [ADR 0024](decisions/README.md) already owns "the relationship
+between API endpoints and dbt gold views" — once the website's feed + chart inventory are known.
+Sequencing is tracked in `project_scope/implementation_plan.md` (Architectural follow-ups). Not
+before: building it speculatively risks a star no consumer queries.

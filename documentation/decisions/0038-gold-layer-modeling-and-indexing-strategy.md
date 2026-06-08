@@ -1,7 +1,16 @@
 # 0038 — Gold-layer modeling and indexing strategy
 
-**Status:** Proposed (ratifies at `feature/phase-6e-gold-and-test` merge)
+**Status:** Accepted (ratified at the Phase 6e merge, #62)
 **Date:** 2026-06-07
+
+> **Amended 2026-06-08 (Phase 6f.1):** a first concrete gold consumer is now on the horizon — the
+> project website's BI-esque visualizations — which is the "concrete star payoff becomes visible"
+> condition Decision §1 named as the revisit trigger. The revisit is **gated on the website's data
+> feed**: API-fed or direct-gold with a *fixed* chart set is already served by the `fct_*` aggregate
+> marts (no star); a BI tool / semantic layer or user-driven cross-dimensional slicing is what would
+> justify the star. The decision is deferred to Phase 8 framing (ADR 0024, API↔gold relationship);
+> the narrative + the `dim_date` no-regret early piece live in `gold_design_notes.md` §"Deferred: a
+> dimensional star schema", and the sequencing is tracked in `implementation_plan.md`. No code change.
 
 ## Context
 
