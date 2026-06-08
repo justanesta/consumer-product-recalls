@@ -351,6 +351,6 @@ Every 6c change documents **what the table/view/mechanism is, how it works, and 
 - `project_scope/archive/silver_v15_migration_plan.md` — NHTSA v1.5 Layer 1/2/3.
 - `documentation/decisions/{0022,0026,0027,0031,0032,0033,0034,0035,0036}.md`.
 - `documentation/audit/{scd_field_designations,cross_source_consolidation}.md` — the W3 SCD verdict + monitor registry.
-- `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 — the USCG SCD-2 build spec (the §5 refinements built in 6c.5).
+- `project_scope/archive/phase-5d-uscg-manufacturers-detail.md` §11 — the USCG SCD-2 build spec (the §5 refinements built in 6c.5).
 - `project_scope/archive/phase-6b-execution-plan.md` — structural precedent + the shipped 6b.5 USCG SCD-2.
 - `project_scope/branch_sequencing_strategy.md` — dependency graph.

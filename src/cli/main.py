@@ -92,7 +92,7 @@ _LOOKBACK_NO_OP_MESSAGES: dict[str, str] = {
     ),
     "uscg_manufacturer_details": (
         "uscg_manufacturer_details: --lookback-days has no effect (work-list is a "
-        "listing-delta cursor over bronze; see phase-5d-uscg-manufacturers-detail.md)."
+        "listing-delta cursor over bronze; see archive/phase-5d-uscg-manufacturers-detail.md)."
     ),
     "fda_press_releases": (
         "fda_press_releases: --lookback-days is not wired; the press-release watermark "

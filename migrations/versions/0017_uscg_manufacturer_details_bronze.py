@@ -6,7 +6,7 @@ Create Date: 2026-05-30
 
 Phase 5d Step 7 (detail) — bronze landing for the USCG manufacturer
 **detail-page** payload (Path B), per
-``project_scope/phase-5d-uscg-manufacturers-detail.md`` and
+``project_scope/archive/phase-5d-uscg-manufacturers-detail.md`` and
 ``documentation/uscg/manufacturer_scraping_observations.md`` §M.
 
 - **Architecture**: a SEPARATE source/table from the listing-only
