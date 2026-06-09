@@ -15,7 +15,7 @@ if str(_REPO_ROOT) not in sys.path:
 from scripts.neon_branch import (  # noqa: E402  — sys.path mutated above
     NeonBranchError,
     _create_payload,
-    _parse_connection_uri,
+    _parse_create_response,
     create_branch,
     delete_branch,
 )
@@ -39,66 +39,80 @@ def test_create_payload_with_explicit_parent() -> None:
     assert body["endpoints"] == [{"type": "read_write"}]
 
 
-def test_parse_connection_uri_happy() -> None:
+def test_parse_create_response_happy() -> None:
     payload = {
         "branch": {"id": "br-new"},
-        "connection_uris": [{"connection_uri": "postgres://u:p@h/db"}],
+        "databases": [{"name": "neondb", "owner_name": "neondb_owner"}],
     }
-    assert _parse_connection_uri(payload) == ("br-new", "postgres://u:p@h/db")
-
-
-def test_parse_connection_uri_uses_first_uri() -> None:
-    payload = {
-        "branch": {"id": "br-new"},
-        "connection_uris": [
-            {"connection_uri": "postgres://first"},
-            {"connection_uri": "postgres://second"},
-        ],
-    }
-    assert _parse_connection_uri(payload)[1] == "postgres://first"
+    assert _parse_create_response(payload) == ("br-new", "neondb", "neondb_owner")
 
 
 @pytest.mark.parametrize(
     "payload",
     [
         {},
-        {"branch": {"id": "br-new"}},  # no connection_uris
-        {"connection_uris": [{"connection_uri": "x"}]},  # no branch
-        {"branch": {"id": "x"}, "connection_uris": []},  # empty uris
-        {"branch": {}, "connection_uris": [{"connection_uri": "x"}]},  # no branch id
+        {"branch": {"id": "br-new"}},  # no databases
+        {"databases": [{"name": "d", "owner_name": "o"}]},  # no branch
+        {"branch": {"id": "x"}, "databases": []},  # empty databases
+        {"branch": {}, "databases": [{"name": "d", "owner_name": "o"}]},  # no branch id
+        {"branch": {"id": "x"}, "databases": [{"name": "d"}]},  # no owner_name
     ],
 )
-def test_parse_connection_uri_raises_on_shape_drift(payload: dict) -> None:
+def test_parse_create_response_raises_on_shape_drift(payload: dict) -> None:
     with pytest.raises(NeonBranchError):
-        _parse_connection_uri(payload)
+        _parse_create_response(payload)
 
 
 # --------------------------- I/O (respx-mocked) ---------------------------
 
 
 @respx.mock
-def test_create_branch_posts_and_returns_uri() -> None:
-    route = respx.post(f"{_API}/projects/{_PROJECT}/branches").mock(
+def test_create_branch_creates_then_fetches_uri() -> None:
+    respx.post(f"{_API}/projects/{_PROJECT}/branches").mock(
         return_value=httpx.Response(
             201,
             json={
                 "branch": {"id": "br-xyz"},
-                "connection_uris": [{"connection_uri": "postgres://u:p@ep-x/neondb"}],
+                "databases": [{"name": "neondb", "owner_name": "neondb_owner"}],
             },
         )
     )
-    assert create_branch(_KEY, _PROJECT) == ("br-xyz", "postgres://u:p@ep-x/neondb")
-    assert route.called
-    assert route.calls.last.request.headers["authorization"] == f"Bearer {_KEY}"
+    uri_route = respx.get(f"{_API}/projects/{_PROJECT}/connection_uri").mock(
+        return_value=httpx.Response(200, json={"uri": "postgres://neondb_owner:pw@ep-x/neondb"})
+    )
+    assert create_branch(_KEY, _PROJECT) == ("br-xyz", "postgres://neondb_owner:pw@ep-x/neondb")
+    req = uri_route.calls.last.request  # the URI fetch targets the branch + db + owner role
+    assert req.url.params["branch_id"] == "br-xyz"
+    assert req.url.params["role_name"] == "neondb_owner"
+    assert req.headers["authorization"] == f"Bearer {_KEY}"
 
 
 @respx.mock
-def test_create_branch_raises_on_api_error() -> None:
+def test_create_branch_raises_on_create_error() -> None:
     respx.post(f"{_API}/projects/{_PROJECT}/branches").mock(
         return_value=httpx.Response(403, text="forbidden")
     )
     with pytest.raises(NeonBranchError, match="403"):
         create_branch(_KEY, _PROJECT)
+
+
+@respx.mock
+def test_create_branch_deletes_branch_when_uri_fetch_fails() -> None:
+    respx.post(f"{_API}/projects/{_PROJECT}/branches").mock(
+        return_value=httpx.Response(
+            201,
+            json={"branch": {"id": "br-xyz"}, "databases": [{"name": "neondb", "owner_name": "o"}]},
+        )
+    )
+    respx.get(f"{_API}/projects/{_PROJECT}/connection_uri").mock(
+        return_value=httpx.Response(500, text="boom")
+    )
+    delete_route = respx.delete(f"{_API}/projects/{_PROJECT}/branches/br-xyz").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    with pytest.raises(NeonBranchError, match="500"):
+        create_branch(_KEY, _PROJECT)
+    assert delete_route.called  # cleanup ran — no leaked branch
 
 
 @respx.mock

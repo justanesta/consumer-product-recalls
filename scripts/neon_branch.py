@@ -50,24 +50,22 @@ def _create_payload(parent_id: str | None) -> dict[str, object]:
     return body
 
 
-def _parse_connection_uri(payload: dict[str, Any]) -> tuple[str, str]:
-    """Extract `(branch_id, connection_uri)` from a create-branch response.
+def _parse_create_response(payload: dict[str, Any]) -> tuple[str, str, str]:
+    """Extract `(branch_id, database_name, owner_role)` from a create-branch response.
 
-    Neon returns the new branch under `branch` and one or more `connection_uris`; we use the
-    first. A missing/empty field means the API shape drifted — fail loud rather than yield a
-    half-built URL.
+    The create response carries `connection_uris` ONLY when the project has a single role (Neon
+    can't pick one otherwise), so we fetch the URI separately for the database's owner role.
     """
     try:
         branch_id = str(payload["branch"]["id"])
-        uri = str(payload["connection_uris"][0]["connection_uri"])
+        db = payload["databases"][0]
+        return branch_id, str(db["name"]), str(db["owner_name"])
     except (KeyError, IndexError, TypeError) as exc:
         raise NeonBranchError(f"unexpected create-branch response shape: {payload!r}") from exc
-    return branch_id, uri
 
 
 @_retry_transport
-def create_branch(api_key: str, project_id: str, parent_id: str | None = None) -> tuple[str, str]:
-    """Create an ephemeral Neon branch; return `(branch_id, connection_uri)`."""
+def _post_create_branch(api_key: str, project_id: str, parent_id: str | None) -> dict[str, Any]:
     resp = httpx.post(
         f"{_API_BASE}/projects/{project_id}/branches",
         headers=_headers(api_key),
@@ -76,7 +74,39 @@ def create_branch(api_key: str, project_id: str, parent_id: str | None = None) -
     )
     if resp.status_code >= 400:
         raise NeonBranchError(f"create branch failed [{resp.status_code}]: {resp.text}")
-    return _parse_connection_uri(resp.json())
+    return resp.json()
+
+
+@_retry_transport
+def _fetch_connection_uri(api_key: str, project_id: str, branch_id: str, db: str, role: str) -> str:
+    """Neon's password-bearing connection URI for `role` on `branch_id` (the create response omits
+    it when the project has >1 role). The branch compute autostarts on first connect."""
+    resp = httpx.get(
+        f"{_API_BASE}/projects/{project_id}/connection_uri",
+        headers=_headers(api_key),
+        params={"branch_id": branch_id, "database_name": db, "role_name": role},
+        timeout=_TIMEOUT_S,
+    )
+    if resp.status_code >= 400:
+        raise NeonBranchError(f"get connection_uri failed [{resp.status_code}]: {resp.text}")
+    try:
+        return str(resp.json()["uri"])
+    except (KeyError, TypeError) as exc:
+        raise NeonBranchError(f"unexpected connection_uri response: {resp.text}") from exc
+
+
+def create_branch(api_key: str, project_id: str, parent_id: str | None = None) -> tuple[str, str]:
+    """Create an ephemeral Neon branch; return `(branch_id, connection_uri)` for the database's
+    owner role (dbt needs owner-level DDL on the throwaway branch)."""
+    branch_id, db_name, role_name = _parse_create_response(
+        _post_create_branch(api_key, project_id, parent_id)
+    )
+    try:
+        uri = _fetch_connection_uri(api_key, project_id, branch_id, db_name, role_name)
+    except Exception:
+        delete_branch(api_key, project_id, branch_id)  # don't leak a half-provisioned branch
+        raise
+    return branch_id, uri
 
 
 @_retry_transport
