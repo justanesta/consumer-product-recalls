@@ -118,6 +118,42 @@ def test_whitespace_only_id_skipped() -> None:
     assert [r["source_recall_id"] for r in rows] == ["A1"]
 
 
+def test_langcode_field_requested_but_record_langcode_none() -> None:
+    # langcode_field is asked for, but the record's langcode is None → carried as NULL,
+    # not raised. ``getattr(record, langcode_field, None)`` returns None gracefully.
+    records = [SimpleNamespace(source_recall_id="A1", langcode=None)]
+    rows = build_presence_manifest_rows(
+        records, run_id="r1", source="usda", langcode_field="langcode"
+    )
+    assert len(rows) == 1
+    assert rows[0]["langcode"] is None
+
+
+def test_langcode_field_requested_but_attr_missing_entirely() -> None:
+    # The record doesn't carry the langcode attribute at all → getattr default None,
+    # no AttributeError. Mixed-shape rosters don't crash the manifest builder.
+    records = [SimpleNamespace(source_recall_id="A1")]  # no langcode attr
+    rows = build_presence_manifest_rows(
+        records, run_id="r1", source="usda", langcode_field="langcode"
+    )
+    assert len(rows) == 1
+    assert rows[0]["langcode"] is None
+
+
+def test_records_sharing_id_with_one_null_langcode_stay_distinct() -> None:
+    # (A1, "English") and (A1, None) are distinct presence keys — the None variant is not
+    # collapsed into the English one.
+    records = [
+        SimpleNamespace(source_recall_id="A1", langcode="English"),
+        SimpleNamespace(source_recall_id="A1", langcode=None),
+    ]
+    rows = build_presence_manifest_rows(
+        records, run_id="r1", source="usda", langcode_field="langcode"
+    )
+    assert len(rows) == 2
+    assert {r["langcode"] for r in rows} == {"English", None}
+
+
 # --- Gating tests (Extractor._maybe_write_presence_manifest) ---
 
 
