@@ -42,10 +42,10 @@ dev = [
     "respx>=0.21,<1",
     "vcrpy>=8.1.1,<9",
     "pyyaml>=6.0,<7",
-    "ruff>=0.15.15,<1",
+    "ruff>=0.15.16,<1",
     "pyright>=1.1.410,<2",
     "pre-commit>=4.6.0,<5",
-    "hypothesis>=6.155.1,<7",
+    "hypothesis>=6.155.2,<7",
 ]
 
 [tool.hatch.build.targets.wheel]
