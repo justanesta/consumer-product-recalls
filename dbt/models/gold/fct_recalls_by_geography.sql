@@ -7,18 +7,26 @@
 ) }}
 
 -- fct_recalls_by_geography — recalls per US state, two complementary lenses (Phase 6e, ADR 0038):
---   * 'distribution'  — where the recalled product went (recall_distribution_area, FDA + USDA).
---   * 'firm_location' — where the producing firm is registered (the per-source SCD-2 sidecars
---                       establishment/manufacturer/FDA-firm state, USDA + USCG + FDA).
--- These answer different questions ("recalls affecting people in TX" vs "recalls from TX firms");
--- the geography_basis column keeps them in one model. GROUPING SETS emits both per-source rows and
--- an 'ALL' all-source rollup (source filter renders a per-source page; 'ALL' the cross-source map).
+--   * 'distribution'      — where the recalled product went (recall_distribution_area, FDA + USDA).
+--   * 'firm_registration' — where the producing firm is REGISTERED (the per-source SCD-2 sidecars
+--                           establishment/manufacturer/FDA-firm state, USDA + USCG + FDA). Renamed
+--                           from 'firm_location' (C17, 2026-06-09) for honesty: this is the firm's
+--                           registered/HQ address, NOT where the product was made or sold.
+-- These answer different questions ("recalls affecting people in TX" vs "recalls from TX-registered
+-- firms"); the geography_basis column keeps them in one model. GROUPING SETS emits both per-source
+-- rows and an 'ALL' all-source rollup (source filter renders a per-source page; 'ALL' the map).
 -- firm_id is the 6b CROSS-SOURCE canonical, so a CPSC/NHTSA recall whose firm shares a normalized
 -- name with an FDA/USDA/USCG-registered firm INHERITS that firm's state (the firm-resolution payoff);
--- pure-CPSC/NHTSA firms with no shared structural id contribute no state. A recall is counted in
--- EVERY state where any of its firms is registered (multi-location firms span states), so the firm
--- side is sensitive to firm-merge quality (the 6b over-merge guards mitigate).
+-- pure-CPSC/NHTSA firms with no shared structural id contribute no state.
 -- State codes are constrained to the us_state_abbr seed (drops Canadian provinces / foreign codes).
+--
+-- C18 (2026-06-09): each firm is collapsed to a SINGLE primary registered state, so a recall is no
+-- longer multi-counted across one firm's several registered states (the documented multi-counting in
+-- gold_design_notes caveat #2). Rule (user decision Q1): the MOST-FREQUENT registered state across
+-- the firm's structural ids; tie-break is DETERMINISTIC by state_code ASC — a uniform cross-source
+-- "most-recent" date is NOT available (establishment has grant_date, manufacturer date_modified, FDA
+-- none), so the requested most-recent tiebreak degrades to a stable deterministic one (ties are rare).
+-- A recall is still counted once per DISTINCT firm (multi-firm recalls legitimately span states).
 
 with distribution_lens as (
     select
@@ -32,6 +40,7 @@ with distribution_lens as (
 ),
 
 -- firm -> each observed structural id -> the matching sidecar's state (disjoint id namespaces).
+-- NOT distinct: one row per (firm, structural-id match) so we can count state frequency below.
 firm_states as (
     select
         f.firm_id,
@@ -54,26 +63,43 @@ firm_states as (
 ),
 
 firm_states_us as (
-    select distinct fs.firm_id, fs.state_code
+    select fs.firm_id, fs.state_code
     from firm_states fs
     join {{ ref('us_state_abbr') }} usa on usa.abbr = fs.state_code
 ),
 
-firm_location_lens as (
+-- C18: collapse each firm to ONE primary registered state (most-frequent; tie-break state_code asc).
+firm_primary_state as (
+    select firm_id, state_code
+    from (
+        select
+            firm_id,
+            state_code,
+            row_number() over (
+                partition by firm_id
+                order by count(*) desc, state_code asc
+            ) as rn
+        from firm_states_us
+        group by firm_id, state_code
+    ) ranked
+    where rn = 1
+),
+
+firm_registration_lens as (
     select distinct
-        'firm_location'::text as geography_basis,
+        'firm_registration'::text as geography_basis,
         re.source,
-        fsu.state_code,
+        fps.state_code,
         re.recall_event_id
     from {{ ref('recall_event_firm') }} ref
-    join firm_states_us fsu on fsu.firm_id = ref.firm_id
+    join firm_primary_state fps on fps.firm_id = ref.firm_id
     join {{ ref('recall_event') }} re on re.recall_event_id = ref.recall_event_id
 ),
 
 combined as (
     select * from distribution_lens
     union all
-    select * from firm_location_lens
+    select * from firm_registration_lens
 )
 
 select

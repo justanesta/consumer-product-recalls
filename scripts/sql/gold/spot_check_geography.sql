@@ -11,13 +11,13 @@ order by recall_count desc limit 12;
 
 \echo '=== top 12 FIRM-LOCATION-lens states (ALL sources) — where firms are registered ==='
 select state_code, recall_count from fct_recalls_by_geography
-where geography_basis = 'firm_location' and source = 'ALL'
+where geography_basis = 'firm_registration' and source = 'ALL'
 order by recall_count desc limit 12;
 
 \echo '=== firm-location coverage by source (FDA/USDA/USCG direct; CPSC/NHTSA only via cross-source-shared firms) ==='
 select source, count(*) as n_state_rows, sum(recall_count) as total_recall_states
 from fct_recalls_by_geography
-where geography_basis = 'firm_location' and source <> 'ALL'
+where geography_basis = 'firm_registration' and source <> 'ALL'
 group by source order by source;
 
 \echo '=== cross-source inheritance proof: CPSC/NHTSA recalls whose firm carries an FDA/USDA/USCG address ==='
