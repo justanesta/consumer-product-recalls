@@ -4,7 +4,7 @@ models:
   - name: dim_date
     description: >
       Generated calendar dimension (ADR 0038 §2; built 2026-06-08 decision). One row per
-      calendar day, 1970-01-01..2035-12-31. Replaces the inline date_trunc(published_at)
+      calendar day, 1960-01-01..(current year + 2, dynamic). Replaces the inline date_trunc(published_at)
       across the date-grained fct_* models (the C11 wiring step). dim_ prefix per ADR 0038.
     columns:
       - name: date_day

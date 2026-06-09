@@ -3,11 +3,12 @@
 -- `date_trunc(published_at)` repeated across the five date-grained `fct_*` models (wiring is
 -- the separate C11 step) and unlocks fiscal/holiday calendars cheaply.
 --
--- Spine 1970-01-01 .. 2035-12-31 covers the CPSC 1970 floor through a comfortable forward
--- buffer. Grain = one row per calendar day; `date_day` is the unique key.
---
--- NOTE (morning dbt verification): `dbt_utils.date_spine` emits its column as `date_day` for
--- datepart="day" — confirm on first `dbt build --select dim_date`.
+-- Spine 1960-01-01 .. (current year + 2, dynamic). The start covers the earliest observed recall
+-- date with margin (announced_at min is 1966-01-19 — a 1960s NHTSA vehicle recall; a 1970 start
+-- would silently drop pre-1970 dates from any join). The end is a SMALL dynamic forward buffer:
+-- there are no future-dated recalls (max ~ today), so rather than a large arbitrary ceiling the
+-- spine ends two years out and auto-extends on each nightly rebuild — always covered, never stale.
+-- Grain = one row per calendar day; `date_day` is the unique key.
 {{
   config(
     materialized='table',
@@ -18,8 +19,8 @@
 with spine as (
     {{ dbt_utils.date_spine(
         datepart="day",
-        start_date="cast('1970-01-01' as date)",
-        end_date="cast('2036-01-01' as date)"
+        start_date="cast('1960-01-01' as date)",
+        end_date="(date_trunc('year', current_date) + interval '2 year')::date"
     ) }}
 )
 
