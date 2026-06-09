@@ -9,18 +9,13 @@ singular + 12 source-assumption monitors), which remains the transform-layer aut
 
 ## Install (one-time, operator)
 
-`soda-core-postgres` is **not yet in `pyproject.toml`** — it was deliberately left out of the
-overnight scaffold to avoid resolving a heavy dependency tree against the project's tight version
-caps unattended. Install it into a `dq` dependency-group:
+`soda-core-postgres` is in the **`dq` dependency-group** in `pyproject.toml` (resolved cleanly at
+`3.5.6` against the project's version caps on 2026-06-09; the re-lock also bumped a few in-cap deps).
+Install it into the venv with:
 
 ```bash
-uv add --group dq "soda-core-postgres"
-# if uv flags a resolution conflict against the pinned deps, pin a compatible soda version
-# (check https://docs.soda.io/ for the soda-core release matching this Python/SQLAlchemy line)
+uv sync --group dq
 ```
-
-This updates `pyproject.toml` + `uv.lock` together (keeping the `uv.lock-matches-pyproject`
-pre-commit hook green).
 
 ## Run a scan (operator — needs a live Neon connection)
 
