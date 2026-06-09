@@ -2,7 +2,7 @@
 
 - **Status:** Active — as of 2026-06-01: Phase 6a audit done (#39), Phase 6a.5 historical backfill in progress (FDA full-corpus seed run 2026-06-01); the USCG detail-capture branch merged (#42).
 - **Scope:** Coordinates concurrent workstreams off `main` — Phase 6 execution, NHTSA silver v1.5 migration, weekly daily-findings branches, and (now merged) USCG manufacturer detail capture (Phase 5d Step 7 detail)
-- **Supersedes:** Branching guidance scattered across `project_scope/archive/silver_v15_migration_plan.md` (its "Branching strategy" section, now a pointer back here), `project_scope/phase-6-execution-plan.md`, and prior weekly findings retros
+- **Supersedes:** Branching guidance scattered across `project_scope/archive/silver_v15_migration_plan.md` (its "Branching strategy" section, now a pointer back here), `project_scope/archive/phase-6-execution-plan.md`, and prior weekly findings retros
 - **Sunset condition:** Phase 6 complete + v1.5 migration landed (Layer 3 merged); update or delete this doc when both are true
 
 ## Workstreams in flight
@@ -10,7 +10,7 @@
 | Workstream | Plan doc | Branch name pattern |
 |---|---|---|
 | NHTSA silver v1.5 migration | `project_scope/archive/silver_v15_migration_plan.md` | `feature/silver-v15-scd-prototype` (Layer 2), `feature/silver-v15-migration` (Layer 3) |
-| Phase 6 execution (6a foundation audit → 6b firm res → 6c history → 6d ops → 6e gold → 6f diagrams) | `project_scope/phase-6-execution-plan.md` | `feature/phase-6{a,b,c,d,e,f}-<topic>` — one branch per phase letter |
+| Phase 6 execution (6a foundation audit → 6b firm res → 6c history → 6d ops → 6e gold → 6f diagrams) | `project_scope/archive/phase-6-execution-plan.md` | `feature/phase-6{a,b,c,d,e,f}-<topic>` — one branch per phase letter |
 | Daily findings + diagnostic scripts | (per-branch staged-tasks doc) | `docs/findings-YYYY-Wn` — one branch per ISO week, short-lived |
 | USCG Phase 5d detail capture (Path B, **bronze-only**) — ✓ MERGED (#42) | `project_scope/phase-5d-uscg-manufacturers-detail.md` | `feature/uscg-manufacturers-detail-addition` — merged in PR #42; SCD-2 silver half deferred to Phase 6b (ADR 0035) |
 
@@ -67,8 +67,8 @@ risk because file scope is documentation/ and scripts/sql/ only.
 
 ## Recommended sequence (rationale per step)
 
-1. **`feature/phase-6a-foundation-audit` first.** Hard prereq per `phase-6-execution-plan.md` § Sequencing Constraints. Corrects silver field mappings (FDA `description ← distribution_area_summary_txt` is the known case; CPSC/USDA/NHTSA likely have analogues). Building any of 6b/6c/6e on broken foundations bakes in rework.
-2. **Then Phase 6a.5 (historical seed + Neon tier upgrade + production cutover), then `feature/silver-field-remap`.** Hard chain per `phase-6-execution-plan.md` § Sequencing Constraints: 6a → 6a.5 → silver-remap → 6b/6c. The remap makes per-source silver identity/grain decisions on full-corpus bronze (and builds `documentation/audit/cross_source_consolidation.md`) — the right place to fold in the **cross-source SCD-applicability** question (which of CPSC/FDA/USDA/USCG-recalls also warrant a stable-anchor snapshot dim; `archive/silver_v15_migration_plan.md` Open Q#4).
+1. **`feature/phase-6a-foundation-audit` first.** Hard prereq per `archive/phase-6-execution-plan.md` § Sequencing Constraints. Corrects silver field mappings (FDA `description ← distribution_area_summary_txt` is the known case; CPSC/USDA/NHTSA likely have analogues). Building any of 6b/6c/6e on broken foundations bakes in rework.
+2. **Then Phase 6a.5 (historical seed + Neon tier upgrade + production cutover), then `feature/silver-field-remap`.** Hard chain per `archive/phase-6-execution-plan.md` § Sequencing Constraints: 6a → 6a.5 → silver-remap → 6b/6c. The remap makes per-source silver identity/grain decisions on full-corpus bronze (and builds `documentation/audit/cross_source_consolidation.md`) — the right place to fold in the **cross-source SCD-applicability** question (which of CPSC/FDA/USDA/USCG-recalls also warrant a stable-anchor snapshot dim; `archive/silver_v15_migration_plan.md` Open Q#4).
 3. **After the remap: `feature/silver-v15-scd-prototype` (Layer 2), `feature/phase-6c-history-lifecycle`, and `feature/phase-6b-firm-resolution`.** Layer 2 **starts after 6a.5, not after 6a**: its dbt snapshot must initialize against the full-corpus NHTSA bronze so the 6a.5 PRE_2010 backfill doesn't land as a spurious version-wave, and the 6-tuple anchor is validated against the full corpus; it also mirrors NHTSA's remapped `recall_product` columns (`archive/silver_v15_migration_plan.md` Open Q#2 + the `full_corpus_validation` principle). The *dbt mechanics* can be authored anytime (cheap, reversible), but the *snapshot baseline + ~2-week observation* that feeds the Layer 3 gate must run post-6a.5. All three branches add/edit non-overlapping files (Layer 2: new `recall_product_v15.sql`/`recall_product_history.sql`/snapshot; 6c: `recall_event_history.sql`/`recall_lifecycle.sql`; 6b: `firm.sql`/`recall_event_firm.sql`), so Layer 2's observation window runs concurrently with 6b/6c/6d. Coordinate at gate time on whether 6c consumes the v1.5 snapshot directly (ADR 0033 forward-integration note).
 4. **Then `feature/silver-v15-migration` (Layer 3).** Gated by Layer 2 evidence + Phase 6c's `recall_event_history` integration decision (migration-plan pre-condition #3); it re-keys `recall_product_id` consumers, so it's a **coordinated cutover with 6c/6b**, not free parallel.
 5. **Then `feature/phase-6d` → `feature/phase-6e` → `feature/phase-6f`.** Per the execution plan's sequencing constraints (6f last because diagrams freeze schema).
@@ -155,7 +155,7 @@ Postgres won't double-apply when the source eventually merges and the target reb
 
 ## References
 
-- `project_scope/phase-6-execution-plan.md` — Phase 6 execution plan with internal sequencing constraints
+- `project_scope/archive/phase-6-execution-plan.md` — Phase 6 execution plan with internal sequencing constraints
 - `project_scope/archive/silver_v15_migration_plan.md` — v1.5 migration plan with Layer-by-Layer gates
 - `documentation/decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md` — architectural decision for v1.5 + Real_drift taxonomy (subsection added 2026-05-25)
 - `project_scope/implementation_plan.md` — master phase plan

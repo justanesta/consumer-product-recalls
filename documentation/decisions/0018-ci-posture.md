@@ -115,7 +115,7 @@ Not enforced at v1:
 - **`README.md`** at repo root — required for a public repo. Covers: what the project is, 5-line architecture summary with a Mermaid diagram of the 4-layer flow, quick start, links to `documentation/` and the ADR index.
 - **`documentation/decisions/README.md`** — topical index of all ADRs, updated as new decisions are filed.
 - **`architecture.md` is deliberately not written.** The 18 ADRs cover architecture with better rationale than a single overview doc would. A separate `architecture.md` would duplicate content and risk staleness as ADRs evolve. The Mermaid diagram in the main `README.md` provides the at-a-glance view; the ADR index provides the structured deep dive.
-- **Draw.io / diagrams.net diagrams** (ERDs for the silver schema, DAGs for the pipeline) are planned for `documentation/diagrams/` during implementation. Managed as `.drawio` XML files (git-friendly, round-trippable) with exported SVG for embedding in documentation.
+- **Diagrams = Mermaid** (silver/gold ERDs, the pipeline DAG, the ingestion-cadence diagram) — authored as fenced ` ```mermaid ` blocks **inline** in the markdown docs (GitHub renders them; git-diffable; no export step). *(Originally planned as draw.io `.drawio` XML + exported SVG under `documentation/diagrams/`; switched to Mermaid in Phase 6f, and that folder was removed.)*
 
 ## Consequences
 

@@ -1,7 +1,7 @@
 # Phase 6f — Diagrams + Documentation Sync (execution plan)
 
-- **Status:** Active — plan landed 2026-06-07 on `feature/phase-6f-diagrams-docs-sync`; stages 6f.1–6f.5 pending.
-- **Owning master plan:** `project_scope/phase-6-execution-plan.md` §6f (Stream 3) → `project_scope/implementation_plan.md` Phase 6.
+- **Status:** ✅ **DONE / ARCHIVED 2026-06-08** — all stages 6f.1–6f.5 landed: `database_overview.md` Mermaid ERDs + role-grade table (6f.1), architecture.md DAG + per-source extraction-mode table (6f.2), ADR 0010 9-source cadence + diagram (6f.3), prose doc-sync (6f.4), firm-geography note + close-out (6f.5). Diagrams are Mermaid inline (no draw.io). *(Historical execution record below.)*
+- **Owning master plan:** `project_scope/archive/phase-6-execution-plan.md` §6f (Stream 3) → `project_scope/implementation_plan.md` Phase 6.
 - **Structure:** staged commits on this one branch, one-line commit messages at the breaks, single PR to `main` at the end (per the "phase = commits + single PR" convention). Every commit is a clean stopping point — designed to be picked up across multiple sittings.
 
 ## Context

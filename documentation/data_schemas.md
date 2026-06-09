@@ -2,7 +2,7 @@
 
 A reader's index for "what does column X mean, where is it defined, and what does this domain term refer to?" The authoritative definitions for the schemas themselves live in code (`src/schemas/`) and dbt configuration (`dbt/models/`). This document is the glossary, the cross-reference, and the quick-lookup — not a copy of the schemas.
 
-> ⚠️ **Note:** the bronze-table list below was extended inline 2026-06-01 (NHTSA + the three USCG tables); the **gold** table list was filled in 2026-06-07 (Phase 6e.6). Glossary additions (MIC as a temporal SCD anchor; HIN ⊃ MIC) and the column-level silver/gold ERD remain scheduled for the Phase 6f doc-sync (`project_scope/phase-6-execution-plan.md` §6f).
+> ⚠️ **Note:** the bronze-table list below was extended inline 2026-06-01 (NHTSA + the three USCG tables); the **gold** table list was filled in 2026-06-07 (Phase 6e.6). Glossary additions (MIC as a temporal SCD anchor; HIN ⊃ MIC) and the column-level silver/gold ERD remain scheduled for the Phase 6f doc-sync (`project_scope/archive/phase-6-execution-plan.md` §6f).
 
 For:
 - **System-level architecture** — see [`architecture.md`](architecture.md).

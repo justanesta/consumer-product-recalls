@@ -1,6 +1,6 @@
 # Phase 6 Master Plan — Foundation Audit + Existing Work Streams
 
-- **Status:** Active — Phase 6a audit docs done (#39); Phase 6a.5 historical backfill in progress (CPSC/NHTSA/USDA/USCG seeds done; FDA full-corpus seed RUN 2026-06-01 — see the §6a.5 FDA rows). Next branch: `feature/silver-field-remap`.
+- **Status:** ✅ **DONE / ARCHIVED 2026-06-08** — Phase 6 (6a → 6f) complete; this master plan is archived. Diagrams + docs landed as Mermaid inline (Phase 6f); current state lives in `project_scope/implementation_plan.md` Phase 6. *(Everything below is the historical execution record.)*
 - **Owning master plan:** `project_scope/implementation_plan.md` Phase 6. **Cross-branch sequencing authority:** `project_scope/branch_sequencing_strategy.md`.
 
 ## Context
