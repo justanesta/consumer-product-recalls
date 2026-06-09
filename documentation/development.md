@@ -90,6 +90,27 @@ This contract makes `Settings` the complete specification of what's allowed in `
 
 The clean solution is **not** to weaken `extra='forbid'`. Instead, set dbt-only variables outside `.env` — either in your shell rc (`export NEON_HOST=...`), in a `.env.dbt` file that pydantic-settings doesn't read, or in a direnv-managed environment that scopes them. The Settings class stays the complete spec for the Python codebase; dbt's environment is a separate scope.
 
+### Non-`Settings` operational knobs (read from `os.environ`)
+
+A few variables steer behavior without being credentials, so they are read directly from `os.environ` rather than declared on `Settings` (declaring them would force them on every run under `extra='forbid'`). All are optional with a documented default:
+
+| Variable | Read by | Effect | Default |
+|---|---|---|---|
+| `LOG_FORMAT` | `src/config/logging.py` | `console` forces the human renderer even on a non-tty (CI); anything else → JSON. | tty → console, else JSON |
+| `RECALLS_ENV` | `src/config/source_loader.py` | Selects a per-environment source-config overlay (see below). Unset/empty → base file only. | unset (no overlay) |
+
+#### `RECALLS_ENV` — per-environment source-config overlays (ADR 0012)
+
+`config/sources/<source>.yaml` is the base config for each source. When `RECALLS_ENV` is set (e.g. `prod`, `staging`) **and** a sibling `config/sources/<source>.<env>.yaml` exists, the loader deep-merges the overlay onto the base before validation:
+
+- nested dicts merge field-by-field (recursively);
+- scalars and lists in the overlay **replace** the base value wholesale;
+- a key present only in the overlay is added.
+
+The merged dict is validated through the same Pydantic discriminated union as the base, so an overlay key the schema doesn't declare **fails loud** under `extra='forbid'` (the error names the offending key and the contributing file). When `RECALLS_ENV` is unset/empty, or no `<source>.<env>.yaml` exists, the base file is loaded unchanged — the default behavior.
+
+This is a Phase-7 mechanism; at go-live no source ships an overlay file, so leaving `RECALLS_ENV` unset is correct for normal local and CI runs. Set it only when an environment genuinely needs to override a field (e.g. a staging `base_url`), and create the matching `<source>.<env>.yaml` carrying just the overridden keys.
+
 ### Method 1 — `.env` with manual sourcing (simplest, no extra tools)
 
 Copy the template and edit:
