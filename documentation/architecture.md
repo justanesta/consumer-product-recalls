@@ -2,7 +2,7 @@
 
 System-level overview of the consumer-product-recalls EtLT medallion pipeline. Covers the four-layer medallion structure, end-to-end data flow, the components that implement each layer, and the load-bearing invariants that hold across them.
 
-> ⚠️ **Note (2026-06-01):** the extractor table and registry counts below were corrected inline for the USCG scraping sources (live since 2026-05-15). A fuller architecture refresh — data-flow diagrams, medallion narrative, source lists — is scheduled in the Phase 6f doc-sync (`project_scope/phase-6-execution-plan.md` §6f).
+> **Note (updated 2026-06-08, Phase 6f.2):** the *End-to-end data flow* figure below is now a Mermaid DAG, with every source's extraction mode + deep-rescan role verified against the extractor code (and a per-source table). Remaining prose polish (extractor-table wording, source-list completeness, the stale `source_registry.py` docstring) is scheduled in the 6f.4 sweep.
 
 This is the reader's-entry-point document. For:
 - **Per-source silver mapping decisions** (column unification, surrogate keys, null-filling) — see [`silver_design_notes.md`](silver_design_notes.md).
@@ -22,10 +22,10 @@ The pipeline is built around the medallion architecture defined in [ADR 0004](de
    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
    │   Landing    │ →  │    Bronze    │ →  │    Silver    │ →  │     Gold     │
    │              │    │              │    │              │    │              │
-   │ raw payloads │    │  validated,  │    │   unified    │    │ pre-aggregated│
-   │  on R2,      │    │  per-source, │    │   schema     │    │  views,       │
-   │  immutable   │    │  insert-only │    │   across     │    │  search       │
-   │              │    │              │    │   sources    │    │  indexes      │
+   │ raw payloads │    │  validated,  │    │   unified    │    │pre-aggregated│
+   │  on R2,      │    │  per-source, │    │   schema     │    │  views,      │
+   │  immutable   │    │  insert-only │    │   across     │    │  search      │
+   │              │    │              │    │   sources    │    │  indexes     │
    └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
        (R2)               (Postgres)          (Postgres)          (Postgres)
 ```
@@ -59,75 +59,49 @@ End-to-end, a single record moves like this: the extractor fetches a source payl
 
 ## End-to-end data flow
 
+```mermaid
+flowchart LR
+    subgraph SRC["Extractors · 9 sources (ADR 0012 registry)"]
+        cpsc[cpsc]
+        fda[fda]
+        fdapr[fda_press_releases]
+        usda[usda]
+        usdae[usda_establishments]
+        nhtsa[nhtsa]
+        uscg[uscg]
+        uscgm[uscg_manufacturers]
+        uscgmd[uscg_manufacturer_details]
+    end
+    DR["deep-rescan loaders<br/>watermark-ignored full re-fetch —<br/>catches what the incremental path skips<br/>(per-source role: table below)"]
+    R2[("R2 landing<br/>raw bytes · immutable (T0)")]
+    BZ["Bronze · Postgres<br/>9 *_bronze · content-hash dedup<br/>+ *_rejected quarantine · extraction_runs"]
+    SV["Silver · dbt (staging → silver)<br/>recall_event/product · history · lifecycle · distribution<br/>firm cluster (+ Python firm_crosswalk, ADR 0037)<br/>SCD-2 snapshots: firm_*_attributes (silver_snapshots)"]
+    GD["Gold · dbt<br/>mart_* serving · fct_* aggregates"]
+    SERVE["Phase 8 FastAPI · dashboards"]
+
+    SRC ==> R2 ==> BZ ==> SV ==> GD ==> SERVE
+    DR -.->|re-fetch → dedup| SRC
+    fda  -.->|work-list: events| fdapr
+    uscgm -.->|work-list: MICs| uscgmd
 ```
-                                     ┌─────────────────────────────────────────┐
-                                     │  GitHub Actions cron schedule (ADR 0010) │
-                                     │  • daily: extract-cpsc, extract-fda,    │
-                                     │           extract-usda                  │
-                                     │  • weekly: extract-nhtsa, extract-uscg, │
-                                     │            deep-rescan-cpsc/fda         │
-                                     └────────────────┬────────────────────────┘
-                                                      │
-                                                      │ workflow_dispatch /
-                                                      │ schedule trigger
-                                                      ▼
-              ┌──────────────────────────────────────────────────────────────────┐
-              │                      Extractor (per source)                     │
-              │                                                                 │
-              │   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌─────────────┐  │
-              │   │ extract  │ → │land_raw  │ → │ validate │ → │check_invar. │  │
-              │   │ (live)   │   │  (R2)    │   │(Pydantic)│   │ (business)  │  │
-              │   └────┬─────┘   └────┬─────┘   └────┬─────┘   └──────┬──────┘  │
-              │        │              │               │                │         │
-              │        │              │               ▼                ▼         │
-              │        │              │           ┌────────────────────────┐    │
-              │        │              │           │   _rejected tables     │    │
-              │        │              │           │ (per-source forensic)  │    │
-              │        │              │           └────────────────────────┘    │
-              │        │              │                                          │
-              │        │              ▼                                          │
-              │        │     ┌──────────────────┐                                │
-              │        │     │ Cloudflare R2    │   (T0 — raw, immutable)        │
-              │        │     │ <source>/<date>/ │                                │
-              │        │     └──────────────────┘                                │
-              │        │                                                          │
-              │        ▼                                                          │
-              │   ┌──────────────────┐                                            │
-              │   │  load_bronze     │   (content-hash conditional insert)        │
-              │   └────┬─────────────┘                                            │
-              └────────┼─────────────────────────────────────────────────────────┘
-                       │
-                       ▼
-              ┌────────────────────────────────────┐
-              │  Bronze (Postgres)                 │
-              │  • <source>_recalls_bronze         │
-              │  • <source>_recalls_rejected       │
-              │  • source_watermarks               │
-              │  • extraction_runs                 │
-              └─────────────┬──────────────────────┘
-                            │
-                            │ scheduled: dbt build (Phase 7 transform workflow)
-                            ▼
-              ┌────────────────────────────────────┐
-              │  Silver (Postgres, dbt-managed)    │
-              │  • staging: stg_<source>_*         │
-              │  • silver:  recall_event,          │
-              │             recall_product, firm,  │
-              │             recall_event_firm,     │
-              │             recall_event_history   │
-              │  • dbt tests: not_null, unique,    │
-              │    accepted_values, relationships  │
-              └─────────────┬──────────────────────┘
-                            │
-                            │ same dbt run, downstream models
-                            ▼
-              ┌────────────────────────────────────┐
-              │  Gold (Postgres, dbt-managed)      │
-              │  • aggregate views                 │
-              │  • search-index materializations   │
-              │  • feeds Phase 8 FastAPI layer     │
-              └────────────────────────────────────┘
-```
+
+Each extractor runs the same **5-step lifecycle** (`extract → land_raw → validate → check_invariants → load_bronze`; see the [`src/extractors/`](#srcextractors--the-extraction-layer) table). Two structural edges sit *inside* the source layer — the **work-list dependencies**: `fda_press_releases` issues one GET per recently-edited `fda_recalls_bronze` event, and `uscg_manufacturer_details` fetches one detail page per MIC drawn from the `uscg_manufacturers` listing. **Content-hash dedup** (ADR 0007) makes every path idempotent — a re-fetch banks only the rows that actually changed. Cron *cadence* (which workflow runs when) is deliberately out of this figure; it lives in [ADR 0010](decisions/0010-ingestion-cadence-and-github-actions-cron.md).
+
+### Extraction mode + deep-rescan role (per source)
+
+The nine extractors do **not** share one extraction mode — they optimize differently, and the rule that unifies them is: **deep-rescan is the backstop that catches whatever each incremental optimization skips.** A full-dump source skips nothing, so it needs no deep-rescan; a cursor / short-circuit / work-list source skips *something*, so deep-rescan re-fetches in full to recover it.
+
+| Source | API | Routine extraction mode | Deep-rescan role |
+|---|---|---|---|
+| `cpsc` | REST | **Incremental cursor** — `LastPublishDateStart ≥ watermark` | **Primary edit-catch** — `LastPublishDate` does not advance on edits (ADR 0028), so the cursor misses them; deep-rescan (fixed 1970 floor → full ~9.8k corpus) is the *only* way to see edits. **Mandatory**, not defense-in-depth. |
+| `fda` | REST | **Incremental cursor** — `eventlmdfrom ≥ watermark` | Catches archive migrations the `event_lmd` cursor misses (ADR 0023). |
+| `fda_press_releases` | REST | **Incremental work-list** — 1 GET per `fda_recalls_bronze` event whose `event_lmd` advanced | Full ~25k-event sweep — the initial seed + a periodic backstop; routine edits are already caught by the work-list cursor. |
+| `usda` | REST | **Full-dump every run** — no working server-side filter (Finding D) | **Redundant** — every run is a full snapshot; loader is vestigial / symmetry-only (ADR 0010). |
+| `usda_establishments` | REST | **Full-dump every run** | **No loader** — omitted (would be redundant). |
+| `nhtsa` | flat-file | **Full-dump every run** — re-downloads `FLAT_RCL_POST_2010.zip` | **Historical backfill** — adds the `PRE_2010` archive; the routine full file already catches modern edits. |
+| `uscg` | scrape | **Short-circuit** — full walk only when Gate 1 (`Records Found` count changed) **or** Gate 2 (a page-0 recall ID is new) trips (Finding J) | **Safety net** — forces a full walk to catch details-only edits (e.g. `Disposition: Open→Closed`) that both gates miss. |
+| `uscg_manufacturers` | scrape | **Short-circuit** — same two-gate `Records Found` precheck over the ~651-page directory | **Safety net** — forces the full directory walk. |
+| `uscg_manufacturer_details` | scrape | **Work-list, two-tier** — Tier-1 fetches only MICs whose listing row is newer than their last detail fetch | **Tier-2 full sweep** — re-fetches every MIC's detail page; catches detail-page edits Tier-1 skips. |
 
 Three things happen per extraction run that the diagram above abbreviates:
 
@@ -188,7 +162,7 @@ Per [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md), schemas
 |---|---|
 | `settings.py` | `pydantic-settings` `Settings` model — loads `.env`, fails loud on missing required values, marks credentials as `SecretStr` |
 | `source_loader.py` | YAML loader — reads `config/sources/<source>.yaml` and validates through the discriminated union in `source_registry.py`. Strict-fails on extra fields, missing required fields, or wrong `source_type`. |
-| `source_registry.py` | Pydantic discriminated-union models (`RestApiSourceConfig`, `FlatFileSourceConfig`); static dicts `EXTRACTOR_BY_SOURCE_NAME` (8 entries) and `DEEP_RESCAN_BY_SOURCE_NAME` (7 entries); `build_extractor_kwargs` helper using `model_fields` introspection per ADR 0012. |
+| `source_registry.py` | Pydantic discriminated-union models (`RestApiSourceConfig`, `FlatFileSourceConfig`, `HtmlScrapingSourceConfig`); static dicts `EXTRACTOR_BY_SOURCE_NAME` (**9** entries) and `DEEP_RESCAN_BY_SOURCE_NAME` (**8** entries — all but `usda_establishments`); `build_extractor_kwargs` helper using `model_fields` introspection per ADR 0012. *(The module's own docstring still says "8-entry / 6-entry dict" — stale; flagged for the 6f.4 sweep.)* |
 | `logging.py` | `structlog` configuration with `run_id` contextvar, stdlib bridge for third-party libraries |
 
 ### `migrations/versions/` — Alembic migrations
@@ -269,7 +243,7 @@ The incremental cursor is advisory; the dedup is authoritative. A watermark that
 
 **Enforcement:** `source_watermarks` is updated after a successful run ([ADR 0020](decisions/0020-pipeline-state-tracking.md)) but the bronze loader does not rely on it for correctness. Content-hash dedup is the actual guard.
 
-**Consequences:** weak-watermark sources (CPSC, USDA — see [ADR 0010](decisions/0010-ingestion-cadence-and-github-actions-cron.md) revision note) are handled by deep-rescan workflows that ignore the watermark and re-fetch wider windows. Bronze stays correct.
+**Consequences:** sources whose incremental path can *skip* an edit — the weak-watermark **CPSC** (`LastPublishDate` doesn't advance on edits), the **short-circuit** USCG sources (the two-gate precheck skips the walk), and the **work-list** FDA-press-release / USCG-detail sources (process only the delta) — are backstopped by deep-rescan workflows that ignore the watermark and re-fetch in full. **Full-dump** sources (USDA, USDA-establishments, NHTSA) re-fetch the whole corpus every run, so they need no deep-rescan for edit-catch (NHTSA's loader is `PRE_2010` historical backfill only; USDA's is vestigial per ADR 0010). See the extraction-mode table under *End-to-end data flow* + [ADR 0010](decisions/0010-ingestion-cadence-and-github-actions-cron.md). Bronze stays correct either way.
 
 ### 4. Raw payloads survive every failure mode
 
@@ -286,19 +260,6 @@ Every class of failure has a documented destination. Schema-violating records go
 **Enforcement:** `tenacity`-decorated lifecycle methods (`src/bronze/retry.py`); `_rejected` tables ([ADR 0013](decisions/0013-error-handling-retries-idempotency-and-quarantine.md)); structured-log fields on failure events ([ADR 0021](decisions/0021-structured-logging.md)).
 
 **Consequences:** "what failed and why" is one SQL query away. Operators don't need to read GHA logs to diagnose data-shape problems; the rejected tables hold the record + reason + raw R2 path.
-
----
-
-## What's not in v1
-
-These are deliberate omissions, each documented in an ADR or in `project_scope/implementation_plan.md` "Out of scope":
-
-- **Frontend dashboard** — Phase 9, deferred. Phase 8 ships a FastAPI serving layer; downstream rendering is a separate decision.
-- **Application monitoring beyond GHA UI** — formalized in [ADR 0029](decisions/0029-application-observability-and-alerting.md) with named upgrade triggers. v1 = GHA UI + structured logs + SQL queries from operations.md.
-- **EPA integration** — deferred per [ADR 0001](decisions/0001-sources-in-scope.md). Re-evaluate when v1 ships.
-- **Statistical drift detection** — needs baseline data; v2 effort per [ADR 0015](decisions/0015-testing-strategy.md).
-- **Silver-layer interpretation of source-side deletions** — bronze captures the *signal* via [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md)'s manifest, but silver in v1 reports `is_currently_active` only. Modeling deletion as a first-class lifecycle event is v2.
-- **Authenticated API tier** — public read-only is sufficient for v1.
 
 ---
 

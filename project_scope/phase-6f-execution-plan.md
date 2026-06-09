@@ -103,6 +103,8 @@ Targeted, evidence-based edits (not a rewrite):
 - **`operations.md`** — replace the incomplete USCG row with the **3-source USCG cadence table** from 6f.3; add the `uscg_manufacturer_details` extract/deep-rescan runbook + the bulk-`Date Modified` re-baseline note (`change_type='schema_rebaseline'`).
 - **`silver_design_notes.md`** — confirm/extend the `firm_manufacturer_attributes` SCD-2 mapping + the flag-as-time-sensitive recall→manufacturer join (ADR 0035); tidy 8-vs-5-source framing.
 - **`commands.md`** — add `uscg_manufacturers` + `uscg_manufacturer_details` to the source list + example commands.
+- Flagged for 6f.4 (not bundled into this docs work): src/config/source_registry.py's own docstring still says "8-entry / 6-entry dict" and "Seven of eight sources" — stale code-doc; and the line-88 deep-rescan rationale ("current-state directory") should be reframed as "full-dump → redundant." I left a visible flag in the architecture.md note pointing at it.
+- Still open for the diagrams stream: the pipeline-architecture.drawio superseded marker — that rolls naturally into 6f.5 (the documentation/diagrams/README.md + supersede markers), so I'll catch it there rather than touch the .drawio now.
 
 **Commit:** `Phase 6f: sync prose docs to current source/gold/SCD-2 reality`
 
