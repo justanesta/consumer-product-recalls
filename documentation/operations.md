@@ -152,6 +152,16 @@ Follow the per-credential runbook below for each set. Rotate one credential at a
 
 **Note:** Neon's connection pooler is shared across all connections; no application-side connection pool flush is required on rotation.
 
+### Rotating the Neon API key (`NEON_API_KEY`)
+
+Separate from the DB password above — this is the **project-scoped API key** the test suite uses to provision ephemeral Neon branches (`scripts/neon_branch.py`, ADR 0015). Neon API keys do not expire, so rotate on the 90-day cycle.
+
+1. In the Neon console (your org → **API Keys**), create a new **project-scoped** key for this project.
+2. Update the `NEON_API_KEY` GitHub Actions repository secret and your local `.envrc`.
+3. Run the e2e Neon-branch smoke (or `TEST_DB_PROVIDER=neon pytest -k neon`) to verify create/delete works with the new key.
+4. Revoke the old key in the console.
+5. Close the "Rotate secrets" issue with a checkmark on the Neon API key.
+
 ### Rotating Cloudflare R2 credentials
 
 1. In the Cloudflare dashboard, open R2 → Manage R2 API Tokens.

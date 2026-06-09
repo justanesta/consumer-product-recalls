@@ -98,6 +98,9 @@ A few variables steer behavior without being credentials, so they are read direc
 |---|---|---|---|
 | `LOG_FORMAT` | `src/config/logging.py` | `console` forces the human renderer even on a non-tty (CI); anything else → JSON. | tty → console, else JSON |
 | `RECALLS_ENV` | `src/config/source_loader.py` | Selects a per-environment source-config overlay (see below). Unset/empty → base file only. | unset (no overlay) |
+| `TEST_DB_PROVIDER` | `tests/conftest.py::test_db_url` | Integration/e2e DB backend: `neon` provisions an ephemeral Neon branch; `local` is Phase-2 (not yet implemented). | `neon` |
+| `NEON_API_KEY` / `NEON_PROJECT_ID` | `tests/conftest.py` → `scripts/neon_branch.py` | Project-scoped Neon API key + project id used to create/delete the ephemeral test branch. Either absent → Neon-branch tests skip. | unset (tests skip) |
+| `NEON_TEST_PARENT_BRANCH` | same | Branch the test branch forks from. Unset → the project's default branch. | unset (default branch) |
 
 #### `RECALLS_ENV` — per-environment source-config overlays (ADR 0012)
 
@@ -110,6 +113,10 @@ A few variables steer behavior without being credentials, so they are read direc
 The merged dict is validated through the same Pydantic discriminated union as the base, so an overlay key the schema doesn't declare **fails loud** under `extra='forbid'` (the error names the offending key and the contributing file). When `RECALLS_ENV` is unset/empty, or no `<source>.<env>.yaml` exists, the base file is loaded unchanged — the default behavior.
 
 This is a Phase-7 mechanism; at go-live no source ships an overlay file, so leaving `RECALLS_ENV` unset is correct for normal local and CI runs. Set it only when an environment genuinely needs to override a field (e.g. a staging `base_url`), and create the matching `<source>.<env>.yaml` carrying just the overridden keys.
+
+#### `test_db_url` — ephemeral Neon branch for integration/e2e tests (ADR 0015)
+
+Integration + e2e tests consume a single `test_db_url` fixture so the database backend is swappable via `TEST_DB_PROVIDER`. With the default `neon` provider, the fixture calls `scripts/neon_branch.py` to create a throwaway copy-on-write Neon branch at session start and delete it on teardown — tests never touch production. It reads `NEON_API_KEY` + `NEON_PROJECT_ID` from the environment; put them in `.envrc` next to the dbt connection vars (these are test-infra knobs, so `extra='forbid'` keeps them out of `.env`, same as `NEON_HOST` etc.). If either is missing the fixture **skips** rather than failing, so a plain `pytest` run without Neon access stays green. In CI they are repository secrets. Use a **project-scoped** API key (least privilege — it cannot delete the project; rotation is in `operations.md`).
 
 ### Method 1 — `.env` with manual sourcing (simplest, no extra tools)
 
