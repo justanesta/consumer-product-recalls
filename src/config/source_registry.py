@@ -11,12 +11,13 @@ Two key design choices:
 1. **Lightweight registry as static dicts.** ADR 0012 explicitly rejects
    dcpy's heavy ``ConnectorRegistry`` ("we have three operation types and five
    sources; direct Python imports are simpler than runtime dispatch at this
-   scale"). The mapping below is exactly that — an 8-entry dict and a 6-entry
+   scale"). The mapping below is exactly that — a 9-entry dict and an 8-entry
    dict, populated at module import time (the ADR's "five sources" referenced
    the original five recall sources; ``usda_establishments`` was added in
-   Phase 5b.2, ``uscg_manufacturers`` in Phase 5d Step 7, and
-   ``uscg_manufacturer_details`` in Phase 5d Step 7 detail as sibling
-   non-recall directories/enrichment sources). Tests that need to mock a specific extractor class
+   Phase 5b.2, ``uscg_manufacturers`` + ``uscg_manufacturer_details`` in
+   Phase 5d Step 7, and ``fda_press_releases`` (the FDA Tier-3 per-event
+   press-release source) — all sibling non-recall enrichment sources).
+   Tests that need to mock a specific extractor class
    do so via ``patch.dict("src.config.source_registry.
    EXTRACTOR_BY_SOURCE_NAME", {"cpsc": mock_cls})`` rather than patching the
    class symbol in its defining module.
@@ -85,8 +86,9 @@ EXTRACTOR_BY_SOURCE_NAME: dict[str, type[Extractor[Any]]] = {
 }
 
 # Source-name → deep-rescan loader class for ``recalls deep-rescan <source>``.
-# Seven of eight sources have a deep-rescan path; only USDA establishments does
-# not (no historical archive — it's a current-state directory). CpscDeepRescanLoader
+# Eight of nine sources have a deep-rescan path; only usda_establishments does
+# not — it is a full-dump directory, so a deep-rescan is redundant (every
+# routine run is already a full snapshot). CpscDeepRescanLoader
 # uses a fixed LastPublishDateStart floor and bypasses the incremental-size guard
 # (the API has no end-date param). USCG's deep-rescan is symmetry-only — same
 # fetches as the incremental path, differs only in not touching freshness; see

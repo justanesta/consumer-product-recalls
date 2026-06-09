@@ -121,7 +121,7 @@ USCG manufacturer/listing (Tier-1) deep rescans follow the weekly USCG cadence; 
 
 ### GitHub-Actions hardening (landed in Tiers 1–2 of the plan)
 
-- All five `deep-rescan-*.yml` carry a `concurrency` group (`cancel-in-progress: false` — a cron and a manual dispatch serialize rather than double-run) and a `timeout-minutes` bound (NHTSA 40 / CPSC 30 / USDA 30 / FDA 60; USCG-detail deliberately unbounded pending an empirical single-run time — plan W9).
+- All `deep-rescan-*.yml` (now six, with `fda_press_releases`) carry a `concurrency` group (`cancel-in-progress: false` — a cron and a manual dispatch serialize rather than double-run) and a `timeout-minutes` bound (NHTSA 40 / CPSC 30 / USDA 30 / FDA 60; USCG-detail deliberately unbounded pending an empirical single-run time — plan W9).
 - Engines are built through one `NullPool` + TCP-keepalive factory (`src/config/db.py`), and a Neon mid-transaction connection drop on the bronze load is retried (`_is_disconnect`, `src/extractors/_base.py`). Together these address the Neon connection-drop failure class the audit found (Problem 2).
 - Secret validation runs **before** `uv sync` in every deep-rescan workflow, so a missing secret fails in seconds rather than after dependency install.
 

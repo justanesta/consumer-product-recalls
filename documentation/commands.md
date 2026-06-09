@@ -74,7 +74,7 @@ uv run recalls recover-rejected <source>                  # un-quarantine invari
 python scripts/backfill_manifest.py [--dry-run|--apply]   # USDA presence-manifest backfill (ADR 0028 Mech C)
 ```
 
-Sources: `cpsc`, `fda`, `usda`, `usda_establishments`, `nhtsa`, and `uscg`.
+Sources (9): `cpsc`, `fda`, `usda`, `usda_establishments`, `nhtsa`, `uscg`, `uscg_manufacturers`, `uscg_manufacturer_details`, and `fda_press_releases`. The last three are work-list / two-tier sources with extraction-order dependencies — see the [ADR 0010 cadence matrix](decisions/0010-ingestion-cadence-and-github-actions-cron.md) (`fda → fda_press_releases`; `uscg_manufacturers → uscg_manufacturer_details`).
 
 Source-level configuration (URL, timeout, ETag enabled flag) is loaded from `config/sources/<source>.yaml` per [ADR 0012](decisions/0012-extractor-pattern-custom-abc-and-per-source-subclasses.md) — editing those files takes effect on the next invocation. See [`development.md` § Source configuration](development.md#source-configuration) for the full story.
 
@@ -319,6 +319,8 @@ recalls extract nhtsa --since=2023-12-01
 # USCG auto-short-circuits on page 0 if Records Found + page-0 IDs match prior run
 recalls extract uscg
 recalls extract uscg_manufacturers
+recalls extract uscg_manufacturer_details   # Tier-1 work-list from the listing — run AFTER uscg_manufacturers
+recalls extract fda_press_releases          # per-event work-list from fda_recalls_bronze — run AFTER fda
 
 # 2. Pipeline-health snapshot
 psql -f scripts/sql/_pipeline/recent_runs.sql
