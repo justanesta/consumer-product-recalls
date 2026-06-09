@@ -19,10 +19,11 @@
 --     multi-row sources (FDA products, NHTSA 11-tuple lines) it counts version diversity
 --     across the event's child rows — a proxy for event activity.
 --   * is_currently_active / was_ever_retracted — need the presence manifest
---     (extraction_run_identities), so USDA-ONLY in v1 (the only track_presence source), NULL
---     elsewhere until a source's manifest lands. (NHTSA could qualify — it full-enumerates —
---     once track_presence is enabled for it; bronze dedup hides unchanged campnos so it
---     cannot be derived from bronze. See ADR 0026 + the default_track_presence prerequisite.)
+--     (extraction_run_identities). USDA + NHTSA (the track_presence sources, C16); NULL for
+--     CPSC/FDA/USCG. NHTSA presence is GATED to full-enumerating runs (change_type='historical_seed')
+--     — routine runs' manifests are partial (bronze dedup hides unchanged campnos), so NHTSA
+--     presence stays NULL until a deep-rescan/seed banks a complete manifest (WS-H). It is OBSERVED
+--     feed presence, not an authoritative agency retraction (v2). See ADR 0026.
 --
 -- Presence dims key on the LATEST ENUMERATING run (a 304 succeeds but enumerates nothing, so
 -- latest-success would read as empty — proven 2026-06-06) and trim() the manifest's
@@ -143,6 +144,54 @@ usda_lifecycle as (
             select count(*) from usda_enum_runs er where er.started_at >= a.first_present
         ) as was_ever_retracted
     from usda_presence_agg a
+),
+
+-- NHTSA presence-manifest dims (C16) --------------------------------------------------------
+-- IDENTICAL shape to USDA, with ONE critical gate: only FULL-enumerating runs
+-- (change_type='historical_seed' — the deep-rescan/seed) write a COMPLETE NHTSA manifest. Routine
+-- cron runs are incremental, so only changed campnos reach _passing_records (the manifest source)
+-- and their manifest is PARTIAL — counting them would falsely read most campnos as "absent". Gating
+-- to historical_seed means: until a full NHTSA deep-rescan/seed runs (WS-H H-b), nhtsa_enum_runs is
+-- EMPTY → every NHTSA presence dim is NULL, never wrong. (USDA needs no gate — it full-dumps each
+-- run.) The signal is OBSERVED feed presence (campno dropped from / present in the source pull), NOT
+-- an authoritative agency retraction — interpreting "withdrawn on date X" is v2 (ADR 0026).
+nhtsa_enum_runs as (
+    select eri.run_id, max(er.started_at) as started_at
+    from {{ source('pipeline', 'extraction_run_identities') }} eri
+    join {{ source('pipeline', 'extraction_runs') }} er on er.run_id = eri.run_id
+    where eri.source = 'nhtsa' and er.change_type = 'historical_seed'
+    group by eri.run_id
+),
+
+nhtsa_latest_run as (
+    select run_id from nhtsa_enum_runs order by started_at desc limit 1
+),
+
+nhtsa_presence as (
+    select distinct eri.source_recall_id, eri.run_id, r.started_at
+    from {{ source('pipeline', 'extraction_run_identities') }} eri
+    join nhtsa_enum_runs r on r.run_id = eri.run_id
+    where eri.source = 'nhtsa'
+),
+
+nhtsa_presence_agg as (
+    select
+        source_recall_id,
+        bool_or(run_id = (select run_id from nhtsa_latest_run)) as is_currently_active,
+        count(distinct run_id)                                 as present_runs,
+        min(started_at)                                        as first_present
+    from nhtsa_presence
+    group by source_recall_id
+),
+
+nhtsa_lifecycle as (
+    select
+        source_recall_id,
+        is_currently_active,
+        present_runs < (
+            select count(*) from nhtsa_enum_runs er where er.started_at >= a.first_present
+        ) as was_ever_retracted
+    from nhtsa_presence_agg a
 )
 
 select
@@ -152,8 +201,8 @@ select
     bs.first_seen_at,
     bs.last_seen_at,
     bs.edit_count,
-    ul.is_currently_active,
-    ul.was_ever_retracted
+    coalesce(ul.is_currently_active, nl.is_currently_active) as is_currently_active,
+    coalesce(ul.was_ever_retracted, nl.was_ever_retracted)  as was_ever_retracted
 from {{ ref('recall_event') }} re
 left join bronze_stats bs
     on bs.source = re.source
@@ -161,3 +210,6 @@ left join bronze_stats bs
 left join usda_lifecycle ul
     on re.source = 'USDA'
    and ul.source_recall_id = re.source_recall_id
+left join nhtsa_lifecycle nl
+    on re.source = 'NHTSA'
+   and nl.source_recall_id = re.source_recall_id

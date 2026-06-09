@@ -128,6 +128,11 @@ DEDUP_CONTRACT_BY_SOURCE_NAME: dict[str, DedupContract] = {
         hash_exclude_fields=frozenset({"source_recall_id"}),
         default_within_batch_dedup=True,
         default_allow_null_identity=True,
+        # C16 (ADR 0026): write the presence manifest so recall_lifecycle can derive observed
+        # feed presence. Only full-enumerating runs (deep-rescan / historical_seed) yield a
+        # complete NHTSA manifest; recall_lifecycle gates presence to those, so routine runs'
+        # partial manifests are ignored and presence stays NULL until a full run banks one.
+        default_track_presence=True,
     ),
     # uscg.py — details_url excluded (volatile, not content).
     "uscg": DedupContract(

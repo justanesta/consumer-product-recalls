@@ -253,3 +253,15 @@ def test_manifest_no_insert_on_empty_passing_records(
     extractor._maybe_write_presence_manifest(conn, run_id="run-1", status="success")
 
     assert not conn.execute.called
+
+
+def test_track_presence_sources_are_pinned() -> None:
+    """Registry pin (C16 / #71): exactly USDA + NHTSA carry track_presence — the two sources that
+    FULL-enumerate, so their manifest yields valid presence. CPSC/FDA/USCG do not full-enumerate, so
+    a True there would silently produce wrong presence dims; this fails loudly if the set drifts."""
+    from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
+
+    tracked = {
+        name for name, c in DEDUP_CONTRACT_BY_SOURCE_NAME.items() if c.default_track_presence
+    }
+    assert tracked == {"usda", "nhtsa"}
