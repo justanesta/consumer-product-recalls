@@ -22,7 +22,7 @@ Five sub-decisions to settle:
 | Trigger | What runs | Purpose |
 |---|---|---|
 | **PR to `main`** | `ruff check` + `ruff format --check`, `pyright`, `pytest tests/unit/`, `pytest tests/integration/` (VCR cassettes), `dbt parse` (no run), 1–2 e2e smoke tests on an ephemeral Neon branch | Quality gate before merge |
-| **Push to `main`** | Same as PR checks + `dbt docs generate` → deploy to Cloudflare Pages | Publish docs, confirm main is healthy |
+| **Push to `main`** | Same as PR checks. *(dbt-docs → Cloudflare Pages **deferred 2026-06-09**; docs publishing moves to the website build — see plan C26.)* | Confirm `main` is healthy |
 | **Cron per source** (per ADR 0010) | Per-source extractor workflows (one `.github/workflows/extract-<source>.yml` each) | Production ingestion |
 | **Cron for transforms** | `dbt build` + `dbt test` against production Postgres | Silver/gold refresh |
 | **`workflow_dispatch`** | Any of the above | Manual trigger for debugging, re-runs, schema-drift re-ingest per ADR 0014 |

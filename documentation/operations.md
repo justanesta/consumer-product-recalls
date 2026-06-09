@@ -35,7 +35,7 @@ Plus a transformation workflow scheduled to run after the latest extraction comp
 
 | Workflow | Schedule | Action |
 |---|---|---|
-| `transform.yml` | Daily, time-shifted ~30 min after the latest daily extractor | `dbt build --project-dir dbt` + `dbt test --project-dir dbt`. Posts dbt docs to Cloudflare Pages on success. |
+| `transform.yml` | Daily, time-shifted ~30 min after the latest daily extractor | `dbt build --project-dir dbt` + `dbt test --project-dir dbt`. |
 
 Pipeline state — per-source watermarks (last-seen publication timestamps, ETags, pagination cursors) and per-run metadata (status, counts, duration, `change_type`) — lives in Neon Postgres: `source_watermarks` and `extraction_runs`. For presence-tracked sources (USDA initially, [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md)) a third table, `extraction_run_identities` (migration 0027), records which recall identities each successful run returned — written automatically inside the run's `_record_run` transaction, **no operator action**. Retention: keep-forever for now (~2K rows per USDA run); revisit a TTL only if disk growth becomes material. Full rationale in [ADR 0020](decisions/0020-pipeline-state-tracking.md). The queries below are written against these tables.
 
