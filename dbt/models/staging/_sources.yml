@@ -390,3 +390,30 @@ sources:
             description: Blocking-key + threshold config the CLI used, for auditable rebuilds.
             tests:
               - not_null
+
+      - name: quantity_crosswalk
+        description: >
+          Free-text recall-quantity crosswalk (C13): one row per distinct raw quantity string
+          (FDA product_distributed_quantity + USDA qty_recovered) mapping it to parsed
+          quantity_value / quantity_unit / quantity_category / quantity_basis. Written by
+          `recalls parse-quantities` (USER-run); created empty by migration 0032, 0 rows until the
+          CLI runs. recall_product LEFT JOINs it on number_of_units. Rebuilt on demand, no cadence.
+        columns:
+          - name: raw_quantity
+            description: The raw quantity string — natural PK, = recall_product.number_of_units.
+            tests:
+              - not_null
+              - unique
+          - name: quantity_category
+            description: count | weight | volume | grouping (NULL when no unit recognized).
+            tests:
+              - accepted_values:
+                  arguments:
+                    values: ['count', 'weight', 'volume', 'grouping']
+          - name: quantity_basis
+            description: per_product | total_all_products | unknown.
+            tests:
+              - not_null
+              - accepted_values:
+                  arguments:
+                    values: ['per_product', 'total_all_products', 'unknown']

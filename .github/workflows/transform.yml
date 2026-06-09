@@ -84,6 +84,13 @@ jobs:
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
 
+      - name: Parse quantities (rebuild quantity_crosswalk from staging, C13)
+        # Reads the stg_* views; truncate-reloads quantity_crosswalk so the post-resolve
+        # dbt build's recall_product picks up the parsed quantity_value/unit/category/basis.
+        run: uv run recalls parse-quantities
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+
       - name: dbt build (silver + gold, post-resolve)
         run: uv run dbt build --exclude-resource-type test --project-dir dbt/ --profiles-dir dbt/
         env:

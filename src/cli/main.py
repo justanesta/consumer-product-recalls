@@ -30,6 +30,7 @@ from src.config.source_registry import (
     build_extractor_kwargs,
 )
 from src.enrichment.crosswalk_writer import audit_rollup_clusters, resolve_firm_crosswalk
+from src.enrichment.quantity_crosswalk_writer import write_quantity_crosswalk
 from src.extractors.fda_press_release import FdaPressReleaseCheckpointedSeedLoader
 from src.landing.r2 import R2LandingClient
 
@@ -879,6 +880,35 @@ def resolve_firms(
         f"written={summary.rows_written} cleaned={summary.cleaned_count} "
         f"aliased={summary.alias_count} fei_merged={summary.fei_merged} "
         f"fuzzy_merged={summary.fuzzy_merged} fei_gated={summary.fei_gated}"
+    )
+
+
+@app.command(name="parse-quantities")
+def parse_quantities(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report parse counts without writing quantity_crosswalk."),
+    ] = False,
+) -> None:
+    """Rebuild quantity_crosswalk from distinct FDA/USDA staging quantity strings (C13).
+
+    Reads the distinct ``product_distributed_quantity`` (FDA) + ``qty_recovered`` (USDA) strings
+    from the ``stg_*`` views, parses each through ``src.enrichment.quantity.parse_quantity`` into
+    ``(value, unit, category, basis)``, and truncate-reloads ``quantity_crosswalk``. Silver
+    ``recall_product`` LEFT JOINs it on ``number_of_units`` for the structured columns; the
+    ``basis`` flag (per_product vs total_all_products) lets ``fct_units_recalled`` avoid summing a
+    recall-wide total that repeats per product row. Idempotent; no API/watermark side effects. Run
+    AFTER ``dbt build --select staging`` (it reads the ``stg_*`` views), before the full dbt build.
+    """
+    configure_logging()
+    settings = Settings()  # type: ignore[call-arg]
+    engine = make_engine(settings.neon_database_url.get_secret_value())
+    summary = write_quantity_crosswalk(engine, dry_run=dry_run)
+    dry = " [dry-run]" if summary.dry_run else ""
+    typer.echo(
+        f"parse-quantities{dry}: distinct={summary.distinct_values} "
+        f"written={summary.rows_written} parsed_value={summary.parsed_value} "
+        f"parsed_unit={summary.parsed_unit}"
     )
 
 

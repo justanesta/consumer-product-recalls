@@ -233,13 +233,24 @@ all_products as (
 -- jsonb (not text[]): bronze-consistent, containment-filterable, and dodges the dbt-postgres
 -- unit-test ARRAY-cast limitation. Enables single-category filtering.
 select
-    *,
+    ap.*,
     case
-        when source = 'USDA' and type is not null
+        when ap.source = 'USDA' and ap.type is not null
         then (
             select jsonb_agg(trim(t))
-            from unnest(string_to_array(type, ',')) as t
+            from unnest(string_to_array(ap.type, ',')) as t
             where trim(t) <> ''
         )
-    end as processing_categories
-from all_products
+    end as processing_categories,
+    -- C13: structured quantity parsed from the raw number_of_units via quantity_crosswalk
+    -- (`recalls parse-quantities`). FDA + USDA populate it; other sources' number_of_units mostly
+    -- miss the crosswalk (NULL). quantity_basis separates a per-product quantity from a recall-wide
+    -- total (the same total repeats on every product row — fct consumers must not sum those). The raw
+    -- number_of_units is preserved alongside. LEFT JOIN to a unique PK → no fan-out.
+    xq.quantity_value,
+    xq.quantity_unit,
+    xq.quantity_category,
+    xq.quantity_basis
+from all_products ap
+left join {{ source('enrichment', 'quantity_crosswalk') }} xq
+    on xq.raw_quantity = ap.number_of_units
