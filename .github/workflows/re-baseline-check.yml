@@ -1,0 +1,63 @@
+name: Re-baseline Gate
+
+# Phase 7 bronze re-baseline gate (ADR 0027). If a PR touches a Pydantic bronze
+# schema (src/schemas/*.py) or the canonical-serialization helper
+# (src/bronze/hashing.py) — the two change classes that re-version every record
+# on the next extract — its body MUST carry an explicit `RE-BASELINE: yes` or
+# `RE-BASELINE: no` line (forcing conscious acknowledgment of the wave). PRs that
+# don't touch those files pass automatically. See
+# documentation/operations/re_baseline_playbook.md (Step 1 — Detection at PR time).
+#
+# The PULL_REQUEST_TEMPLATE.md seeds `RE-BASELINE: no`, so a normal PR passes
+# untouched; a schema/hashing PR forces the author to consciously set the value.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  re-baseline-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require RE-BASELINE acknowledgment on schema / hashing PRs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const triggers = (p) =>
+              /^src\/schemas\/.*\.py$/.test(p) || p === 'src/bronze/hashing.py';
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const hits = files.map(f => f.filename).filter(triggers);
+
+            if (hits.length === 0) {
+              core.info('No bronze schema / hashing files changed — re-baseline gate not applicable.');
+              return;
+            }
+
+            const body = context.payload.pull_request.body || '';
+            const hasLine = /^\s*RE-BASELINE:\s*(yes|no)\s*$/im.test(body);
+
+            if (!hasLine) {
+              core.setFailed(
+                'This PR changes bronze schema / hashing files:\n' +
+                hits.map(h => `  - ${h}`).join('\n') +
+                '\nAdd a `RE-BASELINE: yes` or `RE-BASELINE: no` line to the PR body ' +
+                '(see documentation/operations/re_baseline_playbook.md).'
+              );
+              return;
+            }
+
+            core.info(
+              'Bronze schema / hashing files changed; RE-BASELINE acknowledgment present:\n' +
+              hits.map(h => `  - ${h}`).join('\n')
+            );
