@@ -1,6 +1,21 @@
 version: 2
 
 models:
+  - name: dim_date
+    description: >
+      Generated calendar dimension (ADR 0038 §2; built 2026-06-08 decision). One row per
+      calendar day, 1970-01-01..2035-12-31. Replaces the inline date_trunc(published_at)
+      across the date-grained fct_* models (the C11 wiring step). dim_ prefix per ADR 0038.
+    columns:
+      - name: date_day
+        description: Calendar day — the unique dimension key.
+        tests: [not_null, unique]
+      - name: year
+        tests: [not_null]
+      - name: us_fiscal_year
+        description: US federal fiscal year (starts Oct 1, labelled by the year it ends in).
+        tests: [not_null]
+
   - name: fct_recalls_by_month
     description: Monthly recall counts per source + 'ALL' rollup (GROUPING SETS). Renamed from recalls_by_month.
     columns:
