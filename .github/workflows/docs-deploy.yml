@@ -1,0 +1,76 @@
+name: Docs Deploy (dbt docs → Cloudflare Pages)
+
+# Phase 7 docs publishing (ADR 0018 §1). On every push to `main`, regenerate the
+# dbt catalog/manifest documentation site and publish it to Cloudflare Pages — so
+# the rendered docs never drift from the merged models. Runs on main pushes only
+# (not on PRs): the PR-check workflow already validates dbt via `dbt parse`.
+#
+# `dbt docs generate` writes the static site (index.html + manifest.json +
+# catalog.json) into dbt/target/; that directory is what gets published.
+#
+# TODO(operator): create the Cloudflare Pages project named
+# `consumer-product-recalls-dbt-docs` before the first run, and add the
+# CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID repository secrets (the API token
+# needs the "Cloudflare Pages: Edit" permission). Until the project exists the
+# wrangler deploy step fails fast.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docs-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_HOST" ]] || (echo "::error::NEON_HOST secret is missing" && exit 1)
+          [[ -n "$NEON_USER" ]] || (echo "::error::NEON_USER secret is missing" && exit 1)
+          [[ -n "$NEON_PASSWORD" ]] || (echo "::error::NEON_PASSWORD secret is missing" && exit 1)
+          [[ -n "$NEON_DBNAME" ]] || (echo "::error::NEON_DBNAME secret is missing" && exit 1)
+          [[ -n "$CLOUDFLARE_API_TOKEN" ]] || (echo "::error::CLOUDFLARE_API_TOKEN secret is missing" && exit 1)
+          [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]] || (echo "::error::CLOUDFLARE_ACCOUNT_ID secret is missing" && exit 1)
+        env:
+          NEON_HOST: ${{ secrets.NEON_HOST }}
+          NEON_USER: ${{ secrets.NEON_USER }}
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: dbt deps
+        run: uv run dbt deps --project-dir dbt/ --profiles-dir dbt/
+        env:
+          NEON_HOST: ${{ secrets.NEON_HOST }}
+          NEON_USER: ${{ secrets.NEON_USER }}
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
+
+      - name: dbt docs generate
+        run: uv run dbt docs generate --project-dir dbt/ --profiles-dir dbt/
+        env:
+          NEON_HOST: ${{ secrets.NEON_HOST }}
+          NEON_USER: ${{ secrets.NEON_USER }}
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
+
+      - name: Publish to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dbt/target --project-name=consumer-product-recalls-dbt-docs --branch=main
