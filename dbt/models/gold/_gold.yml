@@ -250,3 +250,26 @@ models:
       - name: recall_count
         tests:
           - not_null
+
+  - name: fct_recalls_by_country
+    description: >
+      Recalls per distribution COUNTRY (Phase 7, C12 follow-on) — the country analogue of
+      fct_recalls_by_geography's 'distribution' state lens. FDA + USDA only (the sources with a
+      distribution field). country_code is ISO-3166-1 alpha-2; 'US' is DERIVED from
+      distribution_scope (Nationwide/Regional) + distribution_state_codes (not stored in silver,
+      which keeps distribution_country_codes a foreign-only array), foreign codes unnest that array.
+      Multi-valued: a US+abroad recall counts once for US and once per foreign country, so per-country
+      counts sum to more than the distinct-recall total. GROUPING SETS adds the 'ALL'-source rollup.
+    columns:
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['FDA', 'USDA', 'ALL']
+      - name: country_code
+        tests:
+          - not_null
+      - name: recall_count
+        tests:
+          - not_null

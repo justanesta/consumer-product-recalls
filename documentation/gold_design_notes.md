@@ -31,9 +31,10 @@ Surrogate keys are **reused from silver verbatim** (`recall_event_id`, `recall_p
 
 **Aggregates (dashboards):** `fct_recalls_by_week`/`_by_month`/`_by_year`, `fct_recalls_monthly_trend`
 (rolling averages + YoY over a dense month spine), `fct_recalls_by_firm` (leaderboard), `fct_recalls_by_classification`,
-`fct_recall_status` (active/inactive), `fct_recalls_by_geography`, `fct_units_recalled`. Most carry a
-`source` dimension with an `'ALL'` rollup via `GROUPING SETS` (one model serves a per-source page and
-the cross-source total).
+`fct_recall_status` (active/inactive), `fct_recalls_by_geography` (US states), `fct_recalls_by_country`
+(distribution countries, FDA+USDA; ISO-3166-1 alpha-2 with a derived `US` cell), `fct_units_recalled`.
+Most carry a `source` dimension with an `'ALL'` rollup via `GROUPING SETS` (one model serves a
+per-source page and the cross-source total).
 
 ## Design notes worth knowing
 
@@ -43,7 +44,17 @@ the cross-source total).
   - ***`distribution`*** = **where the recalled product went** — `recall_distribution_area.distribution_state_codes[]`
     (FDA free-text parse + USDA states; precision-over-recall). **FDA + USDA only**; CPSC/NHTSA/USCG
     carry no distribution field, so they contribute nothing. This is the clean *"where did the product
-    go / who was potentially affected"* answer.
+    go / who was potentially affected"* answer. **Countries (C12, 2026-06-09):** the sidecar now also
+    carries `distribution_country_codes[]` (ISO-3166-1 alpha-2, parsed from the FDA international tail
+    via the `country_iso` seed), parallel to the state array; its grain expanded to *≥1 state OR
+    country*, so a country-only recall now gets a row with empty `state_codes[]`. The `distribution`
+    lens here is **unchanged** — it unnests `distribution_state_codes[]` and is inert to country-only
+    rows (an empty array unnests to nothing). The world-map companion **`fct_recalls_by_country` was
+    built (C12 follow-on, 2026-06-09)**: foreign cells unnest `distribution_country_codes[]`, and the
+    **`US` cell is *derived*** from `distribution_scope`(Nationwide/Regional) + `distribution_state_codes`
+    — *not* stored in silver, which keeps `distribution_country_codes[]` a clean foreign-only
+    international-presence array. Empirically US dominates (50,854 recalls vs ~4.5k for the next country,
+    Canada); only ~273 recalls are truly non-US.
   - ***`firm_registration`*** (renamed from `firm_location`, C17 2026-06-09) = **where the responsible firm is *registered*** — `firm.observed_company_ids`
     → the per-source SCD-2 sidecar state (`firm_usda_attributes.state` /
     `firm_uscg_attributes.state` / `firm_fda_attributes.firm_state_cd`). It is **not** "all

@@ -100,6 +100,7 @@ flowchart TB
         f_cl["fct_recalls_by_classification"]
         f_st["fct_recall_status"]
         f_geo["fct_recalls_by_geography"]
+        f_co["fct_recalls_by_country"]
         f_un["fct_units_recalled"]
     end
 
@@ -164,7 +165,7 @@ encodes the grade; the table below names it explicitly.
 | `recall_product_history` | SCD-2 history (NHTSA products) | Policy-C peer of the current view |
 | `recall_lifecycle` | derived per-recall summary | 1:1 with `recall_event` |
 | `recall_event_press_release` | event child fact (FDA) | M:1 to event |
-| `recall_distribution_area` | event child fact (geography) | 1:1, FDA+USDA |
+| `recall_distribution_area` | event child fact (geography) | 0..1, FDA+USDA (≥1 state or country) |
 | `recall_event_establishment_resolution` | resolution map (USDA → FSIS) | 1:1 USDA |
 | `uscg_mic_reassignment_years` | reference helper (MIC temporal) | MIC → current-holder-since-year |
 | `firm_fei_edges` | resolution input (**dormant**) | built but not wired into the live firm build (ADR 0037) |
@@ -250,6 +251,8 @@ erDiagram
         text    recall_event_id        PK,FK
         text    distribution_state_codes
         integer n_distribution_states
+        text    distribution_country_codes
+        integer n_distribution_countries
     }
     recall_event_establishment_resolution {
         text recall_event_id      PK,FK
@@ -445,6 +448,7 @@ flowchart LR
         f_cl["fct_recalls_by_classification"]
         f_st["fct_recall_status"]
         f_geo["fct_recalls_by_geography (table)"]
+        f_co["fct_recalls_by_country"]
         f_un["fct_units_recalled"]
         f_fm["fct_recalls_by_firm"]
     end
