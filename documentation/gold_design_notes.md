@@ -80,15 +80,20 @@ per-source page and the cross-source total).
     (single-primary-state collapse) was evaluated and reverted** — the multi-counting is a legitimate,
     documented industry-footprint property; collapsing it picked an arbitrary state for 6.6% of recalls
     (no uniform cross-source recency date exists to break the pervasive ~1-registration-per-state ties).
-- **Units are narrow and not cross-source comparable** (`fct_units_recalled`). Only NHTSA (vehicles)
-  and USCG (boats) have a clean integer `unit_count`; CPSC/FDA/USDA are free-text (USDA = pounds).
-  NHTSA's `recall_product` is the 7-tuple (many component rows per campaign) and `potaff` (an
-  event-level count) repeats across them, so it is collapsed to **one per recall** before aggregating
-  (a naive product-grain sum overcounts ~100×; `potaff` verified constant within a campno → the
-  collapse is exact). USCG's `recall_product` is 1:1 with `recall_event`, so it never fans out — no
-  explosion. `total_units` sums per-recall affected counts — a recall-**magnitude** measure, not unique
-  vehicles (a vehicle recurs across recalls). Free-text value+unit parse (CPSC/FDA/USDA) is deferred to
-  the units-enrichment TODO.
+- **Units are narrow and not cross-source comparable** (`fct_units_recalled`, grain source ×
+  `unit_category` × month). The **measure means different things per source** — NHTSA/USCG = vehicles/
+  boats *potentially affected* (clean integer `unit_count`); FDA = quantity *distributed*; USDA =
+  weight *recovered* — so always filter by source; no 'ALL' rollup. `unit_category`
+  (count/weight/volume/grouping) keeps incommensurable units apart (1,000 cases ≠ 1,000 lbs).
+  NHTSA's `recall_product` is the 7-tuple (many component rows per campaign) and `potaff` repeats
+  across them, so it is collapsed to **one max per recall** (a naive product-grain sum overcounts
+  ~100×; `potaff` verified constant within a campno → exact). USCG is 1:1 with `recall_event` (no
+  fan-out). **FDA/USDA added 2026-06-09 (C13)** from the `recall_product` quantity parse,
+  **basis-aware**: `per_product` rows are *summed* across the recall's products, a `total_all_products`
+  value (a recall-wide total repeated on every product row) is *max'd* — the `quantity_basis` flag is
+  what prevents an N× overcount. `total_units` sums per-recall magnitudes — a recall-**magnitude**
+  measure, not unique items. **CPSC stays free-text-only** (no parse); the value/unit parse for it
+  remains in the units-enrichment backlog.
 - **Indexing** (ADR 0038): silver/gold indexes are declared in dbt `config(indexes=[...])` so they
   re-create on each table rebuild. Two load-bearing specials: a **functional index on
   `firm_fda_attributes((firm_fei_num::text))`** (the firm→sidecar join casts FEI to text), and

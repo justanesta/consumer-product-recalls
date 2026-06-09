@@ -79,6 +79,24 @@ models:
           - accepted_values:
               arguments:
                 values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
+      # C13: structured quantity parsed from number_of_units via quantity_crosswalk (FDA + USDA;
+      # NULL for other sources / unparseable). Raw number_of_units is preserved alongside.
+      - name: quantity_value
+        description: Parsed numeric quantity (NULL for sentinels / un-numbered text).
+      - name: quantity_unit
+        description: Canonical unit (each / case / bottle / pound / …); NULL when no unit recognized.
+      - name: quantity_category
+        description: count | weight | volume | grouping (NULL when no unit).
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['count', 'weight', 'volume', 'grouping']
+      - name: quantity_basis
+        description: per_product | total_all_products | unknown (NULL for non-FDA/USDA rows).
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['per_product', 'total_all_products', 'unknown']
 
   - name: recall_product_history
     description: >

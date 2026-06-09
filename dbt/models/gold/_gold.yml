@@ -126,17 +126,26 @@ models:
 
   - name: fct_units_recalled
     description: >
-      Units recalled per source × month — NHTSA (vehicles) + USCG (boats) ONLY (the clean-count
-      sources). NOT cross-source comparable; no 'ALL' rollup. NHTSA potaff is collapsed to one count
-      per recall first (it repeats across component rows, else ~100x overcount). Free-text-units
-      sources (CPSC/FDA/USDA, incl. USDA pounds) deferred to the units-enrichment TODO.
+      Units recalled per source × unit_category × month. Per-source the measure differs (NHTSA/USCG
+      = vehicles/boats potentially affected; FDA = quantity distributed; USDA = weight recovered), so
+      it is NOT cross-source comparable — always filter by source, no 'ALL' rollup. unit_category
+      (count/weight/volume/grouping) keeps incommensurable units apart. NHTSA potaff is collapsed to
+      one count per recall (repeats across component rows). FDA/USDA come from the C13 quantity parse,
+      basis-aware: per_product rows are summed, total_all_products (a recall-wide total repeated per
+      product row) is max'd. CPSC remains free-text-only (no parse).
     columns:
       - name: source
         tests:
           - not_null
           - accepted_values:
               arguments:
-                values: ['NHTSA', 'USCG']
+                values: ['NHTSA', 'USCG', 'FDA', 'USDA']
+      - name: unit_category
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['count', 'weight', 'volume', 'grouping']
       - name: period
         tests: [not_null]
       - name: total_units
