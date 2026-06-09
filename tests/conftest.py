@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,25 @@ def _scrub_response_headers(response: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
+def _wait_until_ready(connection_uri: str, attempts: int = 30, delay_s: float = 2.0) -> None:
+    """Poll a fresh Neon branch with ``select 1`` until its compute autostarts from zero (cold
+    start), so dbt's first connection doesn't time out on the still-suspended endpoint."""
+    import sqlalchemy as sa
+
+    from src.config.db import make_engine
+
+    last_err: Exception | None = None
+    for _ in range(attempts):
+        try:
+            with make_engine(connection_uri).connect() as conn:
+                conn.execute(sa.text("select 1"))
+            return
+        except Exception as exc:  # any connect/transport error → retry until the branch is ready
+            last_err = exc
+            time.sleep(delay_s)
+    raise RuntimeError(f"Neon branch never became connectable after warmup: {last_err}")
+
+
 @pytest.fixture(scope="session")
 def test_db_url() -> Iterator[str]:
     """Yield a throwaway test-database URL, torn down after the session (ADR 0015).
@@ -54,6 +74,7 @@ def test_db_url() -> Iterator[str]:
 
         branch_id, connection_uri = create_branch(api_key, project_id, parent_id)
         try:
+            _wait_until_ready(connection_uri)  # branch compute cold-starts on first connect
             yield connection_uri
         finally:
             delete_branch(api_key, project_id, branch_id)
