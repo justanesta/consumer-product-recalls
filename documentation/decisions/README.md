@@ -33,10 +33,10 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0031 — Silver-row fragmentation strategy](0031-silver-row-fragmentation-strategy.md) — per-source surrogate keys, drift detection, reconciliation tiers
 - [0032 — USDA establishment `latest_mpi_active_date` hash exclusion (upstream heartbeat fields)](0032-usda-establishment-heartbeat-field-hash-exclusion.md) — third category of `hash_exclude_fields` use; suppresses weekly ~7k phantom re-versions
 - [0033 — Silver row versioning via SCD on stable anchor](0033-silver-row-versioning-via-scd-on-stable-anchor.md) — NHTSA `recall_product` 6-tuple stable anchor + Type-1 latest-wins + Type-2 dbt snapshot; framework generalizes cross-source
-- [0034 — NHTSA silver v1.5 — Layer 3 migration cutover](0034-nhtsa-silver-v15-migration.md) *(Proposed — stub; design in `project_scope/archive/silver_v15_migration_plan.md`)*
-- [0035 — Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) — cross-source policy = Policy C (latest-wins current view + first-class snapshot history) via dbt snapshot `strategy='check'` on a stable anchor; only the USCG `firm_manufacturer_attributes` instance (the measured Type-2 NEED, 221/718 OOB-recycled / 365 prior) is built in 6b.5, FDA/CPSC/USDA deferred *(Proposed — decision recorded 2026-06-05 on the A scope; ratifies at PR 6b.5 merge)*
-- [0036 — Cross-source canonical silver column naming](0036-cross-source-canonical-silver-naming.md) *(Proposed — naming policy + D1–D7 written 2026-06-02 W3; ratifies at `feature/silver-field-remap` merge)*
-- [0038 — Gold-layer modeling and indexing strategy](0038-gold-layer-modeling-and-indexing-strategy.md) — `mart_`/`fct_` shapes (Kimball star deferred), serving=table+indexed / aggregate=view, Postgres FTS search, dbt `config(indexes=)` mechanism, Phase-7 profiling follow-up *(Proposed — written 2026-06-07; ratifies at `feature/phase-6e-gold-and-test` merge)*
+- [0034 — NHTSA silver v1.5 — Layer 3 migration cutover](0034-nhtsa-silver-v15-migration.md) *(Accepted — cutover done 6c.7; design in `project_scope/archive/silver_v15_migration_plan.md`)*
+- [0035 — Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) — cross-source policy = Policy C (latest-wins current view + first-class snapshot history) via dbt snapshot `strategy='check'` on a stable anchor; only the USCG `firm_manufacturer_attributes` instance (the measured Type-2 NEED, 221/718 OOB-recycled / 365 prior) is built in 6b.5, FDA/CPSC/USDA deferred *(Accepted — ratified at the #59 merge)*
+- [0036 — Cross-source canonical silver column naming](0036-cross-source-canonical-silver-naming.md) *(Accepted — ratified at the #58 merge)*
+- [0038 — Gold-layer modeling and indexing strategy](0038-gold-layer-modeling-and-indexing-strategy.md) — `mart_`/`fct_` shapes (Kimball star deferred), serving=table+indexed / aggregate=view, Postgres FTS search, dbt `config(indexes=)` mechanism, Phase-7 profiling follow-up *(Accepted — ratified at the #62 merge)*
 
 ### Pipeline, extraction, and transformation
 
@@ -50,6 +50,12 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0028 — Backfill and historical re-extraction semantics](0028-backfill-historical-reextraction-semantics.md) — three named mechanisms (deep rescan, R2 replay, manifest backfill) with idempotency and silver-layer rules
 - [0037 — Firm resolution runs as a Python stage, not in-warehouse SQL/pg_trgm](0037-firm-resolution-python-stage-not-sql-fuzzy.md) — scoped exception to ADR 0011; RapidFuzz clustering + FEI forced-merges in `src/enrichment/` → `firm_crosswalk` dbt source; rejects pg_trgm/fuzzystrmatch with reasoning
 
+### Serving and presentation (built as separate repos post-go-live)
+
+- [0024 — Serving-layer API design](0024-serving-layer-api-design.md) — FastAPI + SQLAlchemy-Core-async over the gold marts; four endpoints; keyset pagination; no star (`fct_*` is the dashboard layer)
+- [0025 — API deployment target](0025-api-deployment-target.md) — Fly.io (Render fallback; Cloudflare Workers rejected — Pyodide/WASM can't run asyncpg)
+- [0039 — Frontend framework](0039-frontend-framework.md) — Astro (islands) on a free static host
+
 ### Tooling and development
 
 - [0015 — Testing strategy](0015-testing-strategy.md) — unit / integration (VCR) / e2e pyramid + dbt tests
@@ -59,6 +65,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0019 — License: MIT](0019-license-mit.md)
 - [0021 — Structured logging with structlog](0021-structured-logging.md) — correlation-ID propagation via contextvars, stdlib bridge, JSON to stdout
 - [0029 — Application observability and alerting: v1 stance and upgrade triggers](0029-application-observability-and-alerting.md) — formalizes the v1 deferral with named upgrade triggers
+- [0040 — Dedicated data-quality framework: Soda Core](0040-data-quality-framework-soda-core.md) — bronze freshness/anomaly/schema checks complementing dbt's transform-layer tests (scoped to not duplicate dbt)
 
 ---
 
@@ -87,8 +94,8 @@ A new ADR is written when someone reading the code six months later would ask "w
 21. [Structured logging with structlog](0021-structured-logging.md)
 22. [FDA history endpoints empty; snapshot synthesis for all sources](0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md)
 23. [FDA deep rescan required; archive migration detected](0023-fda-deep-rescan-required-archive-migration-detected.md)
-24. *(reserved for Phase 8 — Serving-layer API design)*
-25. *(reserved for Phase 8 — API deployment target)*
+24. [Serving-layer API design](0024-serving-layer-api-design.md)
+25. [API deployment target](0025-api-deployment-target.md)
 26. [Lifecycle tracking via per-run snapshot-presence manifest](0026-lifecycle-tracking-snapshot-presence-manifest.md)
 27. [Bronze keeps storage-forced transforms only; value-level normalization moves to silver](0027-bronze-storage-forced-transforms-only.md)
 28. [Backfill and historical re-extraction semantics](0028-backfill-historical-reextraction-semantics.md)
@@ -97,11 +104,13 @@ A new ADR is written when someone reading the code six months later would ask "w
 31. [Silver-row fragmentation strategy: per-source surrogate keys, drift detection, reconciliation tiers](0031-silver-row-fragmentation-strategy.md)
 32. [USDA establishment `latest_mpi_active_date` hash exclusion (upstream heartbeat fields)](0032-usda-establishment-heartbeat-field-hash-exclusion.md)
 33. [Silver row versioning via SCD on stable anchor](0033-silver-row-versioning-via-scd-on-stable-anchor.md)
-34. [NHTSA silver v1.5 — Layer 3 migration cutover](0034-nhtsa-silver-v15-migration.md) *(Proposed — stub)*
-35. [Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) *(Proposed — W3 verdict written; build deferred to Phase 6)*
-36. [Cross-source canonical silver column naming](0036-cross-source-canonical-silver-naming.md) *(Proposed — W3 policy written; ratifies at merge)*
+34. [NHTSA silver v1.5 — Layer 3 migration cutover](0034-nhtsa-silver-v15-migration.md)
+35. [Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md)
+36. [Cross-source canonical silver column naming](0036-cross-source-canonical-silver-naming.md)
 37. [Firm resolution runs as a Python stage, not in-warehouse SQL/pg_trgm](0037-firm-resolution-python-stage-not-sql-fuzzy.md)
-38. [Gold-layer modeling and indexing strategy](0038-gold-layer-modeling-and-indexing-strategy.md) *(Proposed — ratifies at `feature/phase-6e-gold-and-test` merge)*
+38. [Gold-layer modeling and indexing strategy](0038-gold-layer-modeling-and-indexing-strategy.md)
+39. [Frontend framework](0039-frontend-framework.md)
+40. [Dedicated data-quality framework: Soda Core](0040-data-quality-framework-soda-core.md)
 
 ---
 
@@ -109,7 +118,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 When adding a new ADR:
 
-1. Pick the next sequential number. Current state: **0001–0033 filed (Accepted); 0034 a `Proposed` stub; 0035 + 0036 `Proposed` with their W3 content written 2026-06-02** (0035 = the SCD-applicability verdict, build architecture still deferred to Phase 6; 0036 = the canonical-naming policy + D1–D7, ratifies at `feature/silver-field-remap` merge); **0037 filed (Accepted) 2026-06-04** (firm resolution as a Python stage); **0038 filed (Proposed) 2026-06-07** (gold-layer modeling + indexing strategy; ratifies at `feature/phase-6e-gold-and-test` merge). **0024 and 0025 remain reserved for Phase 8** (serving-layer API design and API deployment target — see `project_scope/implementation_plan.md` Phase 8). **The next free number is 0039.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
+1. Pick the next sequential number. Current state: **0001–0040 all filed and Accepted.** 0024 (serving-layer API design), 0025 (API deployment target), 0039 (frontend framework), and 0040 (data-quality framework — Soda Core) were filed 2026-06-09 on the phase-7 branch; 0034/0035/0036/0038 were ratified Accepted at their merges (#62 / #59 / #58 / #62). The serving/presentation ADRs (0024/0025/0039) govern the **separate** API + website repos built after go-live (there is no in-repo Phase 8/9). **The next free number is 0041.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
 2. File name: `NNNN-kebab-case-title.md`.
 3. Use the standard template (see any existing ADR as a model).
 4. Add an entry under the appropriate topic above **and** in the numeric index.
