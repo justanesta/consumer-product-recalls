@@ -53,6 +53,7 @@ from src.bronze.loader import BronzeLoader
 from src.config.db import make_engine
 from src.extractors._base import (
     AuthenticationError,
+    ExtractionAbortedError,
     ExtractionError,
     QuarantineRecord,
     RateLimitError,
@@ -382,9 +383,30 @@ class FdaPressReleaseExtractor(FdaIresExtractor[FdaPressReleaseRecord]):
             self._capture_error_response(url, response)
             raise RateLimitError(retry_after=retry_after)
 
-        # Anti-abuse: iRES redirects throttled requests (302) to an HTML apology page.
-        # Raise ExtractionError so tenacity does NOT retry — retries deepen the throttle.
-        if "text/html" in response.headers.get("Content-Type", ""):
+        is_html = "text/html" in response.headers.get("Content-Type", "")
+
+        # A 5xx WITH an HTML body is a TRANSIENT origin-side error, exactly like a plain 5xx
+        # below: Akamai serves a cached "Accessdata Error" failover page (from NetStorage, no
+        # Retry-After) when the iRES origin hiccups. VERIFIED 2026-06-08 from the captured 503
+        # body — distinct from the anti-abuse FINGERPRINT block (a 302→apology page) handled
+        # next; see finding N.1 in documentation/fda/api_observations.md. Raise
+        # TransientExtractionError so the per-event retry backs off and recovers a brief blip in
+        # place; a sustained one escapes to run_checkpointed's cooldown+resume. (This is the
+        # misclassification that crashed the overnight seed on one HTTP 503; the re-run replayed
+        # the same batch clean, confirming recovery.)
+        if is_html and 500 <= response.status_code <= 599:
+            self._capture_error_response(url, response)
+            raise TransientExtractionError(
+                f"FDA iRES origin returned HTTP {response.status_code} with an HTML body "
+                f"(transient 'Accessdata Error' failover page; event {event_id}). "
+                "Backing off and retrying."
+            )
+
+        # Anti-abuse FINGERPRINT block: iRES 302-redirects a rejected client to an HTML apology
+        # page (followed to a 2xx here). NOT rate-driven — the client identity is being refused,
+        # so fast retries won't help and only deepen the block. Raise ExtractionError (unretried
+        # by both tenacity layers); the driver applies a long cooldown / trips the breaker.
+        if is_html:
             self._capture_error_response(url, response)
             raise ExtractionError(
                 f"FDA anti-abuse throttle detected (HTTP {response.status_code}, HTML in "
@@ -487,6 +509,16 @@ class FdaPressReleaseCheckpointedSeedLoader(FdaPressReleaseDeepRescanLoader):
 
     batch_size: int = _DEFAULT_SEED_BATCH_SIZE
     since: date | None = None
+
+    # Self-healing driver knobs (overnight, unattended). On a transient/throttle batch
+    # failure the driver sleeps an escalating cooldown — base * 2**(n-1), capped — and
+    # re-runs the batch (resuming from the committed cursor; idempotent under the dedup
+    # contract) instead of aborting the sweep. After max_consecutive_failures it trips a
+    # circuit breaker and raises, so a genuinely-dead API surfaces (cursor preserved →
+    # re-runnable) rather than hammering. Cap defaults to the documented "wait >=30 min".
+    cooldown_base_seconds: float = 120.0
+    cooldown_max_seconds: float = 1800.0
+    max_consecutive_failures: int = 6
 
     _change_type: str = PrivateAttr(default="historical_seed")
     _last_batch_event_count: int = PrivateAttr(default=0)
@@ -665,16 +697,32 @@ class FdaPressReleaseCheckpointedSeedLoader(FdaPressReleaseDeepRescanLoader):
         change_type: str = "historical_seed",
         batch_size: int | None = None,
         since: date | None = None,
+        cooldown_base_seconds: float | None = None,
+        cooldown_max_seconds: float | None = None,
+        max_consecutive_failures: int | None = None,
     ) -> dict[str, Any]:
-        """Sweep to completion in resumable recent-first batches.
+        """Sweep to completion in resumable recent-first batches, self-healing on throttles.
 
         Idempotent across re-runs: resumes from the committed cursor; a ``complete``
-        checkpoint is a no-op. Each batch is a ``run()`` (its own ``extraction_runs`` row); a
-        deterministic/throttle error in a batch propagates (the cursor stays at the last good
-        batch, so re-running resumes there).
+        checkpoint is a no-op. Each batch is a ``run()`` (its own ``extraction_runs`` row).
+
+        A **transient/throttle** failure in a batch (5xx, network drop, the Akamai 503-HTML
+        load-shed, or a sustained fingerprint block) is caught: the driver sleeps an escalating
+        cooldown (``cooldown_base_seconds * 2**(n-1)``, capped at ``cooldown_max_seconds``) and
+        re-runs the batch — which re-reads the committed cursor and re-fetches it (idempotent
+        under the dedup contract). After ``max_consecutive_failures`` consecutive failures it
+        trips a **circuit breaker** and raises (cursor preserved → re-runnable). A
+        **deterministic** failure (``AuthenticationError`` / ``ExtractionAbortedError``) is NOT
+        retried — a cooldown can't change its outcome, so it surfaces immediately.
         """
         if batch_size is not None:
             self.batch_size = batch_size
+        if cooldown_base_seconds is not None:
+            self.cooldown_base_seconds = cooldown_base_seconds
+        if cooldown_max_seconds is not None:
+            self.cooldown_max_seconds = cooldown_max_seconds
+        if max_consecutive_failures is not None:
+            self.max_consecutive_failures = max_consecutive_failures
         self.since = since
         self._change_type = change_type
 
@@ -687,8 +735,39 @@ class FdaPressReleaseCheckpointedSeedLoader(FdaPressReleaseDeepRescanLoader):
         total_loaded = 0
         total_events = 0
         batches = 0
+        consecutive_failures = 0
         while True:
-            result = self.run(change_type=change_type)
+            try:
+                result = self.run(change_type=change_type)
+            except (AuthenticationError, ExtractionAbortedError):
+                # Deterministic — auth is wrong / data is bad. A cooldown+resume cannot change
+                # the outcome, so surface it now (run() already recorded the run as failed).
+                raise
+            except ExtractionError as exc:
+                consecutive_failures += 1
+                if consecutive_failures > self.max_consecutive_failures:
+                    logger.error(
+                        "fda_press_releases.seed.circuit_open",
+                        consecutive_failures=consecutive_failures,
+                        max_consecutive_failures=self.max_consecutive_failures,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                    raise
+                cooldown = min(
+                    self.cooldown_base_seconds * 2 ** (consecutive_failures - 1),
+                    self.cooldown_max_seconds,
+                )
+                logger.warning(
+                    "fda_press_releases.seed.batch_failed_cooling_down",
+                    consecutive_failures=consecutive_failures,
+                    cooldown_seconds=cooldown,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                time.sleep(cooldown)
+                continue
+            consecutive_failures = 0
             batches += 1
             total_loaded += result.records_loaded
             total_events += self._last_batch_event_count

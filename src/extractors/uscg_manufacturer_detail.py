@@ -7,7 +7,7 @@ exposes beyond the 5 listing fields, including the source-native succession
 lineage (``Past Company 1-3 (OOB year)``, ``In Business``, ``Out of Business``,
 ``Date Modified``, ``Parent MIC``, ``DBA``) and the full untruncated address.
 
-Architecture (``project_scope/phase-5d-uscg-manufacturers-detail.md``):
+Architecture (``project_scope/archive/phase-5d-uscg-manufacturers-detail.md``):
 
 - **Separate source/table** from the listing-only ``uscg_manufacturers``
   (this is bronze-capture only; the SCD-2 silver dim + the time-sensitive

@@ -1,7 +1,7 @@
 source_name: uscg_manufacturer_details
 source_type: html_scraping
 # Phase 5d Step 7 (detail) — Path B detail-page enrichment. Plan:
-# project_scope/phase-5d-uscg-manufacturers-detail.md.
+# project_scope/archive/phase-5d-uscg-manufacturers-detail.md.
 #
 # start_url is the canonical base detail URL. NOTE: unlike the listing source,
 # this extractor does NOT paginate start_url — it sources a work-list of

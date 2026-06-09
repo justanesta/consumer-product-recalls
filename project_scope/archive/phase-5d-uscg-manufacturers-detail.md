@@ -4,7 +4,7 @@
 - **Scope class:** **bronze-capture only** (per `project_scope/implementation_plan.md:490`). The SCD-2 silver model and the recall→manufacturer time-aware join are **out of scope** on this branch and deferred to Phase 6 (see §11).
 - **Branch:** `feature/uscg-manufacturers-detail-addition`.
 - **Parent plan:** `project_scope/implementation_plan.md` Phase 5d Step 7 follow-up (lines 482–490).
-- **Sibling plan:** `project_scope/phase-5d-uscg-manufacturers.md` (the listing-only Step 7 plan this mirrors).
+- **Sibling plan:** `project_scope/archive/phase-5d-uscg-manufacturers.md` (the listing-only Step 7 plan this mirrors).
 - **Deferred-half home (Phase 6):** `implementation_plan.md:707` (cross-source SCD-2 item) + `project_scope/archive/silver_v15_migration_plan.md:229–247` (cross-source application section).
 - **Sequencing doc:** `project_scope/branch_sequencing_strategy.md` (updated alongside this doc to register the branch).
 - **Empirical source-of-truth:** `documentation/uscg/manufacturer_scraping_observations.md` §M (M.1–M.6) + `documentation/uscg/field_audit_2026_w22.md`.
@@ -246,7 +246,9 @@ Every captured field earns its place in the final product (FastAPI per Phase 8 /
 - `project_scope/implementation_plan.md:482–490` (Step 7 follow-up + branch scope), `:704` (`recall_event_history` / re-baseline), `:707` (cross-source SCD-2 item + flag-as-time-sensitive), `:715` (Policy C), Phase 8/9 (FastAPI/frontend).
 - `project_scope/archive/silver_v15_migration_plan.md:128` (ADR 0034 reservation), `:229–247` (cross-source application).
 - `project_scope/archive/phase-6-execution-plan.md` (Phase 6b firm resolution + `match_confidence`; sequencing constraints).
-- `project_scope/phase-5d-uscg-manufacturers.md` (sibling listing-only plan); `project_scope/branch_sequencing_strategy.md`.
+- `project_scope/archive/phase-5d-uscg-manufacturers.md` (sibling listing-only plan); `project_scope/branch_sequencing_strategy.md`.
+- `project_scope/archive/phase-6-execution-plan.md` (Phase 6b firm resolution + `match_confidence`; sequencing constraints).
+- `project_scope/archive/phase-5d-uscg-manufacturers.md` (sibling listing-only plan); `project_scope/branch_sequencing_strategy.md`.
 - `documentation/uscg/manufacturer_scraping_observations.md` §M (M.1–M.6); `documentation/uscg/field_audit_2026_w22.md` §3/§4/§6/§8.
 - ADRs: 0007 (bronze snapshot pruning — `silver_snapshots` exemption), 0014 (schema policy), 0027 (bronze storage-forced), 0031 (USCG TBD per-source row), 0033 (SCD-on-stable-anchor + ADR 0034 reservation), **0035 (to be filed — cross-source SCD-2)**.
 - Code: `src/extractors/uscg_manufacturer.py:362-367,526-527,550-568,715-754`; `src/extractors/uscg.py:224-253,605-660,629-634`; `src/extractors/_html_scraping.py`; `src/schemas/uscg.py:83-104`; `src/config/source_registry.py`; `src/cli/main.py:52-77,186-187,267-268`; `scripts/uscg/probe_mic_reassignment_rate.py:91-204`.

@@ -221,7 +221,7 @@ The Step 7 USCG manufacturers directory ingestion (16,263 manufacturer records s
 - **Cross-source coverage: 99.44%** (714 of 718 distinct recall MICs resolve to a directory entry). 4 unresolvable orphans, all real: `111` (retired regulatory code per Finding I, 30 recall rows reference), `999` (17 rows, sentinel), `777` (1 row, sentinel), `N/A` (1 row, literal "N/A" string).
 - **Case-sensitivity finding (silver-only):** USCG recalls bronze contains 7 distinct lowercase MIC values (`cec`, `blb`, `kis`, `lbb`, `ser`, `vky`, `zep`) that are case-mismatched against the directory's all-uppercase canonical form. The case-insensitive JOIN handles them cleanly; bronze still preserves verbatim per ADR 0027.
 
-Measurement script: `scripts/sql/uscg_manufacturers/silver/measure_rescue_and_coverage.sql`. Implementation files: `dbt/models/silver/firm.sql:99-130` (USCG branch with directory LEFT JOIN) + `dbt/models/silver/recall_event_firm.sql:85-103` (USCG branch in lockstep). Plan: `project_scope/phase-5d-uscg-manufacturers.md`. Empirical observations: `documentation/uscg/manufacturer_scraping_observations.md` §L.
+Measurement script: `scripts/sql/uscg_manufacturers/silver/measure_rescue_and_coverage.sql`. Implementation files: `dbt/models/silver/firm.sql:99-130` (USCG branch with directory LEFT JOIN) + `dbt/models/silver/recall_event_firm.sql:85-103` (USCG branch in lockstep). Plan: `project_scope/archive/phase-5d-uscg-manufacturers.md`. Empirical observations: `documentation/uscg/manufacturer_scraping_observations.md` §L.
 
 The "Option 3 soft-fail" decision still applies for the 5 mic-only-no-name rows that DON'T have a directory entry. Phase 6b can revisit if those retired-MIC rows become recoverable via a synthetic-anchor strategy.
 

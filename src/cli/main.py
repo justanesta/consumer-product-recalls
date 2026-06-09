@@ -92,7 +92,7 @@ _LOOKBACK_NO_OP_MESSAGES: dict[str, str] = {
     ),
     "uscg_manufacturer_details": (
         "uscg_manufacturer_details: --lookback-days has no effect (work-list is a "
-        "listing-delta cursor over bronze; see phase-5d-uscg-manufacturers-detail.md)."
+        "listing-delta cursor over bronze; see archive/phase-5d-uscg-manufacturers-detail.md)."
     ),
     "fda_press_releases": (
         "fda_press_releases: --lookback-days is not wired; the press-release watermark "
@@ -391,6 +391,28 @@ def deep_rescan(
             ),
         ),
     ] = None,
+    cooldown_base_seconds: Annotated[
+        float | None,
+        typer.Option(
+            "--cooldown-base-seconds",
+            help=(
+                "fda_press_releases --checkpointed only: first cooldown after a transient/"
+                "throttle batch failure (default 120). Doubles each consecutive failure, "
+                "capped at 30 min, before the batch resumes from the committed cursor."
+            ),
+        ),
+    ] = None,
+    max_consecutive_failures: Annotated[
+        int | None,
+        typer.Option(
+            "--max-consecutive-failures",
+            help=(
+                "fda_press_releases --checkpointed only: consecutive failed batches before the "
+                "circuit breaker aborts the sweep (default 6). The cursor is preserved, so a "
+                "re-run resumes cleanly."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run a historical / deep-rescan load for a given source over a date window.
 
@@ -462,10 +484,20 @@ def deep_rescan(
         if batch_size is not None and batch_size < 1:
             typer.echo("--batch-size must be >= 1", err=True)
             raise typer.Exit(code=1)
+        if cooldown_base_seconds is not None and cooldown_base_seconds <= 0:
+            typer.echo("--cooldown-base-seconds must be > 0", err=True)
+            raise typer.Exit(code=1)
+        if max_consecutive_failures is not None and max_consecutive_failures < 1:
+            typer.echo("--max-consecutive-failures must be >= 1", err=True)
+            raise typer.Exit(code=1)
         since_date = date.fromisoformat(since) if since else None
         seed = FdaPressReleaseCheckpointedSeedLoader(**kwargs)
         summary = seed.run_checkpointed(
-            change_type=change_type, batch_size=batch_size, since=since_date
+            change_type=change_type,
+            batch_size=batch_size,
+            since=since_date,
+            cooldown_base_seconds=cooldown_base_seconds,
+            max_consecutive_failures=max_consecutive_failures,
         )
         typer.echo(
             "fda_press_releases checkpointed seed: "

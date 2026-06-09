@@ -128,7 +128,7 @@ Open the PR (`gh pr create`, on explicit request) summarizing the ERD set, DAG/c
 **Create:** `documentation/database_overview.md`, `documentation/diagrams/README.md`.
 **Edit:** `documentation/architecture.md`, `documentation/data_schemas.md`, `documentation/operations.md`, `documentation/silver_design_notes.md`, `documentation/commands.md`, `documentation/gold_design_notes.md`, `documentation/decisions/0010-ingestion-cadence-and-github-actions-cron.md`, `TODO.md`, `project_scope/implementation_plan.md`, `pyproject.toml`.
 **Mark superseded (header note only):** `documentation/diagrams/pipeline-architecture.drawio` + `.svg`, `documentation/diagrams/orchestration-schedule.drawio` + `.svg`.
-**Read-for-facts (don't edit):** `dbt/models/silver/_silver.yml`, `dbt/models/gold/_gold.yml`, `src/config/source_registry.py`, `config/sources/*.yaml`, `documentation/decisions/0023-*.md`, `project_scope/phase-5d-uscg-manufacturers-detail.md`.
+**Read-for-facts (don't edit):** `dbt/models/silver/_silver.yml`, `dbt/models/gold/_gold.yml`, `src/config/source_registry.py`, `config/sources/*.yaml`, `documentation/decisions/0023-*.md`, `project_scope/archive/phase-5d-uscg-manufacturers-detail.md`.
 
 ## Verification
 

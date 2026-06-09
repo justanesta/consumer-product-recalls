@@ -6,7 +6,7 @@
 - **Superseded by:** —
 - **Generalizes:** [ADR 0033](0033-silver-row-versioning-via-scd-on-stable-anchor.md) (SCD-on-stable-anchor, proven NHTSA-first for `recall_product`) to the silver *firm* dimensions. ADR 0033's "Cross-source implications → USCG" subsection is the design seed for this ADR.
 - **Clarifies / companion changes (land in PR 6b.5):** [ADR 0031](0031-silver-row-fragmentation-strategy.md) — fill its TBD USCG per-source row; [ADR 0007](0007-lineage-via-bronze-snapshots-and-content-hashing.md) — exempt `silver_snapshots` from bronze-snapshot pruning.
-- **Companion documents:** `project_scope/phase-5d-uscg-manufacturers-detail.md` §11 (the USCG SCD-2 build spec); `project_scope/archive/phase-6b-execution-plan.md` PR 6b.5; `project_scope/implementation_plan.md` Phase 6 (cross-source SCD-2 item, `:707`, Policy C `:715`); `project_scope/archive/silver_v15_migration_plan.md` cross-source section; `documentation/audit/scd_field_designations.md` (the per-field NEED/BENEFIT verdicts + validating monitors).
+- **Companion documents:** `project_scope/archive/phase-5d-uscg-manufacturers-detail.md` §11 (the USCG SCD-2 build spec); `project_scope/archive/phase-6b-execution-plan.md` PR 6b.5; `project_scope/implementation_plan.md` Phase 6 (cross-source SCD-2 item, `:707`, Policy C `:715`); `project_scope/archive/silver_v15_migration_plan.md` cross-source section; `documentation/audit/scd_field_designations.md` (the per-field NEED/BENEFIT verdicts + validating monitors).
 
 ## Context
 

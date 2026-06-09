@@ -89,6 +89,17 @@ Resumable: a throttle/crash/sleep exits the process; **re-run the exact same com
 continues from the committed DB cursor. `--batch-size` defaults to 250 (~5 min/batch). After it
 finishes, verify idempotency once: re-run → expect `already complete` (or 0 new rows).
 
+> **Update 2026-06-08 (v0.20.1):** the driver is now **self-healing**, superseding the original
+> "fail-fast on a throttle" design in S2/S3. A transient batch failure (network drop, a plain 5xx,
+> or a **`503`-with-HTML** — a cached Akamai NetStorage "Accessdata Error" origin-failover page,
+> verified 2026-06-08 from the captured response, which the first overnight run mis-classified as the
+> permanent fingerprint block and crashed on) is caught: the driver sleeps an escalating cooldown
+> (`--cooldown-base-seconds`, default 120 s, doubling, capped at 30 min) and re-runs the batch from
+> the committed cursor; after `--max-consecutive-failures` (default 6) it trips a circuit breaker and
+> exits cleanly (still resumable). So an unattended overnight run survives intermittent origin errors
+> rather than dying on the first blip; the re-run replayed the failed batch (incl. event 91085) clean.
+> See `documentation/fda/api_observations.md` finding N.1 and the `documentation/operations.md` runbook.
+
 ## Universal deep-rescan tie-in (new vs already owned)
 
 `deep-rescan-reliability-plan.md` already owns and shipped: Neon disconnect retry (**W5**), `NullPool`
