@@ -24,22 +24,21 @@ def _clear_structlog_context() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_configure_logging_sets_root_logger_to_given_level() -> None:
-    configure_logging("DEBUG")
-    root = logging.getLogger()
-    assert root.level == logging.DEBUG
-
-
-def test_configure_logging_sets_root_logger_to_info_by_default() -> None:
-    configure_logging()
-    root = logging.getLogger()
-    assert root.level == logging.INFO
-
-
-def test_configure_logging_sets_root_logger_to_warning_level() -> None:
-    configure_logging("WARNING")
-    root = logging.getLogger()
-    assert root.level == logging.WARNING
+@pytest.mark.parametrize(
+    "level_arg,expected",
+    [
+        ("DEBUG", logging.DEBUG),
+        (None, logging.INFO),  # no arg → INFO default
+        ("WARNING", logging.WARNING),
+    ],
+)
+def test_configure_logging_sets_root_logger_to_level(level_arg: str | None, expected: int) -> None:
+    # ``None`` exercises the no-argument default path (INFO).
+    if level_arg is None:
+        configure_logging()
+    else:
+        configure_logging(level_arg)
+    assert logging.getLogger().level == expected
 
 
 def test_configure_logging_clears_existing_handlers_before_adding_new_one(
