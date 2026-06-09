@@ -1,18 +1,21 @@
-name: Extract USDA FSIS Recalls
+name: Extract USCG Manufacturers
 
-# USDA FSIS recall extractor (Phase 5b). No cron yet — cron turns on in Phase 7.
-# USDA has no usable server-side date filter (Finding D); --lookback-days is
-# accepted for parity but ignored. The extractor pulls the full ~2,001-record
-# dataset every run; bronze content-hash dedup handles idempotency.
+# USCG manufacturer-directory listing extract (short-circuit). Slow-changing
+# reference data — weekly is ample. The page-0 Records-Found + content-hash
+# precheck makes a no-change run cheap. --lookback-days has no effect (page-0
+# Records-Found precheck + full directory scrape on change); accepted for
+# parity. Bronze content-hash dedup handles idempotency. Runs Mon 01:00, ahead
+# of the Tier-1 detail extract (Mon 01:15) that derives its work-list from this
+# listing's bronze delta.
 
 on:
   # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
   schedule:
-    - cron: "20 2 * * *" # daily 02:20 UTC (ADR 0010 grid)
+    - cron: "0 1 * * 1" # weekly Mon 01:00 UTC (ADR 0010 grid)
   workflow_dispatch:
     inputs:
       lookback_days:
-        description: "Ignored for USDA (full-dump every run); accepted for parity"
+        description: "Ignored for uscg_manufacturers; accepted for parity"
         required: false
         default: ""
 
@@ -40,12 +43,12 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
-      - name: Run USDA extractor
+      - name: Run USCG manufacturers extractor
         run: |
           if [[ -n "${{ github.event.inputs.lookback_days }}" ]]; then
-            uv run recalls extract usda --lookback-days "${{ github.event.inputs.lookback_days }}"
+            uv run recalls extract uscg_manufacturers --lookback-days "${{ github.event.inputs.lookback_days }}"
           else
-            uv run recalls extract usda
+            uv run recalls extract uscg_manufacturers
           fi
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}

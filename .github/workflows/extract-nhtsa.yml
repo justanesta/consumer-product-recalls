@@ -13,11 +13,15 @@ name: Extract NHTSA Flat-File Recalls
 # do not apply (Finding G).
 
 on:
+  # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
+  schedule:
+    - cron: "40 2 * * 1-5" # 02:40 UTC Mon-Fri — flat file updates on weekdays (ADR 0010 grid)
   workflow_dispatch:
 
 jobs:
   extract:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0

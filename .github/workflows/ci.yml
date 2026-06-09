@@ -34,6 +34,12 @@ jobs:
       - name: Type check (pyright)
         run: uv run pyright
 
+      # Defense in depth (ADR 0018 §3): the same hooks run as pre-commit locally,
+      # but CI re-runs them on every PR so a developer who skipped
+      # `pre-commit install` (or used `--no-verify`) still gets caught.
+      - name: Pre-commit (all hooks)
+        run: uv run pre-commit run --all-files
+
       - name: Run tests
         run: uv run pytest --cov-fail-under=85
         env:
@@ -42,6 +48,10 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
+      # TODO(C24): add e2e Neon-branch smoke once tests/conftest.py test_db_url
+      # fixture lands (phase-7 C23). 1-2 smoke tests on an ephemeral Neon branch
+      # (ADR 0018 §1), kept under the 10-min PR-check budget.
 
       - name: dbt deps
         run: uv run dbt deps --project-dir dbt/ --profiles-dir dbt/

@@ -1,28 +1,21 @@
-name: Deep Rescan CPSC Recalls
+name: Deep Rescan USCG Manufacturers
 
-# CPSC's deep-rescan path differs from the incremental path in two ways:
-#   1. Queries a fixed LastPublishDateStart floor (1970-01-01) instead of the
-#      watermark, and bypasses the _MAX_INCREMENTAL_RECORDS guard — the CPSC API
-#      has no end-date param, so a single unbounded query returns the entire
-#      ~9,800-record corpus (earliest LastPublishDate is 1975-04-07; RecallDate
-#      goes back to 1973). See CpscDeepRescanLoader.
-#   2. Never updates source_watermarks — the incremental extractor owns the
-#      watermark exclusively. Deep rescan is purely additive to bronze;
-#      content-hash dedup absorbs duplicate rows naturally.
+# Monthly safety-net for the USCG manufacturer-directory short-circuit
+# incremental path. The weekly incremental short-circuits on no-change weeks,
+# so a back-dated edit to a directory row could slip past it; the full
+# directory re-scrape here re-verifies the whole listing. Purely additive to
+# bronze — content-hash dedup absorbs duplicate rows and the incremental
+# extractor owns source_watermarks, so a rescan stays invisible to freshness
+# alerts.
 #
-# Used in two modes:
-#   - One-time historical seed: dispatch with --change-type=historical_seed
-#     when first standing up the bronze table.
-#   - Weekly defense-in-depth: dispatch (or Phase 7 weekly cron) with the
-#     default --change-type=routine to detect any back-dated edits CPSC applies.
-#
-# No --start-date / --end-date inputs and no --lookback-days: the deep-rescan
-# floor is fixed in code. No CPSC auth secrets — public source, no key required.
+# No --start-date / --end-date inputs: the directory has no date-range query
+# surface (the deep rescan re-scrapes the full listing). No USCG auth secrets —
+# public scraped source, no key required.
 
 on:
   # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
   schedule:
-    - cron: "0 5 * * 0" # weekly Sun 05:00 UTC (ADR 0010 grid)
+    - cron: "15 6 1 * *" # monthly, 06:15 UTC on the 1st (ADR 0010 grid)
   workflow_dispatch:
     inputs:
       change_type:
@@ -66,11 +59,11 @@ jobs:
       - run: uv python install
       - run: uv sync --frozen
 
-      - name: Run CPSC deep rescan
+      - name: Run USCG manufacturers deep rescan
         # On a schedule trigger the dispatch input is absent (""), so default to
         # routine — a scheduled rescan is a routine re-verification. An operator
         # dispatching historical_seed still wins.
-        run: uv run recalls deep-rescan cpsc --change-type "${{ github.event.inputs.change_type || 'routine' }}"
+        run: uv run recalls deep-rescan uscg_manufacturers --change-type "${{ github.event.inputs.change_type || 'routine' }}"
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}

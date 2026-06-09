@@ -1,18 +1,19 @@
-name: Extract USDA FSIS Recalls
+name: Extract USCG Recalls
 
-# USDA FSIS recall extractor (Phase 5b). No cron yet — cron turns on in Phase 7.
-# USDA has no usable server-side date filter (Finding D); --lookback-days is
-# accepted for parity but ignored. The extractor pulls the full ~2,001-record
-# dataset every run; bronze content-hash dedup handles idempotency.
+# USCG boat-recall incremental extract (short-circuit). The two-gate precheck
+# (page-0 Records-Found + content hash) makes a no-change day ~one page fetch,
+# so daily is nearly free and a new safety-relevant recall is caught within a
+# day. --lookback-days has no effect (page-0 precheck + full HTML scrape on
+# change); accepted for parity. Bronze content-hash dedup handles idempotency.
 
 on:
   # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
   schedule:
-    - cron: "20 2 * * *" # daily 02:20 UTC (ADR 0010 grid)
+    - cron: "30 2 * * *" # daily 02:30 UTC (ADR 0010 grid)
   workflow_dispatch:
     inputs:
       lookback_days:
-        description: "Ignored for USDA (full-dump every run); accepted for parity"
+        description: "Ignored for uscg; accepted for parity"
         required: false
         default: ""
 
@@ -40,12 +41,12 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
-      - name: Run USDA extractor
+      - name: Run USCG extractor
         run: |
           if [[ -n "${{ github.event.inputs.lookback_days }}" ]]; then
-            uv run recalls extract usda --lookback-days "${{ github.event.inputs.lookback_days }}"
+            uv run recalls extract uscg --lookback-days "${{ github.event.inputs.lookback_days }}"
           else
-            uv run recalls extract usda
+            uv run recalls extract uscg
           fi
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}

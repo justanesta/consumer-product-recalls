@@ -1,12 +1,18 @@
 name: Extract USCG Manufacturer Details
 
-# USCG manufacturer detail-page enrichment (Phase 5d Step 7, Path B). No cron yet
-# — cron turns on in Phase 7. --lookback-days is accepted for parity but ignored:
-# the work-list is a listing-delta cursor over bronze (the incremental run fetches
-# detail pages only for MICs whose listing row changed since their last detail
-# fetch, or were never fetched). Bronze content-hash dedup handles idempotency.
+# USCG manufacturer detail-page enrichment (Phase 5d Step 7, Path B). This is the
+# Tier-1 *incremental* detail extract — cron-safe (only the Tier-2 full sweep in
+# deep-rescan-uscg-manufacturers-detail.yml is the >6h problem). --lookback-days is
+# accepted for parity but ignored: the work-list is a listing-delta cursor over
+# bronze (the incremental run fetches detail pages only for MICs whose listing row
+# changed since their last detail fetch, or were never fetched). Bronze
+# content-hash dedup handles idempotency. Runs Mon 01:15, after the manufacturers
+# listing extract at Mon 01:00 — the listing-delta work-list dependency.
 
 on:
+  # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
+  schedule:
+    - cron: "15 1 * * 1" # weekly Mon 01:15 UTC, after the listing at 01:00 (ADR 0010 grid)
   workflow_dispatch:
     inputs:
       lookback_days:
@@ -17,6 +23,7 @@ on:
 jobs:
   extract:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
