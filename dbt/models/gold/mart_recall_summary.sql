@@ -86,6 +86,7 @@ select
     re.distribution_scope,
     re.distribution_states,
     rda.distribution_state_codes,
+    rda.distribution_country_codes,
     re.hazards,
     re.product_upcs,
     re.corrective_action,

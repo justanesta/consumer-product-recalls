@@ -22,6 +22,7 @@
 - **v1 sketch:** regex leading `[0-9,]+` + trailing unit token → `quantity_value` numeric + `quantity_unit` canonical; NULL both where ambiguous (cleaned text preserved). ~66% immediate coverage; a `quantity_basis` flag (per-unit vs total/weight) for the totals.
 
 ### FDA — distribution-area → `distribution_states[]` + `distribution_countries[]`
+- **✅ SHIPPED 2026-06-09 (closes #58):** `recall_distribution_area.distribution_state_codes[]` (Phase 6e) **and** `distribution_country_codes[]` (C12, this branch — ISO-3166-1 alpha-2, FDA international-tail parse via the `country_iso` seed). The two-tier model is complete: coarse `distribution_scope` enum on `recall_event`; structured state + country arrays in the sidecar. Residual future work: the `fct_recalls_by_country` aggregate (world-map lens) is an additive follow-on, not built.
 - **Source:** `distribution_area_summary_txt` (bronze, captured). (a) ships the Tier-1 `distribution_scope` enum + the cleaned text; this is the **residual** structured extraction.
 - **Evidence** (Q4): **~33% carry parseable state content** — 17.4% single short region + 15.4% comma state-code lists (`AR, GA, IL, LA, MS, MO, OK, and TX`); 8.6% narrative-long; 11.2% mid. (47% are Nationwide/Worldwide, handled by the Tier-1 scope enum.)
 - **Cross-source synergy:** USDA recalls carry a more-structured `field_states` (already a firm-disambiguation signal) → a shared state-normalizer (name / 2-letter code / list → canonical array) serves FDA + USDA.

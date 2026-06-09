@@ -503,11 +503,14 @@ models:
 
   - name: recall_distribution_area
     description: >
-      Tier-2 structured distribution geography (Phase 6e geography foundation). One row per
-      recall_event (FDA + USDA) with distribution_state_codes (text[] of USPS 2-letter codes)
-      parsed precision-over-recall from the raw distribution text — FDA via a domestic-segment
-      free-text parse (international-section markers cut first), USDA via comma-token match.
-      recall_events with no parseable state have no row here (geography carried by
+      Tier-2 structured distribution geography (Phase 6e foundation; distribution_country_codes
+      added 2026-06-09, C12). One row per recall_event (FDA + USDA) with >=1 parseable US state OR
+      foreign country. distribution_state_codes (text[] of USPS 2-letter codes) is parsed
+      precision-over-recall from the domestic segment (international markers cut first);
+      distribution_country_codes (text[] of ISO-3166-1 alpha-2) from the international tail via the
+      country_iso seed (names-only, US-state-collision names excluded). Either array may be empty
+      (a country-only recall has empty state_codes[]; a domestic recall empty country_codes[]).
+      recall_events with no parseable geography have no row here (carried by
       recall_event.distribution_scope). Feeds fct_recalls_by_geography + mart_recall_summary.
     columns:
       - name: recall_event_id
@@ -519,5 +522,8 @@ models:
                 to: ref('recall_event')
                 field: recall_event_id
       - name: n_distribution_states
+        tests:
+          - not_null
+      - name: n_distribution_countries
         tests:
           - not_null
