@@ -4,12 +4,16 @@
 -- ADR 0038 — the window-function showpiece). Built on a DENSE month spine (generate_series over
 -- each source's min..max month, 0-filled) so the rolling windows and the lag(12) YoY are over
 -- contiguous calendar months, not just months that happened to have a recall.
+-- C11 (2026-06-09): the monthly grain comes from dim_date (lossless join on published_at::date),
+-- not an inline date_trunc. The per-source dense spine below still uses generate_series (it needs
+-- each source's own min..max month, which dim_date doesn't carry).
 with monthly as (
     select
-        date_trunc('month', published_at)::date as month,
-        source,
-        count(distinct recall_event_id)         as event_count
-    from {{ ref('recall_event') }}
+        dd.month_start                     as month,
+        re.source,
+        count(distinct re.recall_event_id) as event_count
+    from {{ ref('recall_event') }} re
+    join {{ ref('dim_date') }} dd on dd.date_day = re.published_at::date
     group by 1, 2
 ),
 

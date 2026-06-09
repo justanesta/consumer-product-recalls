@@ -116,10 +116,13 @@ announced/published), `dim_source` / `dim_classification` from the existing enum
 `fct_recall_event` / `fct_recall_product` carrying measures + dim-FKs; `recall_event_firm` becomes a
 factless bridge.
 
-**The one no-regret early piece is `dim_date`** — a generated calendar that replaces the `date_trunc`
-logic repeated inline across the nine `fct_*` models and unlocks fiscal/holiday calendars cheaply.
-**Decided 2026-06-08:** it will be built pre-Phase-8 regardless of the star call (tracked in
-`project_scope/implementation_plan.md`, Architectural follow-ups).
+**The one no-regret early piece is `dim_date`** — a generated calendar that replaces the inline
+`date_trunc` logic in the **five** date-grained `fct_*` models (by_month / by_year / by_week /
+monthly_trend / units; the other four `fct_*` carry no `date_trunc`) and unlocks fiscal/holiday
+calendars cheaply. **Built + wired 2026-06-09 (C10/C11):** `dim_date` (1960-01-01 .. current-year+2,
+dynamic; unique `date_day`) is built, and the five models join it on `published_at::date` (verified
+lossless — 0 null / 0 out-of-range — and output byte-identical to the prior `date_trunc` form). The
+full Kimball star stays deferred (above); `dim_date` was the no-regret slice.
 
 **When:** decide at Phase 8 framing — [ADR 0024](decisions/README.md) already owns "the relationship
 between API endpoints and dbt gold views" — once the website's feed + chart inventory are known.

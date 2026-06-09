@@ -29,13 +29,15 @@ with recall_units as (
     group by re.source, re.recall_event_id, re.published_at
 )
 
+-- C11 (2026-06-09): month period from dim_date (lossless join on published_at::date).
 select
-    source,
-    date_trunc('month', published_at)::date as period,
-    count(*)                                as recalls_with_units,
-    sum(units)                              as total_units,
-    round(avg(units))                       as avg_units_per_recall,
-    max(units)                              as max_units
-from recall_units
-group by source, date_trunc('month', published_at)
+    ru.source,
+    dd.month_start         as period,
+    count(*)               as recalls_with_units,
+    sum(ru.units)          as total_units,
+    round(avg(ru.units))   as avg_units_per_recall,
+    max(ru.units)          as max_units
+from recall_units ru
+join {{ ref('dim_date') }} dd on dd.date_day = ru.published_at::date
+group by ru.source, dd.month_start
 order by period desc, source
