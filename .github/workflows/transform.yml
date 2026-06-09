@@ -1,0 +1,109 @@
+name: Transform (dbt build + resolve-firms + snapshots)
+
+# Phase 7 silver/gold transform cron (ADR 0018 §2 — time-shifted cron, NOT
+# workflow_run). Runs daily at ~03:00 UTC, after the 02:xx extracts land bronze
+# (ADR 0010 2026-06-08 cron grid: 02:00 cpsc · 02:10 fda · 02:20 usda · 02:30
+# uscg · 02:40 nhtsa → 03:00 transform). If an extract is late or fails, this
+# sees yesterday's bronze for that source and dbt source-freshness assertions
+# surface the staleness as warnings — nothing crashes.
+#
+# Sequence (firm resolution sits BETWEEN two dbt builds so snapshots bank the
+# resolved firms):
+#   1. dbt build            — staging + silver (firm_crosswalk reads stg_* views)
+#   2. recalls resolve-firms — rebuild firm_crosswalk from all-source staging
+#   3. dbt build            — re-run silver/gold now that firm_crosswalk is fresh
+#   4. dbt snapshot         — bank SCD-2 versions over the resolved firms
+#   5. dbt test             — assertions over the finished silver/gold tree
+#
+# Runs against PROD Neon via repo secrets. The firm-sidecar rename (phase-7 C19)
+# MUST land before this banks the first SCD-2 edit-version (its zero-cost window
+# closes here) — see the C25/C19 ordering note in the phase-7 plan.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC daily, after the 02:xx extracts (ADR 0010)
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  transform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
+          [[ -n "$R2_BUCKET_NAME" ]] || (echo "::error::R2_BUCKET_NAME secret is missing" && exit 1)
+          [[ -n "$R2_ACCOUNT_ID" ]] || (echo "::error::R2_ACCOUNT_ID secret is missing" && exit 1)
+          [[ -n "$R2_ACCESS_KEY_ID" ]] || (echo "::error::R2_ACCESS_KEY_ID secret is missing" && exit 1)
+          [[ -n "$R2_SECRET_ACCESS_KEY" ]] || (echo "::error::R2_SECRET_ACCESS_KEY secret is missing" && exit 1)
+          [[ -n "$NEON_HOST" ]] || (echo "::error::NEON_HOST secret is missing" && exit 1)
+          [[ -n "$NEON_USER" ]] || (echo "::error::NEON_USER secret is missing" && exit 1)
+          [[ -n "$NEON_PASSWORD" ]] || (echo "::error::NEON_PASSWORD secret is missing" && exit 1)
+          [[ -n "$NEON_DBNAME" ]] || (echo "::error::NEON_DBNAME secret is missing" && exit 1)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          NEON_HOST: ${{ secrets.NEON_HOST }}
+          NEON_USER: ${{ secrets.NEON_USER }}
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
+
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: dbt deps
+        run: uv run dbt deps --project-dir dbt/ --profiles-dir dbt/
+        env:
+          NEON_HOST: ${{ secrets.NEON_HOST }}
+          NEON_USER: ${{ secrets.NEON_USER }}
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
+
+      - name: dbt build (staging + silver, pre-resolve)
+        run: uv run dbt build --exclude-resource-type test --project-dir dbt/ --profiles-dir dbt/
+        env:
+          NEON_HOST: ${{ secrets.NEON_HOST }}
+          NEON_USER: ${{ secrets.NEON_USER }}
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
+
+      - name: Resolve firms (rebuild firm_crosswalk from staging)
+        # Reads the stg_* views built above; truncate-reloads firm_crosswalk so the
+        # second dbt build + snapshot see the resolved canonical_firm_id mapping.
+        run: uv run recalls resolve-firms
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+
+      - name: dbt build (silver + gold, post-resolve)
+        run: uv run dbt build --exclude-resource-type test --project-dir dbt/ --profiles-dir dbt/
+        env:
+          NEON_HOST: ${{ secrets.NEON_HOST }}
+          NEON_USER: ${{ secrets.NEON_USER }}
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
+
+      - name: dbt snapshot (bank SCD-2 over resolved firms)
+        run: uv run dbt snapshot --project-dir dbt/ --profiles-dir dbt/
+        env:
+          NEON_HOST: ${{ secrets.NEON_HOST }}
+          NEON_USER: ${{ secrets.NEON_USER }}
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
+
+      - name: dbt test
+        run: uv run dbt test --project-dir dbt/ --profiles-dir dbt/
+        env:
+          NEON_HOST: ${{ secrets.NEON_HOST }}
+          NEON_USER: ${{ secrets.NEON_USER }}
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
