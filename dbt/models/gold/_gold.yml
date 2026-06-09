@@ -226,10 +226,11 @@ models:
     description: >
       Recalls per US state, two lenses (Phase 6e, ADR 0038): 'distribution' (where the product went,
       from recall_distribution_area — FDA+USDA) and 'firm_registration' (where the firm is registered,
-      from the SCD-2 sidecars — USDA+USCG+FDA; renamed from 'firm_location' for honesty, C17). Each
-      firm is collapsed to a single primary registered state (most-frequent; C18), so a recall is not
-      multi-counted across one firm's registered states. GROUPING SETS emits per-source rows + an
-      'ALL' all-source rollup. State codes constrained to the us_state_abbr seed.
+      from the SCD-2 sidecars — USDA+USCG+FDA; renamed from 'firm_location' for honesty, C17). A recall
+      is counted in EVERY state where any of its firms is registered (industry-footprint reading), so
+      per-state counts sum to more than the distinct-recall total; the C18 single-primary-state collapse
+      was reverted (it attributed an arbitrary state to 6.6% of recalls). GROUPING SETS emits per-source
+      rows + an 'ALL' all-source rollup. State codes constrained to the us_state_abbr seed.
     columns:
       - name: geography_basis
         tests:

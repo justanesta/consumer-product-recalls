@@ -20,13 +20,14 @@
 -- pure-CPSC/NHTSA firms with no shared structural id contribute no state.
 -- State codes are constrained to the us_state_abbr seed (drops Canadian provinces / foreign codes).
 --
--- C18 (2026-06-09): each firm is collapsed to a SINGLE primary registered state, so a recall is no
--- longer multi-counted across one firm's several registered states (the documented multi-counting in
--- gold_design_notes caveat #2). Rule (user decision Q1): the MOST-FREQUENT registered state across
--- the firm's structural ids; tie-break is DETERMINISTIC by state_code ASC — a uniform cross-source
--- "most-recent" date is NOT available (establishment has grant_date, manufacturer date_modified, FDA
--- none), so the requested most-recent tiebreak degrades to a stable deterministic one (ties are rare).
--- A recall is still counted once per DISTINCT firm (multi-firm recalls legitimately span states).
+-- MULTI-COUNTING (documented design, gold_design_notes caveat #2): a recall is counted in EVERY state
+-- where any of its firms is registered. A firm with facilities registered in N states (up to 7 observed)
+-- contributes the recall to all N — an "industry footprint" reading. So per-state counts SUM TO MORE
+-- than the distinct-recall total (recall × firm-registered-state incidences, NOT distinct recalls per
+-- state). A single-primary-state collapse (C18) was evaluated 2026-06-09 and REVERTED: 65% of
+-- multi-state firms have ~1 registration per state, so it picked an essentially-arbitrary state for
+-- 6.6% of recalls (evidence: scripts/sql/gold/inspect_firm_state_ties.sql). The footprint reading is
+-- kept and documented instead.
 
 with distribution_lens as (
     select
@@ -40,7 +41,6 @@ with distribution_lens as (
 ),
 
 -- firm -> each observed structural id -> the matching sidecar's state (disjoint id namespaces).
--- NOT distinct: one row per (firm, structural-id match) so we can count state frequency below.
 firm_states as (
     select
         f.firm_id,
@@ -63,36 +63,19 @@ firm_states as (
 ),
 
 firm_states_us as (
-    select fs.firm_id, fs.state_code
+    select distinct fs.firm_id, fs.state_code
     from firm_states fs
     join {{ ref('us_state_abbr') }} usa on usa.abbr = fs.state_code
-),
-
--- C18: collapse each firm to ONE primary registered state (most-frequent; tie-break state_code asc).
-firm_primary_state as (
-    select firm_id, state_code
-    from (
-        select
-            firm_id,
-            state_code,
-            row_number() over (
-                partition by firm_id
-                order by count(*) desc, state_code asc
-            ) as rn
-        from firm_states_us
-        group by firm_id, state_code
-    ) ranked
-    where rn = 1
 ),
 
 firm_registration_lens as (
     select distinct
         'firm_registration'::text as geography_basis,
         re.source,
-        fps.state_code,
+        fsu.state_code,
         re.recall_event_id
     from {{ ref('recall_event_firm') }} ref
-    join firm_primary_state fps on fps.firm_id = ref.firm_id
+    join firm_states_us fsu on fsu.firm_id = ref.firm_id
     join {{ ref('recall_event') }} re on re.recall_event_id = ref.recall_event_id
 ),
 

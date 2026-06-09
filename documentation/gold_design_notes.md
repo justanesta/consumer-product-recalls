@@ -53,20 +53,22 @@ the cross-source total).
   - **Caveats make `firm_registration` *not* a consumer-impact geography:** (1) **registration ≠ harm**
     — the FEI/establishment address is the firm's *registered* (often corporate-HQ) address (Walmart's
     FEI → AR/Bentonville, Target → MN), so "Walmart recall → AR" means *Walmart is registered in AR*,
-    not that the product came from or affected AR; (2) **multi-counting — RESOLVED 2026-06-09 (C18):**
-    each firm now collapses to a single *primary* registered state (most-frequent; deterministic
-    `state_code` tiebreak), so a recall is no longer counted across one firm's several states. It is
-    still counted once per *distinct* firm, so a genuine multi-firm recall legitimately spans states
-    (correct, not double-counting); (3) **coverage skew**
+    not that the product came from or affected AR; (2) **multi-counting (kept by design)** — a recall is
+    counted in **every** state where any of its firms is registered, and a firm can carry facilities in
+    multiple states (up to **7** observed), so per-state counts **sum to more than the distinct-recall
+    total** (an *industry-footprint* reading: recall × firm-registered-state incidences, not distinct
+    recalls per state). The C18 single-primary-state collapse was evaluated 2026-06-09 and **reverted** —
+    65% of multi-state firms tie at ~1 registration/state, so it attributed an arbitrary state to **6.6%**
+    of recalls (`scripts/sql/gold/inspect_firm_state_ties.sql`); (3) **coverage skew**
     — only the three sidecar-backed sources (+ name-merged CPSC/NHTSA) feed it; (4) **merge-sensitive**
     — a 6b over-merge attributes one firm's state to another's recalls.
   - **Use:** read `distribution` as "where the product went," `firm_registration` as "which states' firms
     get recalled" (an industry/regulatory lens) — **never** as where consumers were affected. Neither is
-    "where the product was *made*" (no production-site field exists). **Done 2026-06-09 (C17/C18):** the
-    `geography_basis` value was renamed `firm_location → firm_registration` for honesty, and each firm is
-    collapsed to a single *primary* registered state (most-frequent; deterministic `state_code` tiebreak
-    — no uniform cross-source recency date is available for a true most-recent rule), removing the
-    multi-counting.
+    "where the product was *made*" (no production-site field exists). **Done 2026-06-09 (C17):** the
+    `geography_basis` value was renamed `firm_location → firm_registration` for honesty. **C18
+    (single-primary-state collapse) was evaluated and reverted** — the multi-counting is a legitimate,
+    documented industry-footprint property; collapsing it picked an arbitrary state for 6.6% of recalls
+    (no uniform cross-source recency date exists to break the pervasive ~1-registration-per-state ties).
 - **Units are narrow and not cross-source comparable** (`fct_units_recalled`). Only NHTSA (vehicles)
   and USCG (boats) have a clean integer `unit_count`; CPSC/FDA/USDA are free-text (USDA = pounds).
   NHTSA's `recall_product` is the 7-tuple (many component rows per campaign) and `potaff` (an
