@@ -211,14 +211,35 @@ uscg_products as (
         )                                             as source_specific_attrs
     from {{ ref('stg_uscg_recalls') }}
     where announced_at is not null
+),
+
+all_products as (
+    select * from cpsc_products
+    union all
+    select * from fda_products
+    union all
+    select * from usda_products
+    union all
+    select * from nhtsa_products
+    union all
+    select * from uscg_products
 )
 
-select * from cpsc_products
-union all
-select * from fda_products
-union all
-select * from usda_products
-union all
-select * from nhtsa_products
-union all
-select * from uscg_products
+-- C14: clean processing-category token array (jsonb), derived ONCE from the unioned `type` column
+-- but ONLY for USDA (USDA's `type` is the multi-value `processing` field; the other sources' `type`
+-- is a single-value product-type code, so it is left scalar and gets NULL tokens). Same comma-split
+-- rationale as recall_event.reason_category_tokens (the 2026-06 jsonb arrays wrap, not split —
+-- Finding S; the 10 processing tokens have no internal commas, guarded by the membership test).
+-- jsonb (not text[]): bronze-consistent, containment-filterable, and dodges the dbt-postgres
+-- unit-test ARRAY-cast limitation. Enables single-category filtering.
+select
+    *,
+    case
+        when source = 'USDA' and type is not null
+        then (
+            select jsonb_agg(trim(t))
+            from unnest(string_to_array(type, ',')) as t
+            where trim(t) <> ''
+        )
+    end as processing_categories
+from all_products

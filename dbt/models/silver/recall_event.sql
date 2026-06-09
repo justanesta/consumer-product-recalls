@@ -429,14 +429,35 @@ uscg_events as (
         raw_landing_path
     from {{ ref('stg_uscg_recalls') }}
     where announced_at is not null
+),
+
+all_events as (
+    select * from cpsc_events
+    union all
+    select * from fda_events
+    union all
+    select * from usda_events
+    union all
+    select * from nhtsa_events
+    union all
+    select * from uscg_events
 )
 
-select * from cpsc_events
-union all
-select * from fda_events
-union all
-select * from usda_events
-union all
-select * from nhtsa_events
-union all
-select * from uscg_events
+-- C14: clean reason-token array (jsonb), derived ONCE from the unioned reason_category (USDA-only
+-- multi-value; the others' reason_category is NULL → tokens NULL). NOTE: the 2026-06 jsonb arrays
+-- WRAP the comma-joined string rather than splitting it (Finding S), so tokenizing requires a
+-- comma-split regardless of the array; the 9 reason tokens have no internal commas, so it's clean.
+-- jsonb (not text[]): matches the bronze representation, supports containment filtering
+-- (`reason_category_tokens ? 'Unreported Allergens'`), and avoids the dbt-postgres unit-test
+-- `cast(null as ARRAY)` limitation that a text[] column trips.
+select
+    *,
+    case
+        when reason_category is not null
+        then (
+            select jsonb_agg(trim(t))
+            from unnest(string_to_array(reason_category, ',')) as t
+            where trim(t) <> ''
+        )
+    end as reason_category_tokens
+from all_events
