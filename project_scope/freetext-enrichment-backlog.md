@@ -52,5 +52,8 @@
 - **USDA** `field_product_items` structured parse (embedded UPCs, lot codes, FSIS establishment numbers, dates) + `field_company_media_contact` parse — tracked in `documentation/audit/capture_expansion_backlog.md` USDA "deferred to Phase 6/7" table. The establishment-number extraction also feeds **Phase 6b** USDA recall→establishment disambiguation (Signal 1, `archive/phase-6-execution-plan.md`).
 - The canonical `quantity_unit` + `distribution_states`/`distribution_countries` taxonomies should be designed **once here** and consumed by all sources.
 
+## #57 — "lookup-table procedure for non-validating bronze values": RESOLVED (C15, 2026-06-09)
+No new lookup-table subsystem. The settled pattern is a **Python-enrichment crosswalk + a parse-coverage dbt monitor**: a deterministic, unit-tested parser writes a `*_crosswalk` table (`firm_crosswalk`, `quantity_crosswalk`) keyed on the raw value, silver LEFT JOINs it, and a `severity=warn` coverage test fences drift. C13 demonstrated it end-to-end (`quantity_crosswalk` + `assert_quantity_parse_coverage`); geography/quantity enrichment routes into this + the #56 backlog, not a bespoke lookup subsystem. TODO #57 closes with this pointer (flip in C37b).
+
 ## Sequencing
 No hard dependency beyond "captured bronze + Tier-0-cleaned staging text exist." Best picked up after the silver foundation is stable (post-(a) remap; alongside or after Phase 6b/6c). Promote to an `Active` plan + branch when started.
