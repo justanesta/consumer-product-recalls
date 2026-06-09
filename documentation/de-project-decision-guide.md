@@ -371,7 +371,7 @@ Preserve native source granularity in bronze. Silver-layer roll-up decisions sho
 - **When to write an ADR** — whenever someone reading the code six months later would ask "why did they do it this way instead of the obvious alternative?" Trivial choices (variable naming, lint config) don't need ADRs; substantive trade-offs do.
 - **ADR as portfolio artifact** — a record of the reasoning process is as valuable for demonstrating engineering judgment as the code itself.
 - **Lineage graph as documentation** — dbt's `dbt docs generate` produces a deployable static site with a full model lineage graph. Publishing it automatically on every main push (to Cloudflare Pages, Vercel, etc.) keeps docs in sync with code.
-- **ERDs and DAG diagrams** — Entity-Relationship Diagrams for the silver schema and DAG diagrams for the pipeline are worth maintaining as `.drawio` XML files (git-diffable, round-trippable) with exported SVG for embedding in documentation.
+- **ERDs and DAG diagrams** — maintain them as **Mermaid** fenced blocks **inline** in the markdown docs (GitHub-rendered, git-diffable, no export step) — e.g. silver/gold ERDs in `documentation/database_overview.md`, the pipeline DAG in `architecture.md`. *(A draw.io `.drawio`/SVG workflow was the original plan; Mermaid replaced it in Phase 6f — simpler, single-home, no export drift.)*
 - **Avoiding documentation duplication** — a separate `architecture.md` that summarizes what ADRs already cover will diverge from the ADRs as they evolve. Prefer a Mermaid diagram in `README.md` for at-a-glance structure and an ADR index for the structured deep dive.
 
 ---

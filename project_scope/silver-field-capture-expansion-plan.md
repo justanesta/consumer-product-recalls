@@ -1,6 +1,6 @@
 # Silver field capture-expansion — plan (the "(b) PR")
 
-- **Status:** Design — not started, no branch yet. Sibling to `project_scope/silver-field-remap-plan.md` (the "(a) PR"); follows it in the hard chain `6a → 6a.5 → (a) remap → {6b, this} → 6c` per `phase-6-execution-plan.md` § Sequencing Constraints.
+- **Status:** Design — not started, no branch yet. Sibling to `project_scope/silver-field-remap-plan.md` (the "(a) PR"); follows it in the hard chain `6a → 6a.5 → (a) remap → {6b, this} → 6c` per `archive/phase-6-execution-plan.md` § Sequencing Constraints.
 - **Owns:** the "(b) capture-expansion PR" execution — the FDA work that the (a) remap deferred. Two parts: **(A)** surface FDA firm-address + firm-continuity + posted-date fields (already in bronze via migration 0019) into silver behind a new `firm_fda_attributes` sidecar + a `recall_event` posted-date column; **(C)** the one genuinely-new extraction — FDA Tier-3 per-event press releases (new bronze child table + extractor). Tier-2 is **excluded** (settled skip — see Scope contract).
 - **Points at** (single-home — this plan does not restate any of them):
   - `documentation/audit/capture_expansion_backlog.md` § FDA — the per-source candidate parking lot (the tier tables + engineering-tax decisions). This plan *executes* the FDA section; it does not re-list the fields.
@@ -59,5 +59,5 @@ Every FDA item sorts into exactly one bucket:
 - **`firm_fda_attributes` SCD** — Type-1 here; the SCD-2 "firm moved between recalls" question is owned by the cross-source SCD work (ADR 0035 / master plan Phase 6 SCD item), not this PR.
 
 ## Related
-- `project_scope/silver-field-remap-plan.md` (the "(a)" sibling that deferred these fields here), `documentation/audit/capture_expansion_backlog.md` (the parking lot), `project_scope/phase-6-execution-plan.md` (parent + sequencing), `project_scope/branch_sequencing_strategy.md` (cross-branch order), `project_scope/freetext-enrichment-backlog.md` (the `code_information` parse, deferred further).
+- `project_scope/silver-field-remap-plan.md` (the "(a)" sibling that deferred these fields here), `documentation/audit/capture_expansion_backlog.md` (the parking lot), `project_scope/archive/phase-6-execution-plan.md` (parent + sequencing), `project_scope/branch_sequencing_strategy.md` (cross-branch order), `project_scope/freetext-enrichment-backlog.md` (the `code_information` parse, deferred further).
 - ADRs 0036 / 0035 / 0002 / 0027 / 0013 as above.

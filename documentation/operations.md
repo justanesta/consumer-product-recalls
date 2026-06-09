@@ -2,7 +2,7 @@
 
 This document covers production operations: scheduled runs, monitoring, secret rotation, and recovery procedures. For architectural rationale, see the ADRs in `documentation/decisions/`. For system architecture and component relationships, see [`architecture.md`](architecture.md).
 
-> ⚠️ **Partially stale (as of 2026-06-01) — full refresh scheduled in the Phase 6f doc-sync** (`project_scope/phase-6-execution-plan.md` §6f). USCG is **live since 2026-05-15** (3 extraction sources: recalls + manufacturers + manufacturer-details; 8 total across the pipeline). The USCG row below and any "4-source" framing predate the reactivation; live USCG cadences are in `documentation/uscg/` and the Phase 6f plan. The rest of this guide is current.
+> ⚠️ **Partially stale (as of 2026-06-01) — full refresh scheduled in the Phase 6f doc-sync** (`project_scope/archive/phase-6-execution-plan.md` §6f). USCG is **live since 2026-05-15** (3 extraction sources: recalls + manufacturers + manufacturer-details; 8 total across the pipeline). The USCG row below and any "4-source" framing predate the reactivation; live USCG cadences are in `documentation/uscg/` and the Phase 6f plan. The rest of this guide is current.
 
 ---
 
@@ -277,7 +277,7 @@ The steady-state invariant is: **local `.env` always points at `dev`; only GitHu
    ```bash
    psql -f scripts/sql/_pipeline/seed_verify.sql   # bronze row counts + watermark coverage
    ```
-5. **Seed** in the documented order (attended/DB-sensitive sources first, long unattended HTML scrapes last; respect the USCG manufacturers → manufacturer-details dependency). For the canonical Phase 6a.5 order and per-source commands see [`project_scope/phase-6-execution-plan.md`](../project_scope/phase-6-execution-plan.md). Every seed run must carry `--change-type=historical_seed` so `recall_event_history` (Phase 6) doesn't synthesize false-edit events (same rule as the re-ingestion procedure above).
+5. **Seed** in the documented order (attended/DB-sensitive sources first, long unattended HTML scrapes last; respect the USCG manufacturers → manufacturer-details dependency). For the canonical Phase 6a.5 order and per-source commands see [`project_scope/archive/phase-6-execution-plan.md`](../project_scope/archive/phase-6-execution-plan.md). Every seed run must carry `--change-type=historical_seed` so `recall_event_history` (Phase 6) doesn't synthesize false-edit events (same rule as the re-ingestion procedure above).
 6. **Verify** with `scripts/sql/_pipeline/seed_verify.sql` (bronze counts + migration head + watermark coverage), plus `quarantine_check.sql` (rate < 5%) and `watermark_health.sql` in the same dir — counts within ~10% of projection.
 7. **Revert the local env (mandatory):** `cp .env.dev.bak .env` (restore `.envrc` if changed), `direnv reload`, and re-run the step-3 sanity check to confirm you are back on `dev`.
 8. **Reset `dev` from `main`** (Neon console/API — ADR 0005's sanctioned `main`→`dev` direction). This gives `dev` the freshly-seeded full corpus and discards local experiment cruft, so subsequent local dbt work builds against production-equivalent bronze.

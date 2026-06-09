@@ -6,7 +6,7 @@
 - **Triggering analysis:** the 2026-05-31 skeptical workflow audit (run `w9fhhkl5u`) +
   the live pre-seed probes (`scripts/fda/audit/probe_seed_query_shape.py`).
 - **Companions:**
-  - `project_scope/phase-6-execution-plan.md` (§6a.5 — the FDA row this supersedes)
+  - `project_scope/archive/phase-6-execution-plan.md` (§6a.5 — the FDA row this supersedes)
   - `documentation/fda/api_observations.md` (Findings A–O, K0, K0.2 — the source of truth)
   - `documentation/fda/field_audit_2026_w22.md` (§2 capture, §7a SHIP fields, migration 0019)
   - `scripts/fda/audit/probe_seed_query_shape.py` + `probe_corpus_completeness.py`
@@ -321,7 +321,7 @@ The real completeness check (run post-seed; `status=success` is masked — audit
   date-sort that poisons sorted top-N; the 5s pacing floor; and **correct the stale "core
   identifiers never null" claim at line 374** (the 197 falsify it).
 - `documentation/fda/field_audit_2026_w22.md`: note the full-corpus seed strategy + migration 0020.
-- `project_scope/phase-6-execution-plan.md`: rewrite the FDA execution row — `recalls deep-rescan fda
+- `project_scope/archive/phase-6-execution-plan.md`: rewrite the FDA execution row — `recalls deep-rescan fda
   --change-type=historical_seed` (no dates), `filter:"[]"`, migration 0020 prereq, ~54 pages, the
   post-seed gate.
 
