@@ -9,7 +9,7 @@ models:
       parent_mic), the FULL untruncated address, contact/status fields, and
       the M/D/YYYY dates the listing source lacks. Applies Finding F.3 sentinel
       normalization ('UNK', '-', '', and '-, -' for company_official → NULL).
-      The eventual SCD-2 firm_manufacturer_attributes history + the time-sensitive
+      The eventual SCD-2 firm_uscg_attributes history + the time-sensitive
       recall→manufacturer join consume this (Phase 6 / ADR 0035 — not built here).
     columns:
       - name: source_recall_id

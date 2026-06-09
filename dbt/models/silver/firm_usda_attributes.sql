@@ -12,7 +12,7 @@
 -- establishment_number (the FSIS canonical id, written as company_id on USDA firms in firm.sql).
 --
 -- As of Phase 6c.4 this is the CURRENT view (dbt_valid_to is null) over the SCD-2 snapshot
--- firm_establishment_attributes_snapshot (ADR 0035 Policy C) — an additive history layer over
+-- firm_usda_attributes_snapshot (ADR 0035 Policy C) — an additive history layer over
 -- the same stg_usda_fsis_establishments data. The column contract is UNCHANGED, so the consumer
 -- (recall_event_establishment_resolution) is unaffected; null-establishment_number rows are
 -- excluded by the snapshot driver. The latest-per-establishment_number collapse now lives there.
@@ -35,5 +35,5 @@ select
     circuit,
     activities,
     dbas
-from {{ ref('firm_establishment_attributes_snapshot') }}
+from {{ ref('firm_usda_attributes_snapshot') }}
 where dbt_valid_to is null

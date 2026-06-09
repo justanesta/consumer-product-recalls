@@ -51,10 +51,10 @@ firm_states as (
     ) as cid(company_id)
     cross join lateral (
         select ea.state as state_code
-        from {{ ref('firm_establishment_attributes') }} ea where ea.establishment_id = cid.company_id
+        from {{ ref('firm_usda_attributes') }} ea where ea.establishment_id = cid.company_id
         union all
         select ma.state
-        from {{ ref('firm_manufacturer_attributes') }} ma where ma.mic = cid.company_id
+        from {{ ref('firm_uscg_attributes') }} ma where ma.mic = cid.company_id
         union all
         select fa.firm_state_cd
         from {{ ref('firm_fda_attributes') }} fa where fa.firm_fei_num::text = cid.company_id

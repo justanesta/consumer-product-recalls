@@ -38,8 +38,8 @@ firm_attr_rows as (
         fa.firm_fei_num,
         to_jsonb(fa) as fda_json
     from firm_ids fi
-    left join {{ ref('firm_establishment_attributes') }} ea on ea.establishment_id = fi.company_id
-    left join {{ ref('firm_manufacturer_attributes') }} ma  on ma.mic = fi.company_id
+    left join {{ ref('firm_usda_attributes') }} ea on ea.establishment_id = fi.company_id
+    left join {{ ref('firm_uscg_attributes') }} ma  on ma.mic = fi.company_id
     left join {{ ref('firm_fda_attributes') }} fa           on fa.firm_fei_num::text = fi.company_id
 ),
 

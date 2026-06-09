@@ -8,8 +8,8 @@
 ) }}
 
 -- USCG-registered boat-manufacturer attributes — the CURRENT view (dbt_valid_to is
--- null) over the SCD-2 snapshot uscg_manufacturer_attributes_snapshot (ADR 0035).
--- One row per MIC. Sibling to firm_establishment_attributes (USDA) / firm_fda_attributes;
+-- null) over the SCD-2 snapshot firm_uscg_attributes_snapshot (ADR 0035).
+-- One row per MIC. Sibling to firm_usda_attributes (USDA) / firm_fda_attributes;
 -- firm.sql stays keyed on normalized name for cross-source dedup, this dim sits beside it.
 --
 -- ADR 0035 changed this model in three ways vs the Phase 5d listing-only version:
@@ -31,7 +31,7 @@
 
 with current_manufacturers as (
     select *
-    from {{ ref('uscg_manufacturer_attributes_snapshot') }}
+    from {{ ref('firm_uscg_attributes_snapshot') }}
     where dbt_valid_to is null
 ),
 

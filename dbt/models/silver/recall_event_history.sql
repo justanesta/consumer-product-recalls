@@ -9,7 +9,7 @@
 -- endpoints are empty, so there is no source-asymmetric path (ADR 0022).
 --
 -- This is the recall-FACT history (edits to the event record). It is distinct from the
--- dimension SCD-2 snapshots (firm_manufacturer_attributes etc.) and from recall_lifecycle
+-- dimension SCD-2 snapshots (firm_uscg_attributes etc.) and from recall_lifecycle
 -- (the presence/summary view, 6c.2). See documentation/silver_design_notes.md.
 --
 -- Tracked canonical fields (curated v1 — the editorially-meaningful event attributes that

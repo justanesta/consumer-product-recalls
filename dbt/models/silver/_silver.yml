@@ -104,7 +104,7 @@ models:
     description: >
       Conformed firm dimension, deduped by normalized name across all 5 sources
       (ADR 0002). Role-specific structured attributes live in the
-      firm_establishment_attributes (USDA) and firm_manufacturer_attributes
+      firm_usda_attributes (USDA) and firm_uscg_attributes
       (USCG) sidecars, joined via observed_company_ids. Cross-source fuzzy
       name resolution is deferred to Phase 6b.
     columns:
@@ -132,7 +132,7 @@ models:
           search + RapidFuzz match recall (Phase 6b). Flattened + de-duped across the
           canonical firm from firm_crosswalk.alternate_names. Nullable, untested.
 
-  - name: firm_establishment_attributes
+  - name: firm_usda_attributes
     description: >
       FSIS-regulated establishment dim with demographic + geolocation +
       regulatory metadata. Phase 5b.2 Step 5; one row per establishment_id
@@ -161,10 +161,10 @@ models:
               arguments:
                 values: ['', 'Inactive']
 
-  - name: firm_manufacturer_attributes
+  - name: firm_uscg_attributes
     description: >
       USCG-registered boat-manufacturer dim — the CURRENT view (dbt_valid_to is null)
-      over the SCD-2 snapshot uscg_manufacturer_attributes_snapshot (ADR 0035). One row
+      over the SCD-2 snapshot firm_uscg_attributes_snapshot (ADR 0035). One row
       per mic (= USCG Manufacturer Identification Code, also written to
       firm.observed_company_ids for USCG firms via the recalls-side join). Source switched
       from the listing view to the detail-page snapshot, so the address is now the FULL
@@ -492,7 +492,7 @@ models:
       ~23 of 221 OOB-recycled MICs that carry a parseable year appear (gate Q2); the rest are undated.
     columns:
       - name: mic
-        description: MIC anchor (upper(trim), from firm_manufacturer_attributes).
+        description: MIC anchor (upper(trim), from firm_uscg_attributes).
         tests:
           - not_null
           - unique

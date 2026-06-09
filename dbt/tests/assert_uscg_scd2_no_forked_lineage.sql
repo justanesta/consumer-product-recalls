@@ -8,7 +8,7 @@
 select
     mic,
     count(*) as current_versions
-from {{ ref('uscg_manufacturer_attributes_snapshot') }}
+from {{ ref('firm_uscg_attributes_snapshot') }}
 where dbt_valid_to is null
 group by mic
 having count(*) > 1

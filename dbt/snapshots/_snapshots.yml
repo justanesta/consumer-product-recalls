@@ -1,12 +1,12 @@
 version: 2
 
 snapshots:
-  - name: uscg_manufacturer_attributes_snapshot
+  - name: firm_uscg_attributes_snapshot
     description: >
       SCD-2 history of the USCG manufacturer directory, keyed on the stable `mic`
       anchor (ADR 0035; first cross-source SCD-2 instance). strategy='check' over the
       firm-attribution fields; dbt manages dbt_valid_from / dbt_valid_to / dbt_scd_id.
-      The current view (dbt_valid_to is null) feeds firm_manufacturer_attributes; the
+      The current view (dbt_valid_to is null) feeds firm_uscg_attributes; the
       full table is the queryable peer history (Policy C). Lands in the silver_snapshots
       schema (exempt from ADR 0007 bronze-snapshot pruning). Heartbeat fields
       (in_business, date_modified) are deliberately NOT check_cols — see the model
@@ -28,12 +28,12 @@ snapshots:
               - mic
               - dbt_valid_from
 
-  - name: firm_establishment_attributes_snapshot
+  - name: firm_usda_attributes_snapshot
     description: >
       SCD-2 history of USDA FSIS establishment attributes, keyed on the stable
       establishment_number anchor (ADR 0035 Policy C; Phase 6c.4 BENEFIT dim). strategy='check'
       over the demographic/regulatory fields (latest_mpi_active_date EXCLUDED — heartbeat,
-      ADR 0032). Current view (dbt_valid_to is null) feeds firm_establishment_attributes; full
+      ADR 0032). Current view (dbt_valid_to is null) feeds firm_usda_attributes; full
       table is the queryable peer history (the status_regulated_est flip case). silver_snapshots
       schema (ADR 0007 pruning-exempt). Forward-banking: 0 edit-versions today; re-run on an
       unchanged corpus must bank 0 new versions.

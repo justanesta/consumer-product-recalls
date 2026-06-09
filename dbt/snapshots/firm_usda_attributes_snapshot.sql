@@ -1,4 +1,4 @@
-{% snapshot firm_establishment_attributes_snapshot %}
+{% snapshot firm_usda_attributes_snapshot %}
 {{
   config(
     schema='silver_snapshots',
@@ -15,7 +15,7 @@
 -- SCD-2 history for USDA FSIS establishment attributes (ADR 0035 Policy C; Phase 6c.4 BENEFIT
 -- dim). Stable anchor = establishment_number (the FSIS canonical id). strategy='check' over the
 -- demographic / regulatory attributes; dbt manages dbt_valid_from / dbt_valid_to / dbt_scd_id.
--- The current view (dbt_valid_to is null) feeds firm_establishment_attributes; the full table is
+-- The current view (dbt_valid_to is null) feeds firm_usda_attributes; the full table is
 -- the queryable peer history. The 2026-05-15 status_regulated_est '' -> 'Inactive' flip (13
 -- establishments) is the motivating case. Lands in silver_snapshots (exempt from ADR 0007
 -- bronze-snapshot pruning, schema-level — the same exemption ADR 0035 added for USCG).
