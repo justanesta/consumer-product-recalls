@@ -50,9 +50,9 @@ Role model per source:
 |---|---|---|
 | **CPSC** | `manufacturer`, `importer`, `distributor` | **`retailer` removed (Option B)** — retailer names live in `recall_event.sales_channel_narrative`, not the firm graph (−44.2% of CPSC firm rows; suffix/DBA cleanup is 6b). |
 | **FDA** | `establishment` | `firm_legal_nam` is the recalling FDA-registered establishment (analogous to USDA), not a manufacturer; `company_id = firm_fei_num`. |
-| **USDA** | `establishment` | `company_id = establishment_number` via the HTML-decoded name join (~97% per-name); rich metadata → `firm_establishment_attributes` sidecar. |
+| **USDA** | `establishment` | `company_id = establishment_number` via the HTML-decoded name join (~97% per-name); rich metadata → `firm_usda_attributes` sidecar. |
 | **NHTSA** | `filer`, `manufacturer` | **filer/manufacturer split** — two bridge rows: `mfgname` = `filer` (filed the recall), `mfgtxt` = `manufacturer` (made the product); 95.9% disjoint when differing. `company_id = NULL`. |
-| **USCG** | `manufacturer` | directory-enriched name `coalesce(directory.company_name, recalls.company_name, mic)`; `company_id = mic`; rich metadata → `firm_manufacturer_attributes` sidecar. |
+| **USCG** | `manufacturer` | directory-enriched name `coalesce(directory.company_name, recalls.company_name, mic)`; `company_id = mic`; rich metadata → `firm_uscg_attributes` sidecar. |
 
 **Sidecar (supertype/subtype) pattern:** USDA and USCG each publish a *separate structured firm registry* (FSIS Establishment Listing; USCG Manufacturer Directory), so their rich, non-conforming attributes (FSIS `grant_date`/`status_regulated_est`/`size`/`district`; USCG `detail_url`/`uscg_directory_id`) live in dedicated single-source dims keyed on the source's structured ID (`establishment_number`, `mic`) rather than bloating the conformed `firm` with 60–80% NULLs. CPSC/NHTSA expose only inline names (no registry → no sidecar); FDA has an FEI but its address/registry fields are deferred to (b). Facts join only the conformed `firm`; the sidecars are an opt-in dimension-to-dimension join via `observed_company_ids`.
 
@@ -120,15 +120,15 @@ All sources error at the outer bound regardless of cadence — that indicates a 
 
 The firm attribute sidecars carry SCD-2 history via dbt snapshots in the `silver_snapshots` schema (Policy C: the snapshot table *is* the queryable peer history; the dim is its `dbt_valid_to is null` current view). This is the **dimension** half of Phase 6c's history — distinct from the recall-fact half (`recall_event_history` / `recall_lifecycle`), and it is *materialized + stateful* (the snapshot can't be dropped/rebuilt without losing history) where the fact half is synthesized + stateless.
 
-- `firm_manufacturer_attributes` ← `uscg_manufacturer_attributes_snapshot` (anchor `mic`) — the only Type-2 **NEED** (MIC reassignment; shipped 6b.5).
-- `firm_establishment_attributes` ← `firm_establishment_attributes_snapshot` (anchor `establishment_number`) and `firm_fda_attributes` ← `firm_fda_attributes_snapshot` (anchor `firm_fei_num`) — Type-2 **BENEFIT**, built in 6c.4 (portfolio breadth). Stable anchors, 0 edit-versions post-reseed → they bank one version per anchor now and grow forward.
+- `firm_uscg_attributes` ← `firm_uscg_attributes_snapshot` (anchor `mic`) — the only Type-2 **NEED** (MIC reassignment; shipped 6b.5).
+- `firm_usda_attributes` ← `firm_usda_attributes_snapshot` (anchor `establishment_number`) and `firm_fda_attributes` ← `firm_fda_attributes_snapshot` (anchor `firm_fei_num`) — Type-2 **BENEFIT**, built in 6c.4 (portfolio breadth). Stable anchors, 0 edit-versions post-reseed → they bank one version per anchor now and grow forward.
 - **Heartbeat exclusion is the load-bearing `check_cols` rule** (else every re-scan spawns phantom versions): USCG excludes `date_modified`/`in_business`, USDA establishments exclude `latest_mpi_active_date` (ADR 0032). Repointing a dim to its snapshot keeps the dim's column contract identical, so consumers are unaffected — the snapshot is a purely additive history layer. CPSC has no such dim (name-keyed firm, no stable structured anchor) → monitors only.
 
 ### 11. USCG MIC time-sensitivity refinements (6c.5, ADR 0035 §5)
 
 The `recall_event_firm` USCG `match_confidence` started as a binary flag (6b.5): `uscg_mic_time_sensitive_unresolved` for any recalled MIC with a prior holder, else `uscg_mic_unambiguous`. 6c.5 refines it into three tiers (all dbt-SQL, lockstep-safe — `firm_id` recipe untouched):
 
-- **rename downgrade** — `firm_manufacturer_attributes.mic_renamed_not_recycled` (every prior slot is a source `(previous name)` marker, none OOB) → `uscg_mic_unambiguous` (same manufacturer, renamed).
+- **rename downgrade** — `firm_uscg_attributes.mic_renamed_not_recycled` (every prior slot is a source `(previous name)` marker, none OOB) → `uscg_mic_unambiguous` (same manufacturer, renamed).
 - **build-year resolution** — `uscg_mic_reassignment_years` parses `(OOB YYYY)` → `current_holder_since_year`; a recall whose `model_year` ≥ that was built during the current holder's tenure → `uscg_mic_build_date_resolved` (current attribution confirmed). Uses `model_year` (a recall field), not a HIN parse.
 - **time-sensitive** — the residual (real OOB / unmarked-distinct prior, build year unknown or pre-reassignment).
 

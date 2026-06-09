@@ -363,7 +363,7 @@ Our extractor is listing-only (Path A, Finding C), so the source-native lineage 
 - The two-gate short-circuit (Finding K: `Records Found` count + page-0 MIC membership) is **blind to same-MIC reassignment** — neither gate changes — so under an active short-circuit these are caught only by the weekly safety-net deep-rescan. Today's catch happened only because the first-incremental forced a full walk.
 - `Date Modified` would be a far better incremental/change signal than re-walking + re-hashing 16k listing rows, but it is detail-page-only.
 
-What to *do* about this (Path B detail enrichment, SCD-2 modeling of `firm_manufacturer_attributes`, and a HIN-build-date time-aware recall↔manufacturer join) is future work tracked in `project_scope/implementation_plan.md` (Phase 6 cross-source SCD-2 item + Step 7 follow-up) and `project_scope/archive/silver_v15_migration_plan.md` (cross-source SCD application), per the findings-vs-plan separation.
+What to *do* about this (Path B detail enrichment, SCD-2 modeling of `firm_uscg_attributes`, and a HIN-build-date time-aware recall↔manufacturer join) is future work tracked in `project_scope/implementation_plan.md` (Phase 6 cross-source SCD-2 item + Step 7 follow-up) and `project_scope/archive/silver_v15_migration_plan.md` (cross-source SCD application), per the findings-vs-plan separation.
 
 ### M.6 — Quantified resolution: reassignment is material, and recalled MICs are disproportionately affected
 
@@ -386,7 +386,7 @@ A detail-page sampling probe (`scripts/uscg/probe_mic_reassignment_rate.py`, 202
 
 **Decision: build Path B + SCD-2.** The misattribution surface is large and confirmed (≈29% of recalled MICs recycled), not a negligible edge case. Methodology + the affected list are reproducible via `--recalled-only`.
 
-**Amendment 2026-06-05 (6b.5 build) — the `(OOB)` count above is PAREN-ONLY and undercounts.** The swing-set probe (`scripts/sql/cross_source/scd_monitors/probe_mic_prior_holder_not_oob.sql`) found the detail page marks out-of-business priors in **two** notations — `(OOB)` / `(OOB YYYY)` AND a **dash form `- OOB`** ("ARLINGTON BOAT WORKS - OOB"). `probe_mic_reassignment_rate.py` (and the table above) detected only the paren form. Widening OOB detection to word-boundary `\yOOB\y` raises recalled OOB-recycled from **205 (28.7%) → 221 (30.8%)** — the +16 dash-form; the **≥1-Past-Company surface (365 / 51.1%) is unchanged** (it never depended on the marker). The silver flag (`firm_manufacturer_attributes.mic_oob_recycled`) + `assert_mic_holder_stable.sql` now use `\yOOB\y`; the bridge time-sensitivity flag fires on the **broad 365** (any prior holder), not the OOB subset. Reading the full 144-MIC residual (has-prior, not-OOB) confirmed ~84% are genuine distinct-prior-firm reassignments, ~16% same-entity renames — so the broad set is mostly real risk. (`probe_mic_reassignment_rate.py` itself was not re-run; its 205 stands as the dated paren-only measurement.)
+**Amendment 2026-06-05 (6b.5 build) — the `(OOB)` count above is PAREN-ONLY and undercounts.** The swing-set probe (`scripts/sql/cross_source/scd_monitors/probe_mic_prior_holder_not_oob.sql`) found the detail page marks out-of-business priors in **two** notations — `(OOB)` / `(OOB YYYY)` AND a **dash form `- OOB`** ("ARLINGTON BOAT WORKS - OOB"). `probe_mic_reassignment_rate.py` (and the table above) detected only the paren form. Widening OOB detection to word-boundary `\yOOB\y` raises recalled OOB-recycled from **205 (28.7%) → 221 (30.8%)** — the +16 dash-form; the **≥1-Past-Company surface (365 / 51.1%) is unchanged** (it never depended on the marker). The silver flag (`firm_uscg_attributes.mic_oob_recycled`) + `assert_mic_holder_stable.sql` now use `\yOOB\y`; the bridge time-sensitivity flag fires on the **broad 365** (any prior holder), not the OOB subset. Reading the full 144-MIC residual (has-prior, not-OOB) confirmed ~84% are genuine distinct-prior-firm reassignments, ~16% same-entity renames — so the broad set is mostly real risk. (`probe_mic_reassignment_rate.py` itself was not re-run; its 205 stands as the dated paren-only measurement.)
 
 ## Step 2 architectural decisions (locked, contingent on Finding H probe)
 
@@ -534,7 +534,7 @@ Re-running the new `scripts/sql/uscg_manufacturers/bronze/explore_bronze_shape.s
 - Phase 5d Step 7 plan: `project_scope/archive/phase-5d-uscg-manufacturers.md`
 - USCG recalls scraping observations: `documentation/uscg/scraping_observations.md` (Findings A-S — analogous patterns from the sibling source)
 - USCG recalls extractor (structural mirror): `src/extractors/uscg.py`
-- USDA establishments (semantic mirror for silver layer): `src/extractors/usda_establishment.py`, `dbt/models/silver/firm_establishment_attributes.sql`
+- USDA establishments (semantic mirror for silver layer): `src/extractors/usda_establishment.py`, `dbt/models/silver/firm_usda_attributes.sql`
 - Regulatory MIC spec: `documentation/uscg/USCG-2013-0133-0005_attachment_1.pdf`
 - ADR 0007 (content-hash dedup), ADR 0014 (Pydantic schema policy), ADR 0027 (storage-forced types)
 - Phase 5d Step 7 probe artifacts: `data/exploratory/uscg_manufacturers/probes/page_{0,300,600}_20260530T000803Z.{html,txt}` (gitignored)

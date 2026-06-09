@@ -82,6 +82,6 @@ The helper in `src/bronze/hashing.py` is unit-tested with round-trip determinism
 
 ## Amendment 2026-06-05 (PR 6b.5) — `silver_snapshots` is exempt from this retention/pruning policy
 
-The "daily snapshots retained 90 days, monthly 1 year, then pruned" policy above governs the **bronze** snapshot store — a content-hash-deduped *dedup* store where old raw snapshots are recoverable noise once history has been synthesized. It does **NOT** apply to the **`silver_snapshots`** schema introduced by [ADR 0035](0035-cross-source-scd2-silver-dimensions.md) (the first instance being `uscg_manufacturer_attributes_snapshot`).
+The "daily snapshots retained 90 days, monthly 1 year, then pruned" policy above governs the **bronze** snapshot store — a content-hash-deduped *dedup* store where old raw snapshots are recoverable noise once history has been synthesized. It does **NOT** apply to the **`silver_snapshots`** schema introduced by [ADR 0035](0035-cross-source-scd2-silver-dimensions.md) (the first instance being `firm_uscg_attributes_snapshot`).
 
 Those are **dbt SCD-2 history tables** — the materialized, queryable peer history under Policy C. Their `dbt_valid_from`/`dbt_valid_to` intervals ARE the audit record (e.g. which firm held a recycled USCG MIC over time); pruning them is silent, unrecoverable history loss, not noise reduction. `silver_snapshots` is therefore retained **indefinitely** and the scheduled retention job must exclude the schema. Revisit only if a concrete storage-cost forcing function appears (none expected — the firm dims are small).

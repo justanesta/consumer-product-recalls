@@ -24,7 +24,7 @@
 -- Run with: psql ... -f scripts/sql/usda_establishments/bronze/inspect_join_key_and_dbas.sql
 
 \echo '=== Q1: establishment_number — the company_id anchor (population + uniqueness, K) ==='
--- Option A keys firm_establishment_attributes on establishment_number and uses it as
+-- Option A keys firm_usda_attributes on establishment_number and uses it as
 -- firm.company_id for USDA. The decision rests on it being 100% populated + 100%
 -- unique. pct_unique < 100 or pct_empty > 0 would undermine the canonical-key choice.
 with latest as (
@@ -117,7 +117,7 @@ select
 \echo ''
 \echo '=== Q5: size enum distribution (accepted_values SSOT — the undocumented "N / A") ==='
 -- PDF says 3 values; R2 found 4 (Very Small / Small / Large + the undocumented
--- "N / A"). Corpus value set → the firm_establishment_attributes.size accepted_values
+-- "N / A"). Corpus value set → the firm_usda_attributes.size accepted_values
 -- list (warn). '' shown via nullif so a true blank is distinct from the "N / A" string.
 with latest as (
   select distinct on (source_recall_id) *

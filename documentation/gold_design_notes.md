@@ -45,8 +45,8 @@ the cross-source total).
     carry no distribution field, so they contribute nothing. This is the clean *"where did the product
     go / who was potentially affected"* answer.
   - ***`firm_registration`*** (renamed from `firm_location`, C17 2026-06-09) = **where the responsible firm is *registered*** — `firm.observed_company_ids`
-    → the per-source SCD-2 sidecar state (`firm_establishment_attributes.state` /
-    `firm_manufacturer_attributes.state` / `firm_fda_attributes.firm_state_cd`). It is **not** "all
+    → the per-source SCD-2 sidecar state (`firm_usda_attributes.state` /
+    `firm_uscg_attributes.state` / `firm_fda_attributes.firm_state_cd`). It is **not** "all
     firms": only firms whose 6b canonical cluster carries an FSIS `establishment_number`, USCG `mic`, or
     FDA `firm_fei_num` — directly, or via a name-merge to one — appear; a pure CPSC/NHTSA firm (no
     structural id) contributes nothing.

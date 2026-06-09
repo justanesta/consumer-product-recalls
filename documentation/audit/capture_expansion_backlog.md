@@ -102,7 +102,7 @@ Driver: `documentation/usda/field_audit_2026_w22.md` §8 + §9. Architecture con
 
 - **(a) silver-remap PR**: Bug 1 fix (`recall_product.type ← processing`) + 11 lifts from JSONB to first-class columns (see `documentation/usda/field_audit_2026_w22.md` §4 + §7)
 - **Silver derive logic**: `recall_event.risk_level` derived from `recall_classification` via CASE WHEN (1:1 correlation per R2 validation)
-- **Silver element-level filter**: `firm_establishment_attributes.dbas` strips 'N/A' and 'None' placeholder element values
+- **Silver element-level filter**: `firm_usda_attributes.dbas` strips 'N/A' and 'None' placeholder element values
 
 ### Items deferred to Phase 6/7 (not (b) PR scope)
 

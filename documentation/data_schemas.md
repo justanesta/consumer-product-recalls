@@ -74,8 +74,8 @@ dbt snapshots (`strategy='check'`) bank attribute history per stable anchor. The
 
 | Snapshot | dbt | Anchor | Feeds | Type |
 |---|---|---|---|---|
-| `uscg_manufacturer_attributes_snapshot` | `dbt/snapshots/uscg_manufacturer_attributes_snapshot.sql` | `mic` | `firm_manufacturer_attributes` | Type-2 **NEED** (MIC reassignment; 6b.5) |
-| `firm_establishment_attributes_snapshot` | `dbt/snapshots/firm_establishment_attributes_snapshot.sql` | `establishment_number` | `firm_establishment_attributes` | Type-2 **BENEFIT** (6c.4) |
+| `firm_uscg_attributes_snapshot` | `dbt/snapshots/firm_uscg_attributes_snapshot.sql` | `mic` | `firm_uscg_attributes` | Type-2 **NEED** (MIC reassignment; 6b.5) |
+| `firm_usda_attributes_snapshot` | `dbt/snapshots/firm_usda_attributes_snapshot.sql` | `establishment_number` | `firm_usda_attributes` | Type-2 **BENEFIT** (6c.4) |
 | `firm_fda_attributes_snapshot` | `dbt/snapshots/firm_fda_attributes_snapshot.sql` | `firm_fei_num` | `firm_fda_attributes` | Type-2 **BENEFIT** (6c.4) |
 | `nhtsa_recall_product_snapshot` | `dbt/snapshots/nhtsa_recall_product_snapshot.sql` | 7-tuple `recall_product_id` | `recall_product` (NHTSA branch, current view) + `recall_product_history` | Type-2 **product-grain** (NHTSA v1.5; [ADR 0033](decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md) + amendment / [ADR 0034](decisions/0034-nhtsa-silver-v15-migration.md), cutover 6c.7) |
 

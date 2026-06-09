@@ -10,9 +10,9 @@ with firm_state_freq as (
         cross join lateral
             jsonb_array_elements_text(coalesce(f.observed_company_ids, '[]'::jsonb)) as cid(company_id)
         cross join lateral (
-            select ea.state as state_code from firm_establishment_attributes ea where ea.establishment_id = cid.company_id
+            select ea.state as state_code from firm_usda_attributes ea where ea.establishment_id = cid.company_id
             union all
-            select ma.state from firm_manufacturer_attributes ma where ma.mic = cid.company_id
+            select ma.state from firm_uscg_attributes ma where ma.mic = cid.company_id
             union all
             select fa.firm_state_cd from firm_fda_attributes fa where fa.firm_fei_num::text = cid.company_id
         ) s

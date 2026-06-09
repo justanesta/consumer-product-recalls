@@ -8,7 +8,7 @@
 -- (states / processing / product_items non-null) that the disambiguation hierarchy depends on.
 --
 -- Join mirrors the resolution model: stg_usda_fsis_recalls.establishment (HTML-decoded, silver)
--- ~ firm_establishment_attributes.establishment_name on upper(trim()). firm_establishment_attributes
+-- ~ firm_usda_attributes.establishment_name on upper(trim()). firm_usda_attributes
 -- is keyed one row per establishment_number (composites like 'M46712+P46712' are ONE row), so a
 -- candidate count > 1 means genuinely distinct establishments sharing a name.
 --
@@ -38,7 +38,7 @@ with matched as (
     r.establishment,
     count(e.establishment_id) as n_candidates
   from stg_usda_fsis_recalls r
-  left join firm_establishment_attributes e
+  left join firm_usda_attributes e
     on upper(trim(e.establishment_name)) = upper(trim(r.establishment))
   where r.establishment is not null
   group by r.source_recall_id, r.establishment
@@ -58,7 +58,7 @@ from matched;
 with matched as (
   select r.source_recall_id, count(e.establishment_id) as n_candidates
   from stg_usda_fsis_recalls r
-  left join firm_establishment_attributes e
+  left join firm_usda_attributes e
     on upper(trim(e.establishment_name)) = upper(trim(r.establishment))
   where r.establishment is not null
   group by r.source_recall_id

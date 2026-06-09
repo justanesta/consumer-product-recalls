@@ -14,7 +14,7 @@
 -- (paren-only `~ '\(OOB'`) surfaced a SECOND notation — a dash form `- OOB` ("ARLINGTON BOAT WORKS
 -- - OOB") — so this now matches word-boundary `~ '\yOOB\y'` (also excludes `(previous name)` renames).
 -- The original leak is why those dash-OOB recycles showed up IN the swing; with the fix they move OUT.
--- NOTE: the silver model (firm_manufacturer_attributes.mic_oob_recycled) uses the same `\yOOB\y`;
+-- NOTE: the silver model (firm_uscg_attributes.mic_oob_recycled) uses the same `\yOOB\y`;
 -- assert_mic_holder_stable.sql's published "205" is still paren-only and undercounts. Past Company sentinels
 -- ('-' / 'UNK' / '' / whitespace) are NULLed to match the silver staging view, so the dump shows
 -- REAL priors — NOT sentinels. With word-boundary OOB the swing is 144 (= 365 has-prior - 221 OOB);

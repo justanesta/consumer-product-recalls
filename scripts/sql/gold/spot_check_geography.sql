@@ -27,8 +27,8 @@ from recall_event_firm ref
 join recall_event re on re.recall_event_id = ref.recall_event_id and re.source in ('CPSC', 'NHTSA')
 join firm f on f.firm_id = ref.firm_id
 cross join lateral jsonb_array_elements_text(coalesce(f.observed_company_ids, '[]'::jsonb)) as cid(company_id)
-left join firm_establishment_attributes ea on ea.establishment_id = cid.company_id
-left join firm_manufacturer_attributes ma  on ma.mic = cid.company_id
+left join firm_usda_attributes ea on ea.establishment_id = cid.company_id
+left join firm_uscg_attributes ma  on ma.mic = cid.company_id
 left join firm_fda_attributes fa           on fa.firm_fei_num::text = cid.company_id
 where coalesce(ea.state, ma.state, fa.firm_state_cd) is not null
 limit 25;

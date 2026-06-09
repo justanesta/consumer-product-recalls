@@ -11,8 +11,8 @@
 -- reassignment_years_rows (393) is keyed off oob_recycled_directory, NOT the recalled subset.
 -- reassignment_years_on_recalled_mic (~23) is the only part the recall_event_firm join can use.
 select
-    (select count(*) from firm_manufacturer_attributes)                         as mics_total_directory,
-    (select count(*) from firm_manufacturer_attributes where mic_oob_recycled)  as oob_recycled_directory,
+    (select count(*) from firm_uscg_attributes)                         as mics_total_directory,
+    (select count(*) from firm_uscg_attributes where mic_oob_recycled)  as oob_recycled_directory,
     (select count(*) from uscg_mic_reassignment_years)                          as reassignment_years_rows,
     (select count(*) from uscg_mic_reassignment_years ry
        where exists (select 1 from uscg_recalls_bronze r
