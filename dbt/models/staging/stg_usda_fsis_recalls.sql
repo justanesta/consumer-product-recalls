@@ -46,6 +46,10 @@ select
     recall_date::timestamptz        as announced_at,
     last_modified_date::timestamptz as published_at,
     closed_date::timestamptz        as closed_at,
+    -- 2026-06 USDA API change (Finding S): closed_date (full date) is no longer returned;
+    -- closed_year (year only) is. Project it so recall_event can carry a year-grain close
+    -- (terminated_year) when the precise date is gone, rather than fabricating a date.
+    nullif(closed_year, '')         as closed_year,
     recall_classification           as classification,
     recall_type,
     nullif(risk_level, '')          as risk_level,
