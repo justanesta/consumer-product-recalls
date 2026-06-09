@@ -10,6 +10,8 @@ This document covers production operations: scheduled runs, monitoring, secret r
 
 Per-source extraction workflows (per [ADR 0010](decisions/0010-ingestion-cadence-and-github-actions-cron.md), with empirical revisions noted):
 
+> **Authoritative cadence = the ADR 0010 *2026-06-08 revision note*** — the full **9-source** schedule with the freshness-vs-GitHub-Actions-compute tuning (NHTSA daily Mon–Fri, USCG recalls daily, `usda_establishments` Wed, `fda_press_releases` / `uscg_manufacturer_details` tranched). The table below is the older 5-source view and is **stale in places** (NHTSA weekly → daily; `usda_establishments` Mon → Wed; missing the `fda_press_releases` / `uscg_manufacturers` / `uscg_manufacturer_details` rows + the monthly/quarterly sweeps) — its full rewrite + the per-source runbooks land in the **6f.4** doc-sweep.
+
 | Source | Cadence | Strategy | Workflow file |
 |---|---|---|---|
 | CPSC | daily | Incremental on `LastPublishDate` (publication-time only) | `.github/workflows/extract-cpsc.yml` |

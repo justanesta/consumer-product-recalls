@@ -1,6 +1,6 @@
 # 0010 — Ingestion cadence and orchestration via GitHub Actions cron
 
-- **Status:** Accepted; partially superseded by [ADR 0023](0023-fda-deep-rescan-required-archive-migration-detected.md); amended 2026-05-01 (CPSC + USDA empirical findings) and 2026-06-02 (Phase-7 deep-rescan cadence + GitHub-Actions hardening) — see "Revision note" sections at end
+- **Status:** Accepted; partially superseded by [ADR 0023](0023-fda-deep-rescan-required-archive-migration-detected.md); amended 2026-05-01 (CPSC + USDA empirical findings), 2026-06-02 (Phase-7 deep-rescan cadence + GitHub-Actions hardening), and 2026-06-08 (Phase 6f.3 — full 9-source cadence + GHA compute tuning) — see "Revision note" sections at end
 - **Date:** 2026-04-16
 
 ## Context
@@ -126,3 +126,86 @@ USCG manufacturer/listing (Tier-1) deep rescans follow the weekly USCG cadence; 
 - Secret validation runs **before** `uv sync` in every deep-rescan workflow, so a missing secret fails in seconds rather than after dependency install.
 
 `schedule:` triggers remain **off** — Phase 7 turns cron on. These workflows are now cron-*ready*.
+
+---
+
+## Revision note — 2026-06-08 (Phase 6f.3: full 9-source cadence + GitHub-Actions compute tuning)
+
+The Phase 6f.2 pass verified every extractor's mode against the code (`documentation/architecture.md` → *Extraction mode + deep-rescan role*). This note completes the cadence picture for **all nine** registered sources — the Decision table (line 33) and the 2026-06-02 table covered only the five recall sources — and tunes the schedule for freshness vs GitHub-Actions compute. **`schedule:` triggers stay off; Phase 7 turns them on with these targets.**
+
+**Compute frame.** A public repo has unlimited Actions minutes, so the binding constraints are (a) the **6h per-job hard cap** and (b) this ADR's own ">60min consistently → reconsider" trigger. The design keeps the cheap, user-facing recall sources fresh **daily**, drops full-dump / short-circuit / reference sources to **weekly**, and pushes the two multi-hour sweeps to the slowest viable cadence — one of which (`uscg_manufacturer_details` Tier-2) physically cannot run as a single job (4.5–7.75h > 6h).
+
+### Full per-source cadence (Phase-7 cron targets)
+
+| Source | Mode | Incremental / routine | Deep-rescan / full-sweep | Notes |
+|---|---|---|---|---|
+| `cpsc` | cursor | **daily** | **weekly** (Sun) | deep-rescan = the *mandatory* edit-catch (`LastPublishDate` doesn't advance on edits) |
+| `fda` | cursor | **daily** | **weekly** (Sun, 90-day window) | deep-rescan catches archive migration (ADR 0023) |
+| `usda` | full-dump | **daily** | n/a | daily keeps the presence manifest tight (ADR 0026) |
+| `usda_establishments` | full-dump | **weekly — Wed** | n/a | FSIS directory, refreshed Mon/Tue → collect Wed; reference data, no daily need |
+| `nhtsa` | full-dump | **daily (Mon–Fri)** | **monthly** | file updates weekdays; routine catches modern edits — deep-rescan only re-verifies the *static* `PRE_2010` archive |
+| `uscg` | short-circuit | **daily** | **monthly** safety-net | short-circuit ⇒ ~1 page/day when unchanged; safety-relevant recalls caught within a day |
+| `uscg_manufacturers` | short-circuit | **weekly** | **monthly** safety-net | reference directory, slow-changing |
+| `fda_press_releases` | work-list | **weekly** (after `fda`) | **quarterly** full ~25k sweep (recent-first, resumable) | Tier-3 enrichment; press releases skew to recent recalls (~1.4k populated of ~25k) |
+| `uscg_manufacturer_details` | work-list, 2-tier | **weekly** Tier-1 (after listing) | **monthly 1/3 shard rotation** (full corpus / quarter) | Tier-2 whole sweep is 4.5–7.75h > 6h cap ⇒ **must** tranche |
+| **transform** | dbt | **daily**, after the daily extracts | — | `dbt build` → `resolve-firms` → `dbt build` + snapshots (silver/gold + SCD-2 banking) |
+
+### Cron grid (UTC — illustrative; times Phase-7-tunable, ordering constraints are not)
+
+- **Daily** — `02:00 cpsc` · `02:10 fda` · `02:20 usda` · `02:30 uscg` · `02:40 nhtsa` *(Mon–Fri)* → **`03:00 transform`**
+- **Weekly** — `Mon 01:00 uscg_manufacturers` → `Mon 01:15 uscg_manufacturer_details` (Tier-1) · `Mon 02:50 fda_press_releases` (incremental) · `Wed 01:00 usda_establishments` · `Sun 05:00 deep-rescan-cpsc` · `Sun 05:30 deep-rescan-fda`
+- **Monthly (1st)** — `06:00 deep-rescan-nhtsa` (PRE+POST) · `06:15 deep-rescan-uscg` + `deep-rescan-uscg_manufacturers` (safety-net) · `06:30 uscg_manufacturer_details` Tier-2 (this month's 1/3 shard)
+- **Quarterly (1st Jan/Apr/Jul/Oct)** — `07:00 fda_press_releases` full sweep (recent-first, resumable)
+- **Ordering (not tunable — work-list deps):** `fda → fda_press_releases`; `uscg_manufacturers → uscg_manufacturer_details` — scheduled offsets (interim) or `workflow_run` chaining (target). Daily extracts must precede the `03:00` transform; the Mon/Wed weekly extracts are timed before that day's transform so they land same-day.
+
+### Open-question resolutions (rationale)
+
+- **NHTSA daily vs weekly → daily (Mon–Fri).** The flat file updates on weekdays; the routine POST_2010 download already catches modern edits, so daily keeps vehicle recalls fresh at modest cost (the W6 inner-content-SHA pre-extract gate will make no-change days near-instant). **Deep-rescan → monthly** (down from the 2026-06-02 weekly): it only re-verifies the *static* `PRE_2010` archive.
+- **`usda_establishments` → weekly (Wed).** FSIS refreshes the directory Mon/Tue; Wednesday collection (Tue-night UTC, before the transform) lands it same-day. Reference data feeding the establishment sidecar — no daily need.
+- **`uscg` recalls → daily.** The two-gate short-circuit makes a no-change day ~one page fetch, so daily is nearly free and a new (safety-relevant) boat recall is caught within a day instead of up to a week. The directory (`uscg_manufacturers`) stays weekly — slow-changing reference data.
+- **`fda_press_releases` → weekly incremental + quarterly full sweep.** Press releases skew hard to recent recalls (~1.4k populated of ~25k distinct events), so the weekly work-list (recently-edited events) keeps the populated set fresh; the full sweep is a quarterly backstop run **recent-first + resumable** (the existing `FdaPressReleaseCheckpointedSeedLoader`) so the valuable recent tail is always covered first. If a quarterly run nears the cap, the documented fallback is monthly recent-**window** portions.
+- **`uscg_manufacturer_details` Tier-2 → monthly 1/3 shard rotation.** A whole sweep is 4.5–7.75h, so it **cannot** be a single job at *any* cadence; monthly thirds (full corpus every quarter) is the slowest cadence that keeps each run safely under 6h while honoring the monthly preference. Detail-only drift (a `Date Modified` bump with no listing change) moves slowly, so quarterly full-corpus coverage is ample.
+
+### Build dependencies (Phase 7, before cron-on)
+
+- **`uscg_manufacturer_details` shard param** — `--min-id/--max-id` + a persistent per-shard offset cursor (neither exists today). Until built, the interim is the W9 chunked-process driver or operator-triggered sweeps; a single whole-sweep job is not viable (>6h).
+- **`fda_press_releases` date-window param** — a `recall_initiation_dt` floor for the monthly-recent-window fallback (only if the quarterly whole-sweep proves too long). Recent-first ordering already exists.
+- **Cross-source ordering** — scheduled offsets are the simple interim; `workflow_run` chaining is the robust target.
+
+The Decision per-source cadence table (5 sources, line 33) and the 2026-06-02 deep-rescan table are **superseded by the 9-source table above** for the Phase-7 targets; both are retained as historical record.
+
+```mermaid
+flowchart TB
+    subgraph DAILY["Daily · ~02:00 UTC"]
+        cpsc[cpsc]
+        fda[fda]
+        usda[usda]
+        uscg[uscg · short-circuit]
+        nhtsa["nhtsa · Mon–Fri"]
+        transform[("transform · 03:00<br/>dbt build → resolve-firms → dbt build + snapshots")]
+    end
+    subgraph WEEKLY["Weekly"]
+        usdae["usda_establishments · Wed"]
+        uscgm["uscg_manufacturers · Mon"]
+        uscgmd1["uscg_manufacturer_details · Tier-1 · Mon"]
+        fdapr["fda_press_releases · incremental · Mon"]
+        drcpsc["deep-rescan cpsc · Sun"]
+        drfda["deep-rescan fda · 90d · Sun"]
+    end
+    subgraph MONTHLY["Monthly · 1st"]
+        drnhtsa["deep-rescan nhtsa · PRE+POST"]
+        snuscg["safety-net · uscg + uscg_manufacturers"]
+        uscgmd2["uscg_manufacturer_details · Tier-2 · 1/3 shard"]
+    end
+    subgraph QUARTERLY["Quarterly · 1st Jan/Apr/Jul/Oct"]
+        fdaprfull["fda_press_releases · full sweep · recent-first"]
+    end
+
+    cpsc ==> transform
+    fda ==> transform
+    usda ==> transform
+    uscg ==> transform
+    nhtsa ==> transform
+    fda -.->|events| fdapr
+    uscgm -.->|MICs| uscgmd1
+```
