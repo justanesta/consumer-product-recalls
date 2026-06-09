@@ -32,7 +32,10 @@ import sqlalchemy as sa
 
 from src.config.settings import Settings
 from src.extractors._base import TransientExtractionError
-from src.extractors.uscg_manufacturer_detail import UscgManufacturerDetailExtractor
+from src.extractors.uscg_manufacturer_detail import (
+    UscgManufacturerDetailExtractor,
+    shard_work_list,
+)
 from src.schemas.uscg_manufacturer_detail import UscgManufacturerDetailRecord
 
 _FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "uscg"
@@ -292,3 +295,43 @@ def test_pydantic_requires_detail_url_and_mic() -> None:
         UscgManufacturerDetailRecord.model_validate({"mic": "AXY"})  # missing detail_url
     with pytest.raises(PydanticValidationError):
         UscgManufacturerDetailRecord.model_validate({"detail_url": "https://x"})  # missing mic
+
+
+class TestShardWorkList:
+    """``shard_work_list`` — the stateless 1/N strided slice for the Tier-2 monthly rotation."""
+
+    @staticmethod
+    def _work(n: int) -> list[dict[str, str]]:
+        return [{"mic": f"M{i:04d}", "detail_url": f"https://x/{i}"} for i in range(n)]
+
+    def test_shards_partition_exactly(self) -> None:
+        work = self._work(100)
+        shards = [shard_work_list(work, i, 3) for i in range(3)]
+        flattened = [item for s in shards for item in s]
+        # every item appears in exactly one shard; the union is the full work-list
+        assert len(flattened) == len(work)
+        assert sorted(flattened, key=lambda r: r["mic"]) == work
+
+    def test_shard_sizes_within_one(self) -> None:
+        work = self._work(100)
+        sizes = [len(shard_work_list(work, i, 3)) for i in range(3)]
+        assert max(sizes) - min(sizes) <= 1
+        assert sum(sizes) == 100
+
+    def test_item_index_determines_shard(self) -> None:
+        # item at index j is in shard (j % N) and no other — the stable-membership property
+        # that lets the monthly rotation derive the shard from the calendar month statelessly.
+        work = self._work(20)
+        n = 3
+        for j, item in enumerate(work):
+            assert item in shard_work_list(work, j % n, n)
+            for k in range(n):
+                if k != j % n:
+                    assert item not in shard_work_list(work, k, n)
+
+    def test_single_shard_returns_all(self) -> None:
+        work = self._work(10)
+        assert shard_work_list(work, 0, 1) == work
+
+    def test_empty_work_list(self) -> None:
+        assert shard_work_list([], 0, 3) == []

@@ -413,6 +413,28 @@ def deep_rescan(
             ),
         ),
     ] = None,
+    shard: Annotated[
+        int | None,
+        typer.Option(
+            "--shard",
+            help=(
+                "uscg_manufacturer_details only: run strided shard N (0-based) of "
+                "--shard-count of the full detail work-list, so the Tier-2 sweep fits under "
+                "the Actions 6h cap. The monthly workflow derives N from the calendar month. "
+                "Ignored by other sources."
+            ),
+        ),
+    ] = None,
+    shard_count: Annotated[
+        int | None,
+        typer.Option(
+            "--shard-count",
+            help=(
+                "uscg_manufacturer_details only: total shards (e.g. 3 = full corpus per "
+                "quarter at a monthly 1/3 rotation). Required with --shard."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run a historical / deep-rescan load for a given source over a date window.
 
@@ -539,6 +561,28 @@ def deep_rescan(
         typer.echo(
             f"{source}: --limit / --resume-after-event-id apply only to "
             "fda_press_releases; ignored."
+        )
+
+    # uscg_manufacturer_details-only: strided shard of the full Tier-2 sweep so a single
+    # monthly job fits under the Actions 6h cap (ADR 0010 1/3 rotation). Stateless — the
+    # workflow derives --shard from the month, so no persistent per-shard cursor.
+    if source == "uscg_manufacturer_details":
+        if (shard is None) != (shard_count is None):
+            typer.echo("--shard and --shard-count must be given together", err=True)
+            raise typer.Exit(code=1)
+        if shard_count is not None:
+            assert shard is not None  # paired check above
+            if shard_count < 1:
+                typer.echo("--shard-count must be >= 1", err=True)
+                raise typer.Exit(code=1)
+            if shard < 0 or shard >= shard_count:
+                typer.echo(f"--shard must be in [0, {shard_count}); got {shard}", err=True)
+                raise typer.Exit(code=1)
+            loader.shard_index = shard  # type: ignore[attr-defined]
+            loader.shard_count = shard_count  # type: ignore[attr-defined]
+    elif shard is not None or shard_count is not None:
+        typer.echo(
+            f"{source}: --shard / --shard-count apply only to uscg_manufacturer_details; ignored."
         )
 
     result = loader.run(change_type=change_type)
