@@ -88,5 +88,5 @@ The consolidation step is also when we decide whether existing silver column nam
 
 - `project_scope/branch_sequencing_strategy.md` — Phase 6a is the foundation-audit phase that consumes these docs
 - `project_scope/implementation_plan.md` — master phase plan
-- `project_scope/phase-6-execution-plan.md` — Phase 6 execution sequencing constraints
+- `project_scope/archive/phase-6-execution-plan.md` — Phase 6 execution sequencing constraints
 - `prompts/phase_6_deliverable_plan.md` — the deliverable plan listing the cross-source field-association workstream as Phase 6 add-on #2 (the trigger for this methodology)

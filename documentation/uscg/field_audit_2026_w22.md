@@ -11,7 +11,7 @@
 
 ### Status note — USCG website reactivated; audit is fully live
 
-The Phase 6 plan's prior "USCG indefinitely deferred (2026-05-09 website outage)" framing (`phase-6-execution-plan.md:8`) is out-of-date per user 2026-05-29: **the USCG website is back up and the project pipeline is fully integrated** (extractors, validators, schemas, cassettes). This audit is on the same footing as the other 4 source audits — not a deferred-state review. §7 decisions are proposed for implementation in the (a) PR; §9 supplementary work is done now (no deferral); §8 actively researches the `boat_type` lookup-table gap.
+The Phase 6 plan's prior "USCG indefinitely deferred (2026-05-09 website outage)" framing (`archive/phase-6-execution-plan.md:8`) is out-of-date per user 2026-05-29: **the USCG website is back up and the project pipeline is fully integrated** (extractors, validators, schemas, cassettes). This audit is on the same footing as the other 4 source audits — not a deferred-state review. §7 decisions are proposed for implementation in the (a) PR; §9 supplementary work is done now (no deferral); §8 actively researches the `boat_type` lookup-table gap.
 
 Pipeline state baseline:
 - Silver code in place (USCG branches in `recall_event.sql`, `recall_product.sql`, `firm.sql`, `recall_event_firm.sql`)
@@ -221,7 +221,7 @@ The Step 7 USCG manufacturers directory ingestion (16,263 manufacturer records s
 - **Cross-source coverage: 99.44%** (714 of 718 distinct recall MICs resolve to a directory entry). 4 unresolvable orphans, all real: `111` (retired regulatory code per Finding I, 30 recall rows reference), `999` (17 rows, sentinel), `777` (1 row, sentinel), `N/A` (1 row, literal "N/A" string).
 - **Case-sensitivity finding (silver-only):** USCG recalls bronze contains 7 distinct lowercase MIC values (`cec`, `blb`, `kis`, `lbb`, `ser`, `vky`, `zep`) that are case-mismatched against the directory's all-uppercase canonical form. The case-insensitive JOIN handles them cleanly; bronze still preserves verbatim per ADR 0027.
 
-Measurement script: `scripts/sql/uscg_manufacturers/silver/measure_rescue_and_coverage.sql`. Implementation files: `dbt/models/silver/firm.sql:99-130` (USCG branch with directory LEFT JOIN) + `dbt/models/silver/recall_event_firm.sql:85-103` (USCG branch in lockstep). Plan: `project_scope/phase-5d-uscg-manufacturers.md`. Empirical observations: `documentation/uscg/manufacturer_scraping_observations.md` §L.
+Measurement script: `scripts/sql/uscg_manufacturers/silver/measure_rescue_and_coverage.sql`. Implementation files: `dbt/models/silver/firm.sql:99-130` (USCG branch with directory LEFT JOIN) + `dbt/models/silver/recall_event_firm.sql:85-103` (USCG branch in lockstep). Plan: `project_scope/archive/phase-5d-uscg-manufacturers.md`. Empirical observations: `documentation/uscg/manufacturer_scraping_observations.md` §L.
 
 The "Option 3 soft-fail" decision still applies for the 5 mic-only-no-name rows that DON'T have a directory entry. Phase 6b can revisit if those retired-MIC rows become recoverable via a synthetic-anchor strategy.
 
@@ -285,7 +285,7 @@ Most of these are already documented in `scraping_observations.md` Findings A-S.
 | **`units` is TEXT at bronze, INTEGER at silver** | Per ADR 0027 storage-forced transforms only at bronze; silver casts via regex guard `case when units ~ '^[0-9]+$' then units::integer end` | Defensive — handles a future thousands-separator or range format gracefully (lands as NULL in silver until a schema decision adds parsing) |
 | **`last_date` NOT a render timestamp** | Per Finding D byte-stability + Finding E inference: `last_date` is "last editorial change", not server-render | Treated as legitimate lifecycle date; included in `content_hash`. Revisit per Finding E if a previously-stable recall's `last_date` advances without other changes |
 | **Pagination boundary = empty placeholder** | Page 71 returns `<a href="recalls-details.php?id=">` (empty id) — stop signal. NOT a 404 | Finding L. Drift-guard: abort walk if page-count exceeds 200 |
-| **Website outage** | 2026-05-09 USCG website outage → USCG indefinitely deferred per Phase 6 plan | Current bronze freshness = whatever was captured before the outage. ~1,763 records from 2026-05-17 historical seed. Phase 6a.5 explicitly excludes USCG from backfill (`phase-6-execution-plan.md:85`) |
+| **Website outage** | 2026-05-09 USCG website outage → USCG indefinitely deferred per Phase 6 plan | Current bronze freshness = whatever was captured before the outage. ~1,763 records from 2026-05-17 historical seed. Phase 6a.5 explicitly excludes USCG from backfill (`archive/phase-6-execution-plan.md:85`) |
 
 ## 6. The firm-relationship question — MIC + company_name + no FEI analog (structural)
 
@@ -335,7 +335,7 @@ Listing-side samples surface several patterns Phase 6b should consider:
 - **All-caps** — `BOMBARDIER`, `VOLVO GROUP` — different from NHTSA's mixed-case `mfgname` / `mfgtxt`. Same as NHTSA's `maketxt` casing
 - **Corporate-form suffix patterns** — likely similar to NHTSA (`Inc.`, `Corp.`, `LLC`) but smaller corpus may surface fewer variants
 
-Phase 6b NHTSA suffix-strip work (per `project_scope/phase-6-execution-plan.md` § Phase 6b → CPSC firm-name normalization) should generalize to USCG with the same regex patterns; corpus-scale validation deferred to website-reactivation + Phase 6b empirical pass.
+Phase 6b NHTSA suffix-strip work (per `project_scope/archive/phase-6-execution-plan.md` § Phase 6b → CPSC firm-name normalization) should generalize to USCG with the same regex patterns; corpus-scale validation deferred to website-reactivation + Phase 6b empirical pass.
 
 ## 7. Decisions locked in (confirmed 2026-05-29)
 

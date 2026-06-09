@@ -531,7 +531,7 @@ Re-running the new `scripts/sql/uscg_manufacturers/bronze/explore_bronze_shape.s
 
 ## References
 
-- Phase 5d Step 7 plan: `project_scope/phase-5d-uscg-manufacturers.md`
+- Phase 5d Step 7 plan: `project_scope/archive/phase-5d-uscg-manufacturers.md`
 - USCG recalls scraping observations: `documentation/uscg/scraping_observations.md` (Findings A-S — analogous patterns from the sibling source)
 - USCG recalls extractor (structural mirror): `src/extractors/uscg.py`
 - USDA establishments (semantic mirror for silver layer): `src/extractors/usda_establishment.py`, `dbt/models/silver/firm_establishment_attributes.sql`

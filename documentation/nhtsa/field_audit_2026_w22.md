@@ -520,7 +520,7 @@ After NHTSA historical seed in Phase 6a.5, re-run both scripts. Expected deltas:
 
 ### Phase 6a.5 post-seed re-validation
 
-Per `project_scope/phase-6-execution-plan.md` § Phase 6a.5, after the NHTSA historical seed completes:
+Per `project_scope/archive/phase-6-execution-plan.md` § Phase 6a.5, after the NHTSA historical seed completes:
 
 - [ ] Re-run `explore_bronze_shape.sql` Q1-Q16 against full PRE_2010 + POST_2010 corpus. Expected: row counts roughly double (depending on PRE_2010 size); rcltype distribution shifts (more Vehicle vs Equipment proportionally on older recalls); FMVSS length distribution may surface pre-May-2025 wider values; per-year rcdate distribution shows the 1979 bulk-load event per Finding H
 - [ ] Re-run `assert_eleven_tuple_identity_stable.sql` post-seed. Expected: warn-count delta documented; per §6a.5 quality gate, "any new drift groups triaged"

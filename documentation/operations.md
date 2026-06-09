@@ -2,7 +2,7 @@
 
 This document covers production operations: scheduled runs, monitoring, secret rotation, and recovery procedures. For architectural rationale, see the ADRs in `documentation/decisions/`. For system architecture and component relationships, see [`architecture.md`](architecture.md).
 
-> ⚠️ **Partially stale (as of 2026-06-01) — full refresh scheduled in the Phase 6f doc-sync** (`project_scope/phase-6-execution-plan.md` §6f). USCG is **live since 2026-05-15** (3 extraction sources: recalls + manufacturers + manufacturer-details; 8 total across the pipeline). The USCG row below and any "4-source" framing predate the reactivation; live USCG cadences are in `documentation/uscg/` and the Phase 6f plan. The rest of this guide is current.
+> ⚠️ **Partially stale (as of 2026-06-01) — full refresh scheduled in the Phase 6f doc-sync** (`project_scope/archive/phase-6-execution-plan.md` §6f). USCG is **live since 2026-05-15** (3 extraction sources: recalls + manufacturers + manufacturer-details; 8 total across the pipeline). The USCG row below and any "4-source" framing predate the reactivation; live USCG cadences are in `documentation/uscg/` and the Phase 6f plan. The rest of this guide is current.
 
 ---
 
@@ -10,16 +10,26 @@ This document covers production operations: scheduled runs, monitoring, secret r
 
 Per-source extraction workflows (per [ADR 0010](decisions/0010-ingestion-cadence-and-github-actions-cron.md), with empirical revisions noted):
 
-| Source | Cadence | Strategy | Workflow file |
-|---|---|---|---|
-| CPSC | daily | Incremental on `LastPublishDate` (publication-time only) | `.github/workflows/extract-cpsc.yml` |
-| CPSC deep rescan | weekly (Sun) | **Mandatory** edit detection — `LastPublishDate` does not advance on edits | `.github/workflows/deep-rescan-cpsc.yml` |
-| FDA | daily | Incremental on `eventlmd` | `.github/workflows/extract-fda.yml` |
-| FDA deep rescan | weekly (Sun) | Archive-migration coverage per [ADR 0023](decisions/0023-fda-deep-rescan-required-archive-migration-detected.md) | `.github/workflows/deep-rescan-fda.yml` |
-| USDA recalls | daily | **Full-dump** every run — no server-side filter exists | `.github/workflows/extract-usda.yml` |
-| USDA establishments | weekly (Mon) | Full-dump every run; ETag conditional GET enabled (Finding A revision, 2026-05-09) | `.github/workflows/extract-usda-establishments.yml` |
-| NHTSA | weekly | Full flat-file download per [ADR 0008](decisions/0008-nhtsa-flat-file-primary-api-for-vehicle-lookup.md) | `.github/workflows/extract-nhtsa.yml` |
-| USCG | daily | **LIVE since 2026-05-15** — polite HTML scrape with Records-Found short-circuit. (Plus `uscg_manufacturers` daily + `uscg_manufacturer_details` two-tier; full 3-source USCG cadence table lands in the Phase 6f §6f rewrite.) | `.github/workflows/extract-uscg.yml` |
+> **Cadence rationale is single-homed in [ADR 0010](decisions/0010-ingestion-cadence-and-github-actions-cron.md)** (the *2026-06-08 revision note* — full 9-source matrix + grid + the freshness-vs-compute reasoning). This table is the **operational** view: each source/sweep → cadence → workflow file. ⚠️ Several USCG extract/deep-rescan **workflow files do not exist yet** — Phase 7 creates them (the loaders exist in the registry today).
+
+| Source / sweep | Cadence | Workflow file |
+|---|---|---|
+| CPSC | daily | `extract-cpsc.yml` |
+| CPSC deep-rescan | weekly (Sun) — **mandatory** edit-catch | `deep-rescan-cpsc.yml` |
+| FDA | daily | `extract-fda.yml` |
+| FDA deep-rescan | weekly (Sun), 90-day window ([ADR 0023](decisions/0023-fda-deep-rescan-required-archive-migration-detected.md)) | `deep-rescan-fda.yml` |
+| FDA press releases | weekly (Mon, after FDA) — per-event work-list | `extract-fda-press-releases.yml` |
+| FDA press releases · full sweep | quarterly — recent-first, resumable (~25k) | `deep-rescan-fda-press-releases.yml` |
+| USDA recalls | daily — full-dump | `extract-usda.yml` |
+| USDA establishments | weekly (Wed) — full-dump directory | `extract-usda-establishments.yml` |
+| NHTSA | daily (Mon–Fri) — full POST_2010 file | `extract-nhtsa.yml` |
+| NHTSA deep-rescan | monthly — adds the static PRE_2010 archive | `deep-rescan-nhtsa.yml` |
+| USCG recalls | daily — short-circuit scrape | **Phase 7** — `extract-uscg.yml` not yet created |
+| USCG recalls · deep-rescan | monthly — safety-net full walk | **Phase 7** — `deep-rescan-uscg.yml` not yet created |
+| USCG manufacturers (listing) | weekly (Mon) — short-circuit directory | **Phase 7** — `extract-uscg-manufacturers.yml` not yet created |
+| USCG manufacturers · deep-rescan | monthly — safety-net | **Phase 7** — not yet created |
+| USCG manufacturer details · Tier-1 | weekly (Mon, after listing) — listing-delta work-list | `extract-uscg-manufacturers-detail.yml` |
+| USCG manufacturer details · Tier-2 | **monthly 1/3 shard** — full ~16k sweep, >6h ⇒ tranched | `deep-rescan-uscg-manufacturers-detail.yml` |
 
 Plus a transformation workflow scheduled to run after the latest extraction completes (per [ADR 0018](decisions/0018-ci-posture.md)):
 
@@ -226,7 +236,21 @@ systemd-inhibit --what=sleep:idle --mode=block --why="FDA PR seed" \
   2>&1 | tee logs/seed_pr_checkpointed_$(date +%Y%m%dT%H%M%S).log
 ```
 
-**Resume:** re-run the *exact same command* — it continues from the committed DB cursor (a `complete` checkpoint is a no-op). **Akamai:** the loader sends the Mozilla `IRES_USER_AGENT` (the default python-httpx UA trips the anti-abuse 302 on the first request, Finding N); a throttle exits the process — wait ≥30 min, then re-run to resume. Knobs: `--batch-size` (default 250 events ≈ ~5 min), `--since YYYY-MM-DD` (floor the work-list; date-unknown events kept). **Verify on completion:** re-run → `already complete`, then `dbt build` the press-release silver. Supersedes the legacy `scripts/fda_press_releases/seed_chunked.sh` (ascending-id, log-grep cursor).
+**Resume:** re-run the *exact same command* — it continues from the committed DB cursor (a `complete` checkpoint is a no-op). **Self-healing on transient failure (overnight, unattended):** a transient batch failure (network drop, a plain 5xx, **or a `503`-with-HTML — a cached Akamai NetStorage "Accessdata Error" failover page served when the iRES origin hiccups**, verified 2026-06-08; distinct from the permanent UA-fingerprint 302→apology page, Finding N) no longer kills the sweep. The driver sleeps an **escalating cooldown** (`--cooldown-base-seconds`, default 120 s, doubling each consecutive failure, capped at 30 min) and re-runs the batch from the committed cursor; after `--max-consecutive-failures` (default 6) it trips a **circuit breaker** and exits cleanly (cursor preserved → just re-run). Per-event 5xx blips are absorbed earlier by the existing backoff retry, so most throttles never reach the driver. Watch `seed.batch_failed_cooling_down` / `seed.circuit_open` in the log. The loader sends the Mozilla `IRES_USER_AGENT` (the default python-httpx UA trips the fingerprint 302 on the first request). Knobs: `--batch-size` (default 250 events ≈ ~5 min), `--since YYYY-MM-DD` (floor the work-list; date-unknown events kept), `--cooldown-base-seconds`, `--max-consecutive-failures`. **Verify on completion:** re-run → `already complete`, then `dbt build` the press-release silver. Supersedes the legacy `scripts/fda_press_releases/seed_chunked.sh` (ascending-id, log-grep cursor).
+
+---
+
+### USCG manufacturer-details Tier-2 full sweep (sharded)
+
+The Tier-2 sweep re-fetches **every** MIC's detail page (~16.3k pages at the polite 1 s throttle ≈ 4.5–7.75 h) — the only mechanism that catches **detail-only drift** (a `status` flip, a `Parent MIC` / `Past Company` / `DBA` edit, or a bare `Date Modified` bump) that Tier-1's listing-delta cursor is blind to (`project_scope/phase-5d-uscg-manufacturers-detail.md`, "Tier-1 vs Tier-2 coverage"). Because a whole sweep exceeds the GitHub-Actions **6 h cap**, it runs as a **monthly 1/3 shard rotation** (full corpus every quarter) once the `--min-id/--max-id` shard param lands (per the [ADR 0010 2026-06-08 note](decisions/0010-ingestion-cadence-and-github-actions-cron.md)); the interim is operator-triggered or the chunked-process driver (plan W9).
+
+```bash
+recalls deep-rescan uscg_manufacturer_details \
+  2>&1 | tee logs/uscg_detail_tier2_$(date +%Y%m%dT%H%M%S).log
+# sharded form (once the param exists): append  --min-id <N> --max-id <M>
+```
+
+**Bulk `Date Modified` → mark it a re-baseline.** `date_modified` is **in** the bronze content hash (`src/extractors/uscg_manufacturer_detail.py`), so if USCG bulk-bumps it across the directory (a cosmetic, site-wide timestamp change with no real content edit) a Tier-2 sweep re-inserts the *entire* corpus. Run that sweep with **`--change-type=schema_rebaseline`** so the wave is recorded as a re-baseline, not real edits — keeping the audit trail honest and freshness untouched (the deep-rescan path already skips `_touch_freshness`). The SCD-2 sidecar is unaffected either way: `uscg_manufacturer_attributes_snapshot` excludes `date_modified` from its `check_cols`, so no phantom version is banked.
 
 ---
 
@@ -253,7 +277,7 @@ The steady-state invariant is: **local `.env` always points at `dev`; only GitHu
    ```bash
    psql -f scripts/sql/_pipeline/seed_verify.sql   # bronze row counts + watermark coverage
    ```
-5. **Seed** in the documented order (attended/DB-sensitive sources first, long unattended HTML scrapes last; respect the USCG manufacturers → manufacturer-details dependency). For the canonical Phase 6a.5 order and per-source commands see [`project_scope/phase-6-execution-plan.md`](../project_scope/phase-6-execution-plan.md). Every seed run must carry `--change-type=historical_seed` so `recall_event_history` (Phase 6) doesn't synthesize false-edit events (same rule as the re-ingestion procedure above).
+5. **Seed** in the documented order (attended/DB-sensitive sources first, long unattended HTML scrapes last; respect the USCG manufacturers → manufacturer-details dependency). For the canonical Phase 6a.5 order and per-source commands see [`project_scope/archive/phase-6-execution-plan.md`](../project_scope/archive/phase-6-execution-plan.md). Every seed run must carry `--change-type=historical_seed` so `recall_event_history` (Phase 6) doesn't synthesize false-edit events (same rule as the re-ingestion procedure above).
 6. **Verify** with `scripts/sql/_pipeline/seed_verify.sql` (bronze counts + migration head + watermark coverage), plus `quarantine_check.sql` (rate < 5%) and `watermark_health.sql` in the same dir — counts within ~10% of projection.
 7. **Revert the local env (mandatory):** `cp .env.dev.bak .env` (restore `.envrc` if changed), `direnv reload`, and re-run the step-3 sanity check to confirm you are back on `dev`.
 8. **Reset `dev` from `main`** (Neon console/API — ADR 0005's sanctioned `main`→`dev` direction). This gives `dev` the freshly-seeded full corpus and discards local experiment cruft, so subsequent local dbt work builds against production-equivalent bronze.

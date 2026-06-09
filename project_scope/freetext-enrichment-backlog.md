@@ -47,7 +47,7 @@
 - **Cross-source note:** FDA `product_type_short` + CPSC `products[].type` are single-valued `type` analogs; USDA is the only multi-value `type`. A `recall_product.type` array would force a cross-source shape decision (scalar elsewhere vs array for USDA) — settle at consolidation. (USDA `states` is comma-joined too but messier — `Nationwide`/`Midwest` mixed in — so it rides the FDA distribution-area state-normalizer item above, not this clean enum split.)
 
 ## Related — already tracked elsewhere (do not duplicate)
-- **USDA** `field_product_items` structured parse (embedded UPCs, lot codes, FSIS establishment numbers, dates) + `field_company_media_contact` parse — tracked in `documentation/audit/capture_expansion_backlog.md` USDA "deferred to Phase 6/7" table. The establishment-number extraction also feeds **Phase 6b** USDA recall→establishment disambiguation (Signal 1, `phase-6-execution-plan.md`).
+- **USDA** `field_product_items` structured parse (embedded UPCs, lot codes, FSIS establishment numbers, dates) + `field_company_media_contact` parse — tracked in `documentation/audit/capture_expansion_backlog.md` USDA "deferred to Phase 6/7" table. The establishment-number extraction also feeds **Phase 6b** USDA recall→establishment disambiguation (Signal 1, `archive/phase-6-execution-plan.md`).
 - The canonical `quantity_unit` + `distribution_states`/`distribution_countries` taxonomies should be designed **once here** and consumed by all sources.
 
 ## Sequencing

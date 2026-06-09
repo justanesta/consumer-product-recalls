@@ -259,7 +259,7 @@ Combined with §3's findings, the current `firm.sql` + `recall_event_firm.sql` d
 Reasoning:
 
 1. **Option B is a clean structural fix** that doesn't depend on any subjective normalization choices. Retailers[] empirically don't fit the firm contract; lifting them to `sales_channel_narrative` matches both the data shape and the landing-page user goal.
-2. **Option C's name cleaning belongs with RapidFuzz**, not as a bespoke CPSC silver transform. The Phase 6b plan already calls for cross-source fuzzy matching with FDA `firm_fei_num` as anchor (per ADR 0002 + `project_scope/phase-6-execution-plan.md`). CPSC name-stripping is conceptually the same problem as USDA's `multi_state` duplicate-name resolution — both want to collapse "this firm under different surface forms." Solve them together.
+2. **Option C's name cleaning belongs with RapidFuzz**, not as a bespoke CPSC silver transform. The Phase 6b plan already calls for cross-source fuzzy matching with FDA `firm_fei_num` as anchor (per ADR 0002 + `project_scope/archive/phase-6-execution-plan.md`). CPSC name-stripping is conceptually the same problem as USDA's `multi_state` duplicate-name resolution — both want to collapse "this firm under different surface forms." Solve them together.
 3. **The `CompanyID`-always-empty observation is just empirical truth**; no architectural response needed. The `firm_identifier` table sketched in §6 of the Phase 6 execution plan is FDA + USDA + USCG only — CPSC adds nothing to it. Document and move on.
 
 **What changes in the (a) PR under Option B:**
@@ -273,14 +273,14 @@ This is a focused 3-file change; risk-bounded.
 
 ### Status — Option B confirmed by user 2026-05-29
 
-Bug 2's name-cleaning work explicitly bundled with the broader Phase 6b RapidFuzz workstream (per user: "bundled in the rapidfuzz stage 6b with FDA firms and other information that needs to be extracted/manipulated with rapidfuzz before settling in silver"). See `project_scope/phase-6-execution-plan.md` § Phase 6b → "CPSC firm-name normalization (Phase 6a audit follow-on)".
+Bug 2's name-cleaning work explicitly bundled with the broader Phase 6b RapidFuzz workstream (per user: "bundled in the rapidfuzz stage 6b with FDA firms and other information that needs to be extracted/manipulated with rapidfuzz before settling in silver"). See `project_scope/archive/phase-6-execution-plan.md` § Phase 6b → "CPSC firm-name normalization (Phase 6a audit follow-on)".
 
 ## 7. Decisions locked in (confirmed 2026-05-29)
 
 All items below confirmed by user in conversation 2026-05-29 — alongside §6 Option B and the Phase 6b bundling of name-cleaning with the RapidFuzz workstream.
 
 1. **§3 Bug 1 fix path — adopt Option B in §6.** Remove `Retailers[]` from `firm.sql` + `recall_event_firm.sql`; lift to `recall_event.sales_channel_narrative` JSONB.
-2. **§3 Bug 2 — bundled into the Phase 6b RapidFuzz workstream.** Manufacturer/Importer/Distributor name fragmentation ("of <location>", "dba <name>" suffix patterns) handled by a pre-silver name-normalization stage in Phase 6b alongside FDA firm normalization and the USDA disambiguation work. Detail in `project_scope/phase-6-execution-plan.md` § Phase 6b → "CPSC firm-name normalization".
+2. **§3 Bug 2 — bundled into the Phase 6b RapidFuzz workstream.** Manufacturer/Importer/Distributor name fragmentation ("of <location>", "dba <name>" suffix patterns) handled by a pre-silver name-normalization stage in Phase 6b alongside FDA firm normalization and the USDA disambiguation work. Detail in `project_scope/archive/phase-6-execution-plan.md` § Phase 6b → "CPSC firm-name normalization".
 3. **§3 Bug 3 — documented-empty.** `CPSC.CompanyID` always empty in JSON; `observed_company_ids` JSONB is permanently NULL for CPSC-only firms. Note in `_silver.yml` description. No code change.
 4. **§4 lifts to first-class silver columns:**
    - `remedies` → `recall_event.remedies` (JSONB)
@@ -377,7 +377,7 @@ Run: `python scripts/cpsc/audit/inspect_landed_payloads.py --date 2026-05-02 202
 **New findings refining earlier observations:**
 
 - 🆕 **`ProductUPCs` is NOT always empty in JSON.** 97.3% empty (1,331 of 1,368), 2.7% populated with 1-20 UPCs per recall (max 20). Contradicts Finding F's "always `[]`" and the cassette observation. **§7 item 5 + §4 lift table updated**: lift `product_upcs` to `recall_event.product_upcs` JSONB instead of dropping it. Sparse but a real signal for FastAPI UPC-search.
-- 🆕 **`"doing business as"` full form alongside `"dba"`.** R2 sample: `"Shenzhen Maikeer Industrial Co., Ltd., doing business as MalkerDirect, of China"`. The §3 Bug 2 + Phase 6b CPSC normalization regex needs to handle both forms (not just `"dba"`). Plan update applied to `project_scope/phase-6-execution-plan.md` § Phase 6b → "CPSC firm-name normalization".
+- 🆕 **`"doing business as"` full form alongside `"dba"`.** R2 sample: `"Shenzhen Maikeer Industrial Co., Ltd., doing business as MalkerDirect, of China"`. The §3 Bug 2 + Phase 6b CPSC normalization regex needs to handle both forms (not just `"dba"`). Plan update applied to `project_scope/archive/phase-6-execution-plan.md` § Phase 6b → "CPSC firm-name normalization".
 - 🆕 **`Inconjunctions` 93.7% empty.** Only 6.3% of recalls (86 records) have coordinated cross-jurisdiction links; mostly Canada (`recalls-rappels.canada.ca`). Lift to `recall_event.coordinated_recall_urls` still valuable but for a small slice — `_silver.yml` description should set expectation.
 - 🆕 **`RemedyOptions` 58.6% empty (801 of 1,368) despite `Remedies` being 100% populated.** The structured Option enum (Refund/Repair/Replace) is sparse — most recalls carry only the free-text `Remedies[].Name` narrative, not the categorical tag. Lift to `recall_event.remedy_options` (text[] or JSONB) still useful as a filter when present; exact enum distribution awaits SQL Q6.
 - 🆕 **`Importers` 64.2% empty, `Distributors` 72.2% empty.** Both sparser than Manufacturers (54.8%). Distributors carry the highest-cardinality elements per record — max length=8 distributors per recall observed.

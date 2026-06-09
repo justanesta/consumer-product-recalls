@@ -37,13 +37,34 @@ the cross-source total).
 
 ## Design notes worth knowing
 
-- **Geography has two lenses** (`fct_recalls_by_geography`). *Distribution* = where the product went
-  (`recall_distribution_area`, FDA free-text parse + USDA states → `distribution_state_codes[]`;
-  precision-over-recall). *Firm-location* = where the firm is registered (the SCD-2 sidecar `state`).
-  They answer different questions and are **not** interchangeable. **Caveat:** firm-location inherits
-  the **canonical** firm's address, which is often a corporate **HQ / FDA-FEI registration** (Walmart→AR,
-  Target→MN), not where the product was made — and a name-merged firm can carry multiple FEIs across
-  states. To be fleshed out in 6f (see `project_scope/phase-6-execution-plan.md` §6f exploration note).
+- **Geography has two lenses** (`fct_recalls_by_geography`) that answer *different questions* — the
+  metric is `count(distinct recall_event_id)` per `(geography_basis, source, state_code)`, with a
+  `GROUPING SETS` `'ALL'`-source rollup. They are **not** interchangeable.
+  - ***`distribution`*** = **where the recalled product went** — `recall_distribution_area.distribution_state_codes[]`
+    (FDA free-text parse + USDA states; precision-over-recall). **FDA + USDA only**; CPSC/NHTSA/USCG
+    carry no distribution field, so they contribute nothing. This is the clean *"where did the product
+    go / who was potentially affected"* answer.
+  - ***`firm_location`*** = **where the responsible firm is *registered*** — `firm.observed_company_ids`
+    → the per-source SCD-2 sidecar state (`firm_establishment_attributes.state` /
+    `firm_manufacturer_attributes.state` / `firm_fda_attributes.firm_state_cd`). It is **not** "all
+    firms": only firms whose 6b canonical cluster carries an FSIS `establishment_number`, USCG `mic`, or
+    FDA `firm_fei_num` — directly, or via a name-merge to one — appear; a pure CPSC/NHTSA firm (no
+    structural id) contributes nothing.
+  - **Four caveats make `firm_location` *not* a consumer-impact geography:** (1) **registration ≠ harm**
+    — the FEI/establishment address is the firm's *registered* (often corporate-HQ) address (Walmart's
+    FEI → AR/Bentonville, Target → MN), so "Walmart recall → AR" means *Walmart is registered in AR*,
+    not that the product came from or affected AR; (2) **multi-counting** — a recall is counted in
+    **every** state where any of its firms is registered, and a name-merged firm can carry multiple
+    FEIs/MICs across states, so the per-state counts **sum to more than the distinct-recall total**
+    (recall × firm-registered-state incidences, not distinct recalls per state); (3) **coverage skew**
+    — only the three sidecar-backed sources (+ name-merged CPSC/NHTSA) feed it; (4) **merge-sensitive**
+    — a 6b over-merge attributes one firm's state to another's recalls.
+  - **Use:** read `distribution` as "where the product went," `firm_location` as "which states' firms
+    get recalled" (an industry/regulatory lens) — **never** as where consumers were affected. Neither is
+    "where the product was *made*" (no production-site field exists). **Deferred enhancements** (code,
+    post-6f): rename `geography_basis` value `firm_location → firm_registration` for honesty, and/or
+    collapse a firm to a single *primary* registered state to remove the multi-counting — both noted,
+    neither adopted.
 - **Units are narrow and not cross-source comparable** (`fct_units_recalled`). Only NHTSA (vehicles)
   and USCG (boats) have a clean integer `unit_count`; CPSC/FDA/USDA are free-text (USDA = pounds).
   NHTSA's `recall_product` is the 7-tuple (many component rows per campaign) and `potaff` (an
@@ -61,3 +82,42 @@ the cross-source total).
   went 3s → 130s until ANALYZE was added).
 - **Phase-7 follow-up:** re-profile indexes against real API traffic (`pg_stat_statements`); promote
   warn→error tests where stable; add the statistical/baseline tests that need production data.
+
+## Deferred: a dimensional star schema
+
+Gold deliberately stops short of a formal Kimball star ([ADR 0038](decisions/0038-gold-layer-modeling-and-indexing-strategy.md) §1) —
+silver already supplies fact/dim/bridge, so a star would largely duplicate it. The `dim_` prefix is
+**reserved** (ADR 0038 §2) for the day a star earns its keep. This note records when that day arrives
+and what gets built.
+
+**The gating question is the website's data feed, not the star itself.** The project website will be
+gold's first BI-esque consumer, and *how it reads the data* decides whether a star helps:
+
+- **API-fed (Phase 8 FastAPI) with a fixed chart set** — the existing `fct_*` aggregate marts already
+  *are* the dashboard layer (one query each: by week/month/year, monthly trend, by firm, by
+  classification, by status, by geography, units). A star buys nothing; a missing chart is a new
+  `fct_*` view or API endpoint, not a re-model. **No star.**
+- **Direct-gold, fixed charts** — same conclusion; `fct_*` serves them.
+- **A BI tool / semantic layer over gold** (Metabase, Superset, Cube, the dbt Semantic Layer) **or
+  user-driven cross-dimensional slicing** (a pivot like "recalls by firm × classification × quarter"
+  that no single `fct_*` pre-computes) — *this* is where a conformed star pays off: the tool
+  auto-joins dims↔facts and every chart shares consistent slicers. **Build the star.**
+
+So the prerequisite is not a coding task — it is **enumerating the website's charts**. A fixed/known
+set → extend `fct_*`. An interactive/pivot set fed by a star-consuming tool → build the star.
+
+**If built**, the star is mostly *promotions* of existing silver, not new modeling: `dim_firm`
+(Type-2 — the SCD-2 snapshots are already the hard part), a generated `dim_date` (role-played as
+announced/published), `dim_source` / `dim_classification` from the existing enums, and
+`fct_recall_event` / `fct_recall_product` carrying measures + dim-FKs; `recall_event_firm` becomes a
+factless bridge.
+
+**The one no-regret early piece is `dim_date`** — a generated calendar that replaces the `date_trunc`
+logic repeated inline across the nine `fct_*` models and unlocks fiscal/holiday calendars cheaply.
+**Decided 2026-06-08:** it will be built pre-Phase-8 regardless of the star call (tracked in
+`project_scope/implementation_plan.md`, Architectural follow-ups).
+
+**When:** decide at Phase 8 framing — [ADR 0024](decisions/README.md) already owns "the relationship
+between API endpoints and dbt gold views" — once the website's feed + chart inventory are known.
+Sequencing is tracked in `project_scope/implementation_plan.md` (Architectural follow-ups). Not
+before: building it speculatively risks a star no consumer queries.

@@ -1,12 +1,12 @@
 # Silver field remap — plan
 
 - **Status:** Active — W0–W6 complete on `feature/silver-field-remap` and full-pipeline `dbt build` green (PASS=144, 3 expected WARN tripwires: `announced_at` ~6 archive-tail, USCG `severity` `'1'` outlier, pre-existing `usda_bilingual` 105). Ready for PR review + merge; flips to **Complete** on merge. W4 (silver/staging remap, Phases A–E) and W5 (dbt test suite incl. `dbt_utils` combination tests + 5 singular regression guards) landed each as a green-build increment.
-- **Owns:** the "(a) silver-remap PR" execution — corrected cross-source silver field mappings, canonical column naming, and the dbt test suite, all grounded in **full-corpus bronze profiling**. Sits in the hard chain `6a → 6a.5 → this → 6b/6c` per `phase-6-execution-plan.md` § Sequencing Constraints.
+- **Owns:** the "(a) silver-remap PR" execution — corrected cross-source silver field mappings, canonical column naming, and the dbt test suite, all grounded in **full-corpus bronze profiling**. Sits in the hard chain `6a → 6a.5 → this → 6b/6c` per `archive/phase-6-execution-plan.md` § Sequencing Constraints.
 - **Points at** (single-home — this plan does not restate any of them):
   - `documentation/audit/bronze_corpus_profile.md` (W1) — *what the full-corpus bronze looks like* (shape / null / enum / length / fragmentation / grain).
   - `documentation/audit/cross_source_consolidation.md` (W2) — *the semantic field → canonical-column map* that drives the SQL edits. Single home for the mapping + rename ledger + deferral registers.
   - `documentation/audit/methodology.md` — the audit method this continues (per-source Phase 6a audits, done); `documentation/<source>/field_audit_2026_w22.md` — the per-source evidence homes.
-  - `phase-6-execution-plan.md` § "Phase 6a" + § "Sequencing Constraints"; `branch_sequencing_strategy.md` — cross-branch order.
+  - `archive/phase-6-execution-plan.md` § "Phase 6a" + § "Sequencing Constraints"; `branch_sequencing_strategy.md` — cross-branch order.
   - ADR 0036 (cross-source canonical naming — this branch); ADR 0035 (cross-source SCD-2 authority — the SCD-applicability **verdict folds in here**); ADR 0033 (NHTSA SCD proof, cited); ADR 0031 (fragmentation baselines refreshed by W1); ADR 0027 (bronze storage-forced only → value normalization is silver's job).
 
 ## Context
@@ -66,6 +66,6 @@ W0 → **W3 measurement (read-only)** → **W1 profiling** (wave-by-wave: FDA/CP
 ## Related
 
 - `documentation/audit/methodology.md`, `documentation/audit/capture_expansion_backlog.md` (the sibling "(b) PR" parking lot) — the audit framework.
-- `project_scope/phase-6-execution-plan.md` (parent), `project_scope/branch_sequencing_strategy.md` (cross-branch order), `project_scope/archive/silver_v15_migration_plan.md` (NHTSA SCD workstream that consumes the remapped silver).
+- `project_scope/archive/phase-6-execution-plan.md` (parent), `project_scope/branch_sequencing_strategy.md` (cross-branch order), `project_scope/archive/silver_v15_migration_plan.md` (NHTSA SCD workstream that consumes the remapped silver).
 - `project_scope/freetext-enrichment-backlog.md` — Tier-2 structured-extraction enrichment deferred out of this branch (Phase 6/7).
 - ADRs 0036 / 0035 / 0033 / 0031 / 0027 / 0002 as above.
