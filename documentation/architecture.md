@@ -2,7 +2,7 @@
 
 System-level overview of the consumer-product-recalls EtLT medallion pipeline. Covers the four-layer medallion structure, end-to-end data flow, the components that implement each layer, and the load-bearing invariants that hold across them.
 
-> **Note (updated 2026-06-08, Phase 6f.2):** the *End-to-end data flow* figure below is now a Mermaid DAG, with every source's extraction mode + deep-rescan role verified against the extractor code (and a per-source table). Remaining prose polish (extractor-table wording, source-list completeness, the stale `source_registry.py` docstring) is scheduled in the 6f.4 sweep.
+> **Note (Phase 6f, 2026-06-08):** the *End-to-end data flow* figure below is a Mermaid DAG with a per-source extraction-mode table (6f.2), every mode verified against the extractor code; ingestion **cadence** lives in [ADR 0010](decisions/0010-ingestion-cadence-and-github-actions-cron.md) (6f.3). Registry counts, source lists, and the `source_registry.py` docstring were synced to the 9-source reality in the 6f.4 prose sweep.
 
 This is the reader's-entry-point document. For:
 - **Per-source silver mapping decisions** (column unification, surrogate keys, null-filling) — see [`silver_design_notes.md`](silver_design_notes.md).
@@ -162,7 +162,7 @@ Per [ADR 0027](decisions/0027-bronze-storage-forced-transforms-only.md), schemas
 |---|---|
 | `settings.py` | `pydantic-settings` `Settings` model — loads `.env`, fails loud on missing required values, marks credentials as `SecretStr` |
 | `source_loader.py` | YAML loader — reads `config/sources/<source>.yaml` and validates through the discriminated union in `source_registry.py`. Strict-fails on extra fields, missing required fields, or wrong `source_type`. |
-| `source_registry.py` | Pydantic discriminated-union models (`RestApiSourceConfig`, `FlatFileSourceConfig`, `HtmlScrapingSourceConfig`); static dicts `EXTRACTOR_BY_SOURCE_NAME` (**9** entries) and `DEEP_RESCAN_BY_SOURCE_NAME` (**8** entries — all but `usda_establishments`); `build_extractor_kwargs` helper using `model_fields` introspection per ADR 0012. *(The module's own docstring still says "8-entry / 6-entry dict" — stale; flagged for the 6f.4 sweep.)* |
+| `source_registry.py` | Pydantic discriminated-union models (`RestApiSourceConfig`, `FlatFileSourceConfig`, `HtmlScrapingSourceConfig`); static dicts `EXTRACTOR_BY_SOURCE_NAME` (**9** entries) and `DEEP_RESCAN_BY_SOURCE_NAME` (**8** entries — all but `usda_establishments`); `build_extractor_kwargs` helper using `model_fields` introspection per ADR 0012. |
 | `logging.py` | `structlog` configuration with `run_id` contextvar, stdlib bridge for third-party libraries |
 
 ### `migrations/versions/` — Alembic migrations
