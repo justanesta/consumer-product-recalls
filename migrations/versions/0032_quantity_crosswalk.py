@@ -41,6 +41,21 @@ def upgrade() -> None:
         # basis is always present (per_product / total_all_products / unknown).
         sa.Column("quantity_basis", sa.Text, nullable=False),
     )
+    # `recalls parse-quantities` truncate-reloads this table; after the C31 repoint the runtime
+    # connects as recalls_app (SELECT/INSERT/UPDATE via default privileges, but NOT TRUNCATE). Grant
+    # TRUNCATE on just this rebuilt-each-run derived table so the reload works under the restricted
+    # role. Guarded so a role-less environment (pre-C31 dev) is a clean no-op. (firm_crosswalk needs
+    # the same grant — gap tracked for the C31 grant script.)
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'recalls_app') THEN
+                GRANT TRUNCATE ON quantity_crosswalk TO recalls_app;
+            END IF;
+        END $$;
+        """
+    )
 
 
 def downgrade() -> None:
