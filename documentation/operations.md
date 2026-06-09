@@ -174,6 +174,64 @@ If a credential is suspected compromised, rotate immediately — do not wait for
 
 ---
 
+## Restricted app role (production `*_rejected` mutation guard)
+
+[ADR 0013](decisions/0013-error-handling-retries-idempotency-and-quarantine.md) (2026-06-09
+amendment) enforces the `*_rejected` audit tables as **append-only** in production via two
+Neon roles. This is a **one-time setup** before cron go-live and the prerequisite for
+migration `0031`.
+
+**The two roles:**
+
+- **Privileged role** — the existing table-owner role. Used **only** to run Alembic
+  migrations. Full DDL/DML.
+- **Restricted role `recalls_app`** — used by the pipeline runtime (extractors, the transform
+  cron, the future read-only API). `SELECT`/`INSERT`/`UPDATE` on the working tables; migration
+  0031 **revokes** `TRUNCATE`/`DELETE`/`UPDATE` on every `*_rejected` table, so the runtime can
+  only append + read them.
+
+**Where credentials live:**
+
+| DSN | Role | Stored in | Used by |
+|---|---|---|---|
+| Restricted | `recalls_app` | `NEON_DATABASE_URL` GitHub Actions secret **+** local `.env` | every pipeline run (extract / transform cron / API) |
+| Privileged | owner | **operator-held only** (local `.env.migrations` or a password manager — **not** a GitHub secret) | `alembic upgrade head` only |
+
+Migrations are operator-run (never in CI), so the privileged DSN never needs to live in
+GitHub. `migrations/env.py` reads `NEON_DATABASE_URL`, so you override it just for the
+migration command (step 3).
+
+**Setup procedure (one-time, before go-live):**
+
+1. **Create the role** — Neon console → Roles → New Role (or `neon roles create --name
+   recalls_app`), with a generated password. Its DSN is the same host/db as the owner, role
+   `recalls_app`.
+2. **Grant runtime privileges** — connect as the **owner** and run the single-home script
+   [`scripts/sql/_pipeline/grant_recalls_app.sql`](../scripts/sql/_pipeline/grant_recalls_app.sql)
+   (SELECT/INSERT/UPDATE on all tables + sequences + default privileges for future tables; no
+   DELETE/TRUNCATE anywhere — the runtime never needs them).
+3. **Apply the mutation guard** — run migration 0031 **as the owner**:
+   ```bash
+   NEON_DATABASE_URL="<privileged-owner-DSN>" alembic upgrade head
+   ```
+   It revokes `TRUNCATE, DELETE, UPDATE` on every `public.*_rejected` from `recalls_app`
+   (raises if the role doesn't exist — do step 1 first).
+4. **Repoint the runtime** — set the `NEON_DATABASE_URL` **GitHub Actions secret** and your
+   local `.env` to the **restricted** DSN. From here every extract/transform/API run connects
+   as `recalls_app`.
+5. **Verify** — connect as `recalls_app`: `INSERT` into a `*_rejected` table succeeds, `SELECT`
+   succeeds, but `DELETE FROM cpsc_recalls_rejected WHERE false` returns **permission denied**
+   (the guard works).
+
+**Dev branches keep full privileges** — truncating a `*_rejected` table while iterating on a
+buggy schema is fine; only run migration 0031 against the production environment using
+`recalls_app`. `downgrade()` re-grants if you need to undo. **Rotation:** the `recalls_app`
+password rotates on the standard 90-day cadence (the "Rotating the Neon Postgres password"
+runbook above rotates whatever role `NEON_DATABASE_URL` points at — now `recalls_app`); the
+privileged owner password rotates separately, operator-held.
+
+---
+
 ## Re-ingestion procedure (after schema change)
 
 Per [ADR 0014](decisions/0014-schema-evolution-policy.md), when an agency changes its schema, the response is:
@@ -242,12 +300,13 @@ systemd-inhibit --what=sleep:idle --mode=block --why="FDA PR seed" \
 
 ### USCG manufacturer-details Tier-2 full sweep (sharded)
 
-The Tier-2 sweep re-fetches **every** MIC's detail page (~16.3k pages at the polite 1 s throttle ≈ 4.5–7.75 h) — the only mechanism that catches **detail-only drift** (a `status` flip, a `Parent MIC` / `Past Company` / `DBA` edit, or a bare `Date Modified` bump) that Tier-1's listing-delta cursor is blind to (`project_scope/phase-5d-uscg-manufacturers-detail.md`, "Tier-1 vs Tier-2 coverage"). Because a whole sweep exceeds the GitHub-Actions **6 h cap**, it runs as a **monthly 1/3 shard rotation** (full corpus every quarter) once the `--min-id/--max-id` shard param lands (per the [ADR 0010 2026-06-08 note](decisions/0010-ingestion-cadence-and-github-actions-cron.md)); the interim is operator-triggered or the chunked-process driver (plan W9).
+The Tier-2 sweep re-fetches **every** MIC's detail page (~16.3k pages at the polite 1 s throttle ≈ 4.5–7.75 h) — the only mechanism that catches **detail-only drift** (a `status` flip, a `Parent MIC` / `Past Company` / `DBA` edit, or a bare `Date Modified` bump) that Tier-1's listing-delta cursor is blind to (`project_scope/phase-5d-uscg-manufacturers-detail.md`, "Tier-1 vs Tier-2 coverage"). Because a whole sweep exceeds the GitHub-Actions **6 h cap**, it runs as a **monthly 1/3 strided shard rotation** (full corpus every quarter) via the `--shard` / `--shard-count` param (**built 2026-06-09**, Q6). `deep-rescan-uscg-manufacturers-detail.yml` derives the shard from the calendar month and runs it on a guarded monthly cron (`timeout-minutes: 330`); a 1/3 shard is ~1.5–2.6 h, under the cap. **Validate a real shard's runtime (WS-H) before relying on the cron** — raise `--shard-count` if a shard runs long.
 
 ```bash
 recalls deep-rescan uscg_manufacturer_details \
   2>&1 | tee logs/uscg_detail_tier2_$(date +%Y%m%dT%H%M%S).log
-# sharded form (once the param exists): append  --min-id <N> --max-id <M>
+# sharded form (one 1/3 slice; the monthly workflow derives N from the month):
+#   recalls deep-rescan uscg_manufacturer_details --shard <N> --shard-count 3
 ```
 
 **Bulk `Date Modified` → mark it a re-baseline.** `date_modified` is **in** the bronze content hash (`src/extractors/uscg_manufacturer_detail.py`), so if USCG bulk-bumps it across the directory (a cosmetic, site-wide timestamp change with no real content edit) a Tier-2 sweep re-inserts the *entire* corpus. Run that sweep with **`--change-type=schema_rebaseline`** so the wave is recorded as a re-baseline, not real edits — keeping the audit trail honest and freshness untouched (the deep-rescan path already skips `_touch_freshness`). The SCD-2 sidecar is unaffected either way: `uscg_manufacturer_attributes_snapshot` excludes `date_modified` from its `check_cols`, so no phantom version is banked.
