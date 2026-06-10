@@ -14,7 +14,6 @@ from src.enrichment.firm_resolution import (
     cluster_names,
     cluster_signature,
     document_frequencies,
-    fei_resolve,
     generic_stopwords,
     pick_canonical,
     review_rollup_clusters,
@@ -52,29 +51,6 @@ def test_pick_canonical_prefers_short_base():
 def test_place_words_cover_the_observed_hub_tokens():
     for t in ("SAN", "ANTONIO", "ROCKY", "MOUNTAIN", "PUGET", "SOUND", "YORK", "VALLEY"):
         assert t in PLACE_WORDS
-
-
-# ── Tier 0: fei_resolve (current-FEI grouping + fan-out gate) ─────────────────────
-### These tests for the FEI grouping and resolution are not used and can be deprecated due to
-### the FDA FEI number being an attribute and not a merge key
-def test_fei_resolve_groups_by_current_fei():
-    rows = [("ida", "100", "A"), ("idb", "100", "B"), ("idc", "200", "C")]
-    clean = {"ida": "FIRM A", "idb": "FIRM B", "idc": "FIRM C"}
-    pairs, gated = fei_resolve(rows, clean)
-    assert pairs == [("FIRM A", "FIRM B")] and gated == 0  # 100 -> {A,B}; 200 alone, no pair
-
-
-def test_fei_resolve_gates_high_fanout():
-    # one current-FEI fanning out to 7 distinct names is a registrant/sentinel, not one firm
-    rows = [(f"id{c}", "999", c) for c in "DEFGHIJ"]
-    clean = {f"id{c}": c for c in "DEFGHIJ"}
-    pairs, gated = fei_resolve(rows, clean, fanout_cap=6)
-    assert pairs == [] and gated == 1
-
-
-def test_fei_resolve_skips_unknown_firm_id_and_blank_fei():
-    assert fei_resolve([("missing", "1", "X")], {"id": "A"}) == ([], 0)
-    assert fei_resolve([("id", "", "X")], {"id": "A"}) == ([], 0)
 
 
 # ── Tier 1: name repair (identical distinctive set, typo) ─────────────────────────

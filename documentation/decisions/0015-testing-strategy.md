@@ -21,7 +21,7 @@ Aggressive test coverage was considered against minimal coverage. The tradeoff i
 | Layer | Count | Scope | Tools |
 |---|---|---|---|
 | **Unit** | Most | Pydantic schemas, parsers, content-hash logic, `check_invariants()` | pytest + respx/responses |
-| **Integration (per extractor)** | ~45 | Full `extract()` → `load_bronze()` against fixtures | pytest + pytest-vcr |
+| **Integration (per extractor)** | 21 | Full `extract()` → `load_bronze()` against fixtures | pytest + pytest-vcr |
 | **Integration (bronze/silver)** | Moderate | Bronze loader against real Postgres; dbt transformations against seeded data | pytest + pytest-postgresql / Neon branch |
 | **End-to-end** | ~6 | Full fixture → bronze → silver → gold pipeline run | pytest + Neon branch |
 
@@ -54,7 +54,7 @@ Each of the five extractors ships with cassette-backed integration tests coverin
 | Malformed record in response | Routes to `_rejected` T1 per ADR 0013; other records proceed |
 | Content-hash dedup | Run extractor twice against same cassette; bronze row count does not increase |
 
-Approximately 9 × 5 = 45 cassettes. Cheap once recorded, valuable as a schema-drift archive.
+Approximately 9 × 5 = 45 cassettes was the v1 target; the suite landed **21** as of 2026-06-09 — several scenarios (empty result, partial page, the 429/500/401 ladders) are exercised by faster `respx`/`responses` unit tests rather than full VCR cassettes, so the per-extractor matrix is leaner than the 9-scenario ideal. Cheap once recorded, valuable as a schema-drift archive.
 
 ### End-to-end scenarios
 
@@ -102,7 +102,7 @@ Tests never touch Neon-specific APIs directly (no time-travel queries, no branch
 
 - Orphan detection: every `recall_product` references exactly one existing `recall_event`
 - USDA dedup correctness: no duplicate `(source='USDA', source_recall_id)` rows in silver
-- Date sanity: `recall_event.published_at` not in the future and not before 1960
+- Date sanity: `recall_event.published_at` not in the future and not before 1940 (lowered from the original 1960 guess once legitimate pre-1960 recalls surfaced; see `assert_recall_event_date_sanity`)
 - Value sanity: `recall_product.units_affected` not negative
 - Baseline sanity: per-source event count within ±50% of historical average (guard against catastrophic data loss, e.g. a silently-returning-zero extractor)
 
@@ -163,10 +163,10 @@ dbt/
 
 - Comprehensive coverage with explicit signal-to-noise discipline: tests without an articulable bug class are deleted, not normalized.
 - API fixtures double as a schema-drift archive — a PR that re-records a cassette and shows field changes is the visible form of ADR 0014's evolution playbook.
-- Per-extractor integration matrix (~45 cassettes) is a portfolio-visible engineering artifact in its own right.
+- Per-extractor integration matrix (21 cassettes) is a portfolio-visible engineering artifact in its own right.
 - End-to-end tests exercise the hardest cross-cutting concerns (firm resolution, EN/ES dedup, lineage history, schema-drift quarantine) — each demonstrates a specific ADR end-to-end.
 - Neon branching earns its keep in CI; portability is preserved via the `test_db_url` abstraction so a future migration off Neon is a conftest change.
-- dbt test posture is generous-but-targeted: ~60–80 generic tests + 5 singular tests + freshness. Enough to be visibly thorough without creating triage fatigue.
+- dbt test posture is generous-but-targeted: **~230 generic tests + ~46 singular tests** (32 in `dbt/tests/` + 14 `source_assumptions/` drift monitors) + freshness, as of 2026-06-09. Enough to be visibly thorough without creating triage fatigue.
 - Coverage floor of 85% forces tests to be written alongside code; exclusions are documented and reviewable.
 
 ### Open for revision as real-world API behavior and data patterns surface

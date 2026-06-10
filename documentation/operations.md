@@ -2,10 +2,6 @@
 
 This document covers production operations: scheduled runs, monitoring, secret rotation, and recovery procedures. For architectural rationale, see the ADRs in `documentation/decisions/`. For system architecture and component relationships, see [`architecture.md`](architecture.md).
 
-> ⚠️ **Partially stale (as of 2026-06-01) — full refresh scheduled in the Phase 6f doc-sync** (`project_scope/archive/phase-6-execution-plan.md` §6f). USCG is **live since 2026-05-15** (3 extraction sources: recalls + manufacturers + manufacturer-details; 8 total across the pipeline). The USCG row below and any "4-source" framing predate the reactivation; live USCG cadences are in `documentation/uscg/` and the Phase 6f plan. The rest of this guide is current.
-
----
-
 ## Pipeline overview
 
 Per-source extraction workflows (per [ADR 0010](decisions/0010-ingestion-cadence-and-github-actions-cron.md), with empirical revisions noted):
@@ -54,11 +50,12 @@ v1 alerting is the GitHub Actions UI. There is no paging, on-call rotation, or p
 
 ## Monitoring
 
-Three complementary surfaces:
+Four complementary surfaces:
 
 1. **GitHub Actions UI** — workflow run history, per-step logs, re-run buttons, manual `workflow_dispatch`.
 2. **Neon Postgres state tables** — SQL-queryable operational state (see canonical queries below).
 3. **dbt** — `source_freshness:` assertions (per [ADR 0015](decisions/0015-testing-strategy.md)) compare `source_watermarks.last_successful_run_at` against expected cadence and warn on staleness.
+4. **Soda Core** (`soda-core-postgres`, [ADR 0040](decisions/0040-data-quality-framework-soda-core.md)) — bronze-layer freshness SLAs, row-count anomaly vs prior run, and schema/column-presence drift; complements dbt (which runs post-transform). Install the opt-in dependency group with `uv sync --group dq`; config lives under `soda/`. The existing dbt silver/gold tests + source-assumption monitors stay in dbt — Soda only covers the bronze + anomaly surface dbt cannot reach pre-transform. Full decision and scoping: [ADR 0040](decisions/0040-data-quality-framework-soda-core.md).
 
 ### Canonical operational queries
 
@@ -120,6 +117,18 @@ ORDER BY started_at;
 ```
 
 A handful are normal; an accumulation suggests GitHub Actions runs are being killed before they can update their terminal row — follow the `github_run_url` to diagnose.
+
+---
+
+## Non-validating bronze values — no new lookup-table subsystem (C15 / TODO #57)
+
+TODO #57 asked whether non-validating bronze values (geography free text, quantity strings) warranted a standalone lookup-table subsystem. Decision: **route these into the `freetext-enrichment-backlog.md` enrichment pipeline + a `dbt` parse-coverage monitor (`assert_quantity_parse_coverage`), not a new lookup-table subsystem.** The firm-rollup precedent (`recalls audit-firm-rollups`) already covers the firm-name normalisation surface; geography and quantity follow the same pattern — Python `_parse_*` layer, `recalls parse-quantities` CLI, and coverage tests in dbt. See `project_scope/freetext-enrichment-backlog.md` for the deferred v2 AI extractor work.
+
+---
+
+## Per-environment source-config overlays (`RECALLS_ENV`)
+
+See [`development.md` § `RECALLS_ENV` — per-environment source-config overlays](development.md#recalls_env--per-environment-source-config-overlays-adr-0012) for the full description of how the loader merges `<source>.<env>.yaml` onto the base config. Operationally: set `RECALLS_ENV=prod` (or another string) in the environment and create the matching overlay files carrying only the overriding keys. At go-live no source ships an overlay file, so leaving `RECALLS_ENV` unset is correct for normal runs.
 
 ---
 
@@ -262,7 +271,7 @@ Per [ADR 0014](decisions/0014-schema-evolution-policy.md), when an agency change
    # Re-ingest a date range — re-reads R2 raw payloads, re-runs validation
    # and bronze load with the updated schema. Idempotent via content-hash
    # conditional insert.
-   uv run recalls re-ingest <source> \
+   recalls re-ingest <source> \
      --from-date YYYY-MM-DD \
      --to-date YYYY-MM-DD \
      --change-type schema_rebaseline
@@ -448,7 +457,7 @@ Procedure:
 1. Ensure valid credentials are in `.env` (re-recording hits real APIs).
 2. Run the re-record command for the affected source:
    ```bash
-   uv run pytest tests/integration/test_<source>_extractor.py --record-mode=rewrite
+   pytest tests/integration/test_<source>_extractor.py --record-mode=rewrite
    ```
 3. VCR's `before_record_request` filter strips `Authorization` / `X-API-Key` headers automatically, but verify before committing:
    ```bash
@@ -627,7 +636,7 @@ Don't do this without confirming the underlying bug is filed.
 
 **Fix:**
 ```bash
-uv run alembic upgrade head
+alembic upgrade head
 ```
 on the dev branch, then re-run `dbt build`.
 

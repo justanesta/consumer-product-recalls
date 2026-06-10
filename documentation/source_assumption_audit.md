@@ -4,7 +4,7 @@ What does this pipeline trust about its upstream sources, and how would we
 know if those trusts broke?
 
 This document is the canonical catalogue of every load-bearing assumption
-the pipeline makes about CPSC, FDA, USDA, and NHTSA — what each assumption
+the pipeline makes about CPSC, FDA, USDA, NHTSA, and USCG — what each assumption
 is, what evidence supports or refutes it today, what mechanism falsifies
 it, what threshold triggers downstream action, and what would have to
 change in the implementation if it were violated.
@@ -244,6 +244,50 @@ Three things prompted the audit:
 
 ---
 
+## USCG
+
+USCG contributes three bronze sources: recalls, manufacturers (listing), and manufacturer details.
+The MIC (Manufacturer Identification Code) is the identity anchor for the manufacturer surfaces.
+Key findings backing these assumptions: `documentation/uscg/` findings docs; ADR 0035 §5 (SCD-2
+for `firm_uscg_attributes`); ADR 0031 USCG row; `source_assumption_audit.md` USCG row in the
+summary table below.
+
+### W1 — MIC is a stable, permanent identifier for a given manufacturer
+
+| | |
+|---|---|
+| **Why load-bearing** | Bronze identity for manufacturer and manufacturer-detail sources uses MIC as the anchor. Silver `firm_uscg_attributes` uses MIC as its SCD-2 unique key, and `uscg_mic_reassignment_years` derives the reassignment signal from it. |
+| **Evidence today** | **Empirically violated (observed-forward cases documented).** USCG recycles MICs across businesses — AXY and COP are confirmed historical reassignment examples (2026-05-30 confirmation; `uscg_mic_temporal_identity.md`). The static source-native recycle surface: 365 prior-recycled + 221 out-of-boundary on 718 sampled MICs (ADR 0035 §5). |
+| **Falsification script** | `dbt/tests/source_assumptions/assert_mic_holder_stable.sql` — detects a MIC whose `company_name` differs across its SCD-2 snapshot versions (the *forward-observed* half); `assert_uscg_mic_reassignment_flag_present.sql` enforces the static source-native recycle surface (the *historical* half). |
+| **ADR 0031 threshold** | Any new reassignment observed in the forward snapshot is the signal (the SCD-2 Type-2 history exists specifically to bank them; a fresh row is a feature, not a failure). |
+| **Downstream impact** | MIC recycling is the primary reason `firm_uscg_attributes` uses a full SCD-2 snapshot — a recycled MIC produces a new snapshot version with a new `canonical_firm_id`, keeping the prior holder's history intact. The `uscg_mic_reassignment_years` model derives the safe join window from `valid_from`/`valid_to`. HIN-embedded MIC lookups must respect the temporal window (see `uscg_mic_temporal_identity.md`). |
+
+### W2 — MIC holder name is stable within a snapshot version
+
+| | |
+|---|---|
+| **Why load-bearing** | `firm_uscg_attributes_snapshot` uses `company_name` as a `check_cols` field; a company_name change within the same MIC tenure (e.g. a DBA rename without a formal MIC reassignment) produces a new SCD-2 version. |
+| **Evidence today** | ~0 observed today (snapshot just initialized → 1 version per MIC). The forward-observed monitor (`assert_mic_holder_stable`) will catch any that arrive. |
+| **Falsification script** | `dbt/tests/source_assumptions/assert_mic_holder_stable.sql` — returns reassigned MICs; ~0 at baseline (`severity=warn`, inherited from the `source_assumptions/` directory). |
+| **ADR 0031 threshold** | Warn on first non-zero result; treat each returned MIC as a new SCD-2 version to verify. |
+| **Downstream impact** | Each new SCD-2 version is correct behavior by design; the monitor just surfaces it for review. No code change needed unless the rate becomes high enough to question the SCD-2 anchor choice. |
+
+---
+
+## Cross-source monitors
+
+### X1 — Every FDA and NHTSA recall_event carries at least one firm (C20)
+
+| | |
+|---|---|
+| **Why load-bearing** | Both FDA and NHTSA always name a recalling firm (FDA establishment, NHTSA filer + manufacturer). A firmless FDA/NHTSA recall indicates a firm-extraction regression, not a legitimate data gap. |
+| **Evidence today** | **Baseline = 0 firmless recalls** for FDA and NHTSA (verified 2026-06-09). |
+| **Falsification script** | `dbt/tests/source_assumptions/assert_fda_nhtsa_have_firms.sql` — returns any FDA/NHTSA `recall_event` with zero rows in `recall_event_firm`; `severity=warn` inherited from the directory. Probe: `scripts/sql/cross_source/silver/inspect_firmless_recalls.sql`. |
+| **ADR 0031 threshold** | Any non-zero count is actionable (the documented firmless baselines for USDA ~426 / CPSC ~37 / USCG ~9 are excluded from this assertion). |
+| **Downstream impact** | A non-zero result means the firm-extraction logic for FDA or NHTSA has regressed; investigate `recall_event_firm` joins and the relevant silver models. |
+
+---
+
 ## Summary table — empirical status (baselined 2026-05-08)
 
 | # | Source | Status | Empirical baseline | Notes |
@@ -265,6 +309,9 @@ Three things prompted the audit:
 | N1 | NHTSA | Verified with bounded drift | **3 drift groups in bronze (~0.00125% of 240k rows), 2026-05-09** | Drift profile differs from ADR 0031's original baseline — see below |
 | N2 | NHTSA | Empirically violated at small bounded rate | Same as N1 | Monitored via existing assertions; current cases are 2× `mfr_comp_ptno` (Ferrari 12Cilindri privacy-window part-number typo correction) + 1× `endman` (Western Star manufacturing-window extension — exactly the trade-off ADR 0031:94 anticipated) |
 | N3 | NHTSA | Verified → mitigated | N/A | RECORD_ID excluded from hash |
+| W1 | USCG | **Empirically violated (by design — SCD-2 handles it)** | AXY/COP confirmed recycled; 365 prior + 221 OOB on 718 sampled MICs (ADR 0035 §5) | SCD-2 snapshot banks each tenure; `assert_mic_holder_stable` monitors forward-observed reassignments |
+| W2 | USCG | **~0 observed (snapshot just initialized)** | 1 version per MIC at baseline | Forward monitor active; any new version triggers a review |
+| X1 | Cross-source | **Verified at baseline — 0 firmless FDA/NHTSA recalls** | 0 firmless recalls as of 2026-06-09 | USDA/CPSC/USCG documented firmless baselines excluded from assertion |
 
 ### Cross-cutting findings from the baseline run
 
@@ -276,13 +323,12 @@ Three things prompted the audit:
 
 ## Standing requirements
 
-- **For each new source** (USCG Phase 5d, future): the source's silver-landing PR must include an entry in this audit document — assumption table, falsification scripts, threshold, downstream impact. Mirrors ADR 0031's per-source-table standing requirement.
+- **For each new source** (future beyond USCG): the source's silver-landing PR must include an entry in this audit document — assumption table, falsification scripts, threshold, downstream impact. Mirrors ADR 0031's per-source-table standing requirement.
 - **Threshold revisit**: every 6 months (or on first non-zero baseline result), each source's findings doc should be re-checked; thresholds tightened or Phase 6 reconciliation triggered.
 - **Untestable-today gaps** (F3): convert to ADR proposals when revisited; close out as testable assumptions land.
 
 ## Out of scope
 
 - The Phase 6 reconciliation **mechanism** itself (mapping table vs. content-hash surrogate vs. fuzzy-match) — ADR 0031 explicitly defers mechanism choice until a Tier 2 trigger fires. This audit makes the trigger machinery exist; it doesn't choose the mechanism.
-- USCG (Phase 5d) — apply the framework when the source lands; sections C–N reserved for it.
 - EPA (deferred per ADR 0001).
-- Migrating the falsification scripts to a dedicated DQ framework (Soda Core, Great Expectations) — `implementation_plan.md:643` already has this as a future Phase 7 deliverable. The dbt singular tests are the interim observability surface.
+- Migrating the falsification scripts to a dedicated DQ framework — Soda Core ([ADR 0040](decisions/0040-data-quality-framework-soda-core.md)) is now adopted for the bronze/anomaly layer; the dbt singular tests remain the silver/gold transform-layer observability surface.

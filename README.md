@@ -11,9 +11,13 @@ flowchart LR
     subgraph sources[Sources]
         CPSC[CPSC API]
         FDA[FDA iRES API]
+        FDAPR[FDA Press Releases]
         USDA[USDA FSIS API]
+        USDAEST[USDA Establishments]
         NHTSA[NHTSA flat file]
-        USCG[USCG scraping]
+        USCG[USCG recalls scrape]
+        USCGMFR[USCG MIC directory]
+        USCGDET[USCG MIC details]
     end
 
     subgraph pipeline[4-Layer Medallion Pipeline]
@@ -32,15 +36,19 @@ flowchart LR
 
     CPSC --> R2
     FDA --> R2
+    FDAPR --> R2
     USDA --> R2
+    USDAEST --> R2
     NHTSA --> R2
     USCG --> R2
+    USCGMFR --> R2
+    USCGDET --> R2
 
     GD --> API
     GD --> UI
 ```
 
-The four-layer medallion shape is formalized in [ADR 0004](documentation/decisions/0004-four-layer-medallion-pipeline.md); the header/line/firm data model that lives in silver is [ADR 0002](documentation/decisions/0002-unit-of-analysis-header-line-firm.md).
+The four-layer medallion shape is formalized in [ADR 0004](documentation/decisions/0004-four-layer-medallion-pipeline.md); the header/line/firm data model that lives in silver is [ADR 0002](documentation/decisions/0002-unit-of-analysis-header-line-firm.md). Design decisions 0001–0040 are indexed in [`documentation/decisions/README.md`](documentation/decisions/README.md).
 
 ## Scope
 
@@ -66,7 +74,7 @@ cp .env.example .env
 # for the optional direnv + Proton Pass integration
 
 # Run the test suite
-uv run pytest
+pytest
 ```
 
 Full local setup, including optional direnv integration and Proton Pass CLI for secret management, is in [`documentation/development.md`](documentation/development.md).
@@ -93,7 +101,7 @@ Full local setup, including optional direnv integration and Proton Pass CLI for 
 
 ## Status
 
-In design phase — architecture decisions captured in ADRs 0001–0019; implementation forthcoming per [`project_scope/implementation_plan.md`](project_scope/implementation_plan.md).
+Phase 6 complete: 9 bronze extractors on Neon production, 15 silver models + 4 SCD-2 snapshots, and 9 aggregate gold `fct_` models. Phase 7 (production CI/cron orchestration) is the current frontier — see [`project_scope/implementation_plan.md`](project_scope/implementation_plan.md) for the full roadmap and [`project_scope/phase-7-production-plus-todos-plan.md`](project_scope/phase-7-production-plus-todos-plan.md) for the active execution plan. Architecture decisions 0001–0040 are filed in [`documentation/decisions/README.md`](documentation/decisions/README.md).
 
 ## License
 

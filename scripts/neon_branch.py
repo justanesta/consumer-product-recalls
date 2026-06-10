@@ -6,7 +6,7 @@ database and never touch production. It also doubles as an ad-hoc operator tool 
 scratch branch by hand). Transport is the Neon REST API v2; auth is a project-scoped API key
 (`NEON_API_KEY`) — see `documentation/development.md`.
 
-Request/response *shaping* is split from the httpx I/O (`_create_payload`, `_parse_connection_uri`)
+Request/response *shaping* is split from the httpx I/O (`_create_payload`, `_parse_create_response`)
 so it is unit-testable without live calls — see `tests/scripts/test_neon_branch.py` (respx-mocked).
 """
 

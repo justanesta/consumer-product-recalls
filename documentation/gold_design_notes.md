@@ -80,6 +80,8 @@ per-source page and the cross-source total).
     (single-primary-state collapse) was evaluated and reverted** — the multi-counting is a legitimate,
     documented industry-footprint property; collapsing it picked an arbitrary state for 6.6% of recalls
     (no uniform cross-source recency date exists to break the pervasive ~1-registration-per-state ties).
+    Evidence: `scripts/sql/gold/inspect_firm_state_ties.sql` (the probe that surfaced the 65%
+    ~1-registration/state tie rate and the 6.6% affected-recall figure driving the revert).
 - **Units are narrow and not cross-source comparable** (`fct_units_recalled`, grain source ×
   `unit_category` × month). The **measure means different things per source** — NHTSA/USCG = vehicles/
   boats *potentially affected* (clean integer `unit_count`); FDA = quantity *distributed*; USDA =
@@ -100,6 +102,21 @@ per-source page and the cross-source total).
   **`ANALYZE` post_hooks** on the firm-join-chain tables so a freshly-rebuilt table has fresh planner
   stats immediately (without them, an incremental rebuild fell back to seq-scans — `fct_recalls_by_geography`
   went 3s → 130s until ANALYZE was added).
+- **Performance rewrites (2026-06-09, no schema change):** the two items below are pure query
+  rewrites with no observable output change. Note: the `geography_basis` value rename
+  (`firm_location → firm_registration`, C17) also touched `fct_recalls_by_geography` this session
+  but is a separate **schema change** — documented in the `firm_registration` lens note above.
+  - `mart_firm_profile` had a firm × product fan-out: the pre-rewrite CTE re-joined `recall_event_firm`
+    and `recall_product` separately, so a multi-firm + multi-product NHTSA recall (e.g. a 139-component
+    Takata campno) exploded to firms × products rows before `count(distinct)` — the root of the ~180s
+    build time. Fixed by a single `materialized` CTE (`firm_recalls`) at the event grain (one row per
+    firm × event × role), then counting products per event first (`event_products`), then summing over
+    the firm's distinct events — exact, no double-count, and no fan-out.
+  - `fct_recalls_by_geography` had a correlated cross-join-lateral subquery per `company_id` to look up
+    the matching sidecar state (a seq-scan-per-row bottleneck). Rewritten to the same hash-join pattern
+    as `mart_firm_profile.firm_attr_rows`: unnest `observed_company_ids` into `firm_company_ids`, then
+    `LEFT JOIN` all three sidecars + `coalesce` the state — the disjoint id namespaces ensure each id
+    matches at most one sidecar.
 - **Phase-7 follow-up:** re-profile indexes against real API traffic (`pg_stat_statements`); promote
   warn→error tests where stable; add the statistical/baseline tests that need production data.
 
@@ -135,10 +152,14 @@ factless bridge.
 **The one no-regret early piece is `dim_date`** — a generated calendar that replaces the inline
 `date_trunc` logic in the **five** date-grained `fct_*` models (by_month / by_year / by_week /
 monthly_trend / units; the other four `fct_*` carry no `date_trunc`) and unlocks fiscal/holiday
-calendars cheaply. **Built + wired 2026-06-09 (C10/C11):** `dim_date` (1960-01-01 .. current-year+2,
+calendars cheaply. **Built + wired 2026-06-09 (C10/C11):** `dim_date` (**1940-01-01** .. current-year+2,
 dynamic; unique `date_day`) is built, and the five models join it on `published_at::date` (verified
 lossless — 0 null / 0 out-of-range — and output byte-identical to the prior `date_trunc` form). The
-full Kimball star stays deferred (above); `dim_date` was the no-regret slice.
+1940 floor matches `assert_recall_event_date_sanity`'s ERROR floor, so any `published_at` that passes
+the sanity test is guaranteed a `dim_date` row — INNER JOINs in the `fct_*` models can never silently
+drop a sane recall (ISSUE-7). Column definitions (year/quarter/month/week/iso/dow/us_fiscal_year) are
+in `documentation/data_schemas.md`. The full Kimball star stays deferred (above); `dim_date` was the
+no-regret slice.
 
 **When:** decide at Phase 8 framing — [ADR 0024](decisions/README.md) already owns "the relationship
 between API endpoints and dbt gold views" — once the website's feed + chart inventory are known.

@@ -27,7 +27,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0007 — Lineage via bronze snapshots + content hashing](0007-lineage-via-bronze-snapshots-and-content-hashing.md) — unified history derivable across all sources *(partially superseded by 0022)*
 - [0008 — NHTSA: flat file primary, JSON API for live vehicle lookup](0008-nhtsa-flat-file-primary-api-for-vehicle-lookup.md)
 - [0022 — FDA history endpoints empty; snapshot synthesis for all sources](0022-fda-history-endpoints-empty-snapshot-synthesis-for-all-sources.md) — supersedes ADR 0007's FDA-specific history path
-- [0026 — Lifecycle tracking via per-run snapshot-presence manifest](0026-lifecycle-tracking-snapshot-presence-manifest.md) — closes bronze's retraction gap; USDA-first, separate `extraction_run_identities` table
+- [0026 — Lifecycle tracking via per-run snapshot-presence manifest](0026-lifecycle-tracking-snapshot-presence-manifest.md) — closes bronze's retraction gap; USDA+NHTSA (campno key; deep-rescan-only write for NHTSA), separate `extraction_run_identities` table
 - [0027 — Bronze keeps storage-forced transforms only; value-level normalization moves to silver](0027-bronze-storage-forced-transforms-only.md) — bronze hashes change iff the source changed
 - [0030 — NHTSA bronze identity: composite tuple + within-batch dedup](0030-nhtsa-bronze-identity-composite-tuple-and-within-batch-dedup.md) — 11-tuple identity; `RECORD_ID` excluded from content hash
 - [0031 — Silver-row fragmentation strategy](0031-silver-row-fragmentation-strategy.md) — per-source surrogate keys, drift detection, reconciliation tiers
@@ -118,7 +118,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 When adding a new ADR:
 
-1. Pick the next sequential number. Current state: **0001–0040 all filed and Accepted.** 0024 (serving-layer API design), 0025 (API deployment target), 0039 (frontend framework), and 0040 (data-quality framework — Soda Core) were filed 2026-06-09 on the phase-7 branch; 0034/0035/0036/0038 were ratified Accepted at their merges (#62 / #59 / #58 / #62). The serving/presentation ADRs (0024/0025/0039) govern the **separate** API + website repos built after go-live (there is no in-repo Phase 8/9). **The next free number is 0041.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
+1. Pick the next sequential number. Current state: **0001–0040 all filed and Accepted.** 0024 (serving-layer API design), 0025 (API deployment target), 0039 (frontend framework), and 0040 (data-quality framework — Soda Core) were filed 2026-06-09 on the phase-7 branch; 0034/0035/0036/0038 were ratified Accepted at their merges (#60 / #59 / #58 / #62). The serving/presentation ADRs (0024/0025/0039) govern the **separate** API + website repos built after go-live (there is no in-repo Phase 8/9). **The next free number is 0041.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
 2. File name: `NNNN-kebab-case-title.md`.
 3. Use the standard template (see any existing ADR as a model).
 4. Add an entry under the appropriate topic above **and** in the numeric index.

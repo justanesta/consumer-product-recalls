@@ -33,20 +33,21 @@ $EDITOR .env
 # 4. Provision the dev Neon branch and run migrations
 #    (Neon project must already be provisioned per ADR 0005;
 #     dev branch is forked from main once, then reused.)
-uv run alembic upgrade head
+#    direnv (step 3) puts .venv/bin on PATH — run bare commands from here onward.
+alembic upgrade head
 
 # 5. Sanity-check: run the test suite
-uv run pytest
+pytest
 
 # 6. Verify dbt parses
-uv run dbt parse --project-dir dbt
+dbt parse --project-dir dbt
 ```
 
 After step 5, `pytest` should report all green; if any tests fail without code changes, your environment isn't set up correctly — check `.env` first, then verify the dev Neon branch is reachable via `psql $NEON_DATABASE_URL -c 'select 1'`.
 
 Step 4 also seeds the `source_watermarks` table with one row per source per [Phase 1 baseline migration](../migrations/versions/0001_baseline.py); without it, extractor runs would fail on the FK insert.
 
-The `recalls` CLI is wired via `[project.scripts]` in `pyproject.toml` — invoke as `uv run recalls <subcommand>` after step 2.
+The `recalls` CLI is wired via `[project.scripts]` in `pyproject.toml` — invoke as `recalls <subcommand>` after step 2.
 
 ---
 
@@ -283,7 +284,7 @@ Two integration patterns follow. Pattern A uses direnv (what you'd expect from t
 
 #### Pattern A — direnv + `pass-cli item view` (secrets in shell env after `cd`)
 
-Each secret is fetched once when direnv loads the environment, then lives in your shell's env vars. Any subsequent command (`uv run pytest`, `dbt build`, `psql $NEON_DATABASE_URL`) sees the values naturally, no wrapping needed.
+Each secret is fetched once when direnv loads the environment, then lives in your shell's env vars. Any subsequent command (`pytest`, `dbt build`, `psql $NEON_DATABASE_URL`) sees the values naturally, no wrapping needed.
 
 Put the lookup logic in a **gitignored** `.envrc.local`:
 
@@ -350,8 +351,8 @@ R2_BUCKET_NAME=consumer-product-recalls-raw
 Then wrap commands that need secrets:
 
 ```bash
-pass-cli run --env-file .env -- uv run pytest
-pass-cli run --env-file .env -- uv run python -m src.cli extract cpsc
+pass-cli run --env-file .env -- pytest
+pass-cli run --env-file .env -- python -m src.cli extract cpsc
 pass-cli run --env-file .env -- dbt build
 ```
 
@@ -366,7 +367,7 @@ pass-cli run --env-file .env -- dbt build
 **When Pattern A is fine:**
 
 - You trust your local shell.
-- You value running plain `uv run pytest` over `pass-cli run --env-file .env -- uv run pytest`.
+- You value running plain `pytest` over `pass-cli run --env-file .env -- pytest`.
 - You're the only developer on this machine.
 
 Either pattern is compatible with `pydantic-settings` — it sees env vars identically regardless of how they got there.
@@ -489,9 +490,9 @@ A typo in a YAML key (e.g., `etagh_enabled` instead of `etag_enabled`) raises a 
 
 This contract also reinforces why `Settings` really is the complete env-var specification: source URLs, timeouts, and ETag flags moved out of env vars into YAML in Wave 2. If you find yourself wanting to put a URL or timeout in `.env`, put it in `config/sources/<source>.yaml` instead.
 
-### Per-environment overlays — deferred
+### Per-environment overlays (`RECALLS_ENV`)
 
-Today the loader reads exactly one YAML per source. Layered `<source>.<env>.yaml` overlays (where a production overlay could differ from the base file) are tracked as a Phase 7 prerequisite in `project_scope/implementation_plan.md`, to land before production cron turns on. The current `Settings()` env-var indirection covers the legitimate per-env knobs (DB URL, R2 keys, FDA creds); URLs, timeouts, and ETag values don't differ across dev and prod today.
+The loader supports optional `<source>.<env>.yaml` overlay files. See the [`RECALLS_ENV` section above](#recalls_env--per-environment-source-config-overlays-adr-0012) for the full description. At go-live no source ships an overlay file, so leaving `RECALLS_ENV` unset is correct for normal local and CI runs.
 
 ### Cross-references
 
@@ -506,23 +507,23 @@ Today the loader reads exactly one YAML per source. Layered `<source>.<env>.yaml
 
 ```bash
 # Full pytest suite (unit + integration + e2e) — what CI runs
-uv run pytest
+pytest
 
 # Subsets:
-uv run pytest tests/unit/          # fast, no network
-uv run pytest tests/integration/   # VCR-backed, no live network
-uv run pytest tests/e2e/           # requires a reachable Neon dev branch
+pytest tests/unit/          # fast, no network
+pytest tests/integration/   # VCR-backed, no live network
+pytest tests/e2e/           # requires a reachable Neon dev branch
 
 # Single test file or single test:
-uv run pytest tests/integration/test_cpsc_live_cassettes.py
-uv run pytest tests/integration/test_cpsc_live_cassettes.py::test_happy_path_recent
+pytest tests/integration/test_cpsc_live_cassettes.py
+pytest tests/integration/test_cpsc_live_cassettes.py::test_happy_path_recent
 
 # dbt tests (requires database + dbt-only env vars per "Design rationale" above)
-uv run dbt test --project-dir dbt --profiles-dir dbt
+dbt test --project-dir dbt --profiles-dir dbt
 
 # Coverage — the 85% threshold lives in pyproject.toml and is enforced in CI only,
 # but you can reproduce the CI run locally:
-uv run pytest --cov=src --cov-fail-under=85
+pytest --cov=src --cov-fail-under=85
 ```
 
 A few mechanics worth knowing:
@@ -541,7 +542,7 @@ See [ADR 0015](decisions/0015-testing-strategy.md) for the full testing strategy
 When an agency's API changes (new field, renamed field, new enum value), cassettes need to be re-recorded against the live API. The command shape will be:
 
 ```bash
-uv run pytest tests/integration/test_<source>_extractor.py --record-mode=rewrite
+pytest tests/integration/test_<source>_extractor.py --record-mode=rewrite
 ```
 
 Full procedure documented in `documentation/operations.md` once the workflow is built.
@@ -570,11 +571,11 @@ Invocation after recording:
 
 ```bash
 # Step 1 — record against the live API
-uv run pytest --vcr-record=all tests/integration/test_<source>_live_cassettes.py \
+pytest --vcr-record=all tests/integration/test_<source>_live_cassettes.py \
     -k "<cassette tests>"
 
 # Step 2 — truncate before committing
-uv run python scripts/truncate_cassette.py \
+python scripts/truncate_cassette.py \
     tests/fixtures/cassettes/<source>/test_happy_path_*.yaml \
     --max-records 50
 ```
@@ -658,30 +659,30 @@ The CLI is wired via `[project.scripts]` in `pyproject.toml`; the entry point is
 
 ```bash
 # Show available commands
-uv run recalls --help
+recalls --help
 
 # Print the version (sanity check)
-uv run recalls version
+recalls version
 
 # Incremental extraction — uses the watermark in source_watermarks
-uv run recalls extract cpsc
-uv run recalls extract fda
-uv run recalls extract usda
-uv run recalls extract usda_establishments
-uv run recalls extract nhtsa
+recalls extract cpsc
+recalls extract fda
+recalls extract usda
+recalls extract usda_establishments
+recalls extract nhtsa
 
 # Override the watermark with a lookback window (useful when iterating)
 # Honored by CPSC and FDA only; other sources accept the flag and print a notice.
-uv run recalls extract cpsc --lookback-days 7
-uv run recalls extract fda --lookback-days 30
+recalls extract cpsc --lookback-days 7
+recalls extract fda --lookback-days 30
 
 # NHTSA-only: dev-mode RCDATE filter (drops rows older than the date)
-uv run recalls extract nhtsa --since 2024-01-01
+recalls extract nhtsa --since 2024-01-01
 
 # ETag audit run (USDA recall + USDA establishments only) — forces an
 # unconditional GET so the audit-check SQL can verify ETag honesty.
-uv run recalls extract usda --change-type=etag_audit
-uv run recalls extract usda_establishments --change-type=etag_audit
+recalls extract usda --change-type=etag_audit
+recalls extract usda_establishments --change-type=etag_audit
 
 # Inspect the extractor's effect: did rows land?
 psql $NEON_DATABASE_URL -c "
@@ -713,7 +714,7 @@ For day-to-day development this means:
 - A local extractor run against a dev Neon branch reads and writes its own watermark state, so it won't collide with production state unless you point it at the production database.
 - Inspecting state during development is a SQL query — see `operations.md` for the canonical queries.
 
-The state tables are intentionally created in the same migration set as bronze/silver/gold schemas so `uv run alembic upgrade head` provisions them together on a fresh Neon branch.
+The state tables are intentionally created in the same migration set as bronze/silver/gold schemas so `alembic upgrade head` provisions them together on a fresh Neon branch.
 
 ---
 
@@ -734,29 +735,29 @@ Then run dbt against the dev Neon branch:
 
 ```bash
 # Compile-only sanity check — fast, doesn't touch the DB
-uv run dbt parse --project-dir dbt
+dbt parse --project-dir dbt
 
 # Full build: run all models + tests
-uv run dbt build --project-dir dbt
+dbt build --project-dir dbt
 
 # Run a specific model and its descendants
-uv run dbt run --project-dir dbt --select stg_cpsc_recalls+
+dbt run --project-dir dbt --select stg_cpsc_recalls+
 
 # Run tests against built models
-uv run dbt test --project-dir dbt
+dbt test --project-dir dbt
 
 # Generate and serve docs locally (helpful for understanding the model graph)
-uv run dbt docs generate --project-dir dbt
-uv run dbt docs serve --project-dir dbt
+dbt docs generate --project-dir dbt
+dbt docs serve --project-dir dbt
 ```
 
 **A few mechanics:**
 
-- **Source freshness** is configured per [ADR 0015](decisions/0015-testing-strategy.md). Run `uv run dbt source freshness --project-dir dbt` to check whether bronze tables have recent data; the transform workflow runs this in production.
+- **Source freshness** is configured per [ADR 0015](decisions/0015-testing-strategy.md). Run `dbt source freshness --project-dir dbt` to check whether bronze tables have recent data; the transform workflow runs this in production.
 - **Model selection syntax.** `+` is downstream, `+model_name` is upstream, `model_name+` is downstream of model_name. `dbt run --select +recall_event` runs everything `recall_event` depends on but not its downstream gold models.
 - **Compile output** lands in `dbt/target/compiled/` after `dbt parse` or `dbt run`. Useful for inspecting the actual SQL when a model surprises you.
 - **Profile target.** `profiles.yml` defines a single `dev` target; production CI overrides via env vars or a separate profile path. Don't add a `prod` target to the committed file unless you mean to.
-- **Skipping the `--project-dir` / `--profiles-dir` flags.** Export `DBT_PROJECT_DIR=$(pwd)/dbt` and `DBT_PROFILES_DIR=$(pwd)/dbt` (in `.envrc` so direnv autoloads them) and dbt picks them up natively — bare `uv run dbt parse` works. Same idea applies to `psql` (libpq `PGHOST` / `PGUSER` / etc.) and `aws` for R2 (`AWS_ENDPOINT_URL`); see [`commands.md` § Shortcuts via env vars](commands.md#shortcuts-via-env-vars) for the table.
+- **Skipping the `--project-dir` / `--profiles-dir` flags.** Export `DBT_PROJECT_DIR=$(pwd)/dbt` and `DBT_PROFILES_DIR=$(pwd)/dbt` (in `.envrc` so direnv autoloads them) and dbt picks them up natively — bare `dbt parse` works. Same idea applies to `psql` (libpq `PGHOST` / `PGUSER` / etc.) and `aws` for R2 (`AWS_ENDPOINT_URL`); see [`commands.md` § Shortcuts via env vars](commands.md#shortcuts-via-env-vars) for the table.
 
 ---
 
@@ -797,13 +798,13 @@ The pipeline logs JSON to stdout via `structlog` per [ADR 0021](decisions/0021-s
 
 ```bash
 # Pretty-print local extractor logs with jq
-uv run recalls extract cpsc 2>&1 | jq -C .
+recalls extract cpsc 2>&1 | jq -C .
 
 # Filter to a single run after the fact
-uv run recalls extract cpsc 2>&1 | jq -C 'select(.run_id == "<the-run-id>")'
+recalls extract cpsc 2>&1 | jq -C 'select(.run_id == "<the-run-id>")'
 
 # Filter to errors only
-uv run recalls extract cpsc 2>&1 | jq -C 'select(.level == "error")'
+recalls extract cpsc 2>&1 | jq -C 'select(.level == "error")'
 ```
 
 ### VCR cassette inspection
@@ -830,7 +831,7 @@ See [Re-recording VCR cassettes](#re-recording-vcr-cassettes) for the procedure.
 The `Extractor` ABC has five lifecycle steps (`extract`, `land_raw`, `validate`, `check_invariants`, `load_bronze`). When debugging a specific failure, you can short-circuit by calling them directly in `python -c` or `ipython`, e.g.:
 
 ```bash
-uv run python - <<'EOF'
+python - <<'EOF'
 from src.config.settings import Settings
 from src.extractors.cpsc import CpscExtractor
 
@@ -849,7 +850,7 @@ This is faster than full extraction runs when you're hunting a parsing or valida
 Drop a `breakpoint()` in the extractor and run the failing test with `--pdb`:
 
 ```bash
-uv run pytest tests/integration/test_cpsc_live_cassettes.py --pdb -k test_happy_path_recent
+pytest tests/integration/test_cpsc_live_cassettes.py --pdb -k test_happy_path_recent
 ```
 
 The `--pdb` flag drops you into a debugger on the first failure, with the full call stack and locals available. Use `bt` to see the stack, `up`/`down` to walk frames, `pp variable` to pretty-print, `c` to continue.

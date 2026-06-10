@@ -911,3 +911,49 @@ def test_audit_firm_rollups_dispatches_and_writes_csv(tmp_path: Path) -> None:
     lines = out_path.read_text(encoding="utf-8").strip().splitlines()
     assert lines[0].startswith("risk_rank,")
     assert "ACME CORP" in lines[1]
+
+
+def _quantity_summary() -> MagicMock:
+    summary = MagicMock()
+    summary.distinct_values = 58727
+    summary.rows_written = 58727
+    summary.parsed_value = 52000
+    summary.parsed_unit = 41000
+    summary.dry_run = False
+    return summary
+
+
+def test_parse_quantities_dispatches_with_defaults() -> None:
+    summary = _quantity_summary()
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.cli.main.Settings"),
+        patch("src.cli.main.make_engine", return_value=MagicMock()),
+        patch("src.cli.main.write_quantity_crosswalk", return_value=summary) as mock_write,
+    ):
+        result = runner.invoke(app, ["parse-quantities"])
+
+    assert result.exit_code == 0
+    assert "distinct=58727" in result.output
+    assert "written=58727" in result.output
+    mock_write.assert_called_once()
+    # Default is a real write, not a dry-run.
+    assert mock_write.call_args.kwargs["dry_run"] is False
+
+
+def test_parse_quantities_dry_run_forwards_flag() -> None:
+    summary = _quantity_summary()
+    summary.dry_run = True
+    summary.rows_written = 0
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.cli.main.Settings"),
+        patch("src.cli.main.make_engine", return_value=MagicMock()),
+        patch("src.cli.main.write_quantity_crosswalk", return_value=summary) as mock_write,
+    ):
+        result = runner.invoke(app, ["parse-quantities", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "[dry-run]" in result.output
+    mock_write.assert_called_once()
+    assert mock_write.call_args.kwargs["dry_run"] is True

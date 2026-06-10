@@ -24,12 +24,7 @@
 
 ## §0 — Prerequisite ADRs (file in THIS repo before the API repo is created)
 
-Both are **currently absent** (verified: `documentation/decisions/` has the 0023→0026 gap; the only
-`0024*`/`0025*` files on disk are unrelated Alembic migrations). Plan lines 845–846 name them as hard
-prerequisites. File them in the pipeline repo (that's the ADR home), de-reserve them in
-`documentation/decisions/README.md` (numeric index lines 90–91 + the line-112 current-state block),
-then start the API repo. This plan **pre-answers** their load-bearing questions so the ADRs are short
-ratifications, not fresh investigations.
+Both are **filed** (ADR 0024 and ADR 0025 were filed 2026-06-09 on branch `feature/phase-7-production-plus-todos` and are listed as Accepted in `documentation/decisions/README.md`). De-reservation is complete. This plan **pre-answered** their load-bearing questions; the ADRs ratify those answers. Start the API repo once Phase 7 (production cron) is complete and the pipeline's gold layer is stable.
 
 ### ADR 0024 — Serving-layer API design
 
