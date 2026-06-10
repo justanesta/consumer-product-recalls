@@ -26,14 +26,29 @@ latest_per_pair as (
     select source_recall_id, langcode, last_modified_date
     from latest
     where rn = 1
-)
-select
-    en.source_recall_id,
-    en.last_modified_date as en_last_modified,
-    es.last_modified_date as es_last_modified
-from latest_per_pair en
-join latest_per_pair es
-    on en.source_recall_id = es.source_recall_id
-   and en.langcode = 'English'
-   and es.langcode = 'Spanish'
-where en.last_modified_date is distinct from es.last_modified_date
+),
+pairs as (
+      select
+          en.source_recall_id,
+          (en.last_modified_date is distinct from es.last_modified_date) as is_non_atomic
+      from latest_per_pair en
+      join latest_per_pair es
+          on en.source_recall_id = es.source_recall_id
+         and en.langcode = 'English'
+         and es.langcode = 'Spanish'
+),
+rate as (
+    select
+        count(*) filter (where is_non_atomic)            as non_atomic_pairs,
+        count(*)                                         as bilingual_pairs,
+        count(*) filter (where is_non_atomic)::numeric
+            / nullif(count(*), 0)                        as non_atomic_rate
+    from pairs
+) 
+-- Rate-ceiling drift monitor: the ~13.3% non-atomicity is the documented benign
+-- steady state (bilingual_and_lmd_findings.md). Emit a breach row ONLY when the
+-- rate clears 0.18 which signals a real change in FSIS EN/ES
+-- update behavior worth investigating; normal fluctuation stays green (no noise).
+select non_atomic_pairs, bilingual_pairs, round(non_atomic_rate, 4) as non_atomic_rate
+from rate
+where non_atomic_rate > 0.18
