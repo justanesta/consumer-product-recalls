@@ -202,23 +202,30 @@ migration `0031`.
 
 **The two roles:**
 
-- **Privileged role** — the existing table-owner role. Used **only** to run Alembic
-  migrations. Full DDL/DML.
-- **Restricted role `recalls_app`** — used by the pipeline runtime (extractors, the transform
-  cron, the future read-only API). `SELECT`/`INSERT`/`UPDATE` on the working tables; migration
-  0031 **revokes** `TRUNCATE`/`DELETE`/`UPDATE` on every `*_rejected` table, so the runtime can
-  only append + read them.
+- **Privileged role** — the existing table-owner role. Full DDL/DML. Used by (a) Alembic
+  migrations (operator-run, never in CI) **and** (b) dbt (`build`/`snapshot`/`test`) in the
+  transform cron, which creates and drops the staging/silver/gold/snapshot relations — DDL that
+  `recalls_app` is deliberately not granted.
+- **Restricted role `recalls_app`** — used by the SQLAlchemy/CLI runtime: extractors,
+  deep-rescans, `resolve-firms` and `parse-quantities` (the last two run inside the transform
+  cron), and the future read-only API. `SELECT`/`INSERT`/`UPDATE` on the working tables;
+  migration 0031 **revokes** `TRUNCATE`/`DELETE`/`UPDATE` on every `*_rejected` table, so the
+  runtime can only append + read them.
 
 **Where credentials live:**
 
-| DSN | Role | Stored in | Used by |
+| Credential | Role | Stored in | Used by |
 |---|---|---|---|
-| Restricted | `recalls_app` | `NEON_DATABASE_URL` GitHub Actions secret **+** local `.env` | every pipeline run (extract / transform cron / API) |
-| Privileged | owner | **operator-held only** (local `.env.migrations` or a password manager — **not** a GitHub secret) | `alembic upgrade head` only |
+| `NEON_DATABASE_URL` (DSN) | `recalls_app` | `NEON_DATABASE_URL` GitHub Actions secret **+** local `.env` | extract / deep-rescan / `resolve-firms` / `parse-quantities` / API — every SQLAlchemy run |
+| `NEON_HOST/USER/PASSWORD/DBNAME` (split fields) | owner | GitHub Actions secrets **+** local `.envrc` | dbt `build`/`snapshot`/`test` in the transform cron |
+| `NEON_DATABASE_URL` override (owner DSN) | owner | **operator-held only** (local `.env.migrations` or a password manager — **not** a GitHub secret) | `alembic upgrade head` only |
 
-Migrations are operator-run (never in CI), so the privileged DSN never needs to live in
-GitHub. `migrations/env.py` reads `NEON_DATABASE_URL`, so you override it just for the
-migration command (step 3).
+dbt needs owner-level DDL to build silver/gold, so under this posture the owner's **split-field**
+credentials do live in GitHub (they drive dbt only). What never becomes a GitHub secret is the
+owner **DSN** (`NEON_DATABASE_URL` form): `migrations/env.py` reads `NEON_DATABASE_URL`, and
+migrations are operator-run (never in CI), so you override that one var to the owner DSN locally
+just for the migration command (step 3). The `NEON_DATABASE_URL` **secret** in GitHub stays
+pointed at `recalls_app`.
 
 **Setup procedure (one-time, before go-live):**
 
@@ -238,8 +245,10 @@ migration command (step 3).
    It revokes `TRUNCATE, DELETE, UPDATE` on every `public.*_rejected` from `recalls_app`
    (raises if the role doesn't exist — do step 1 first).
 4. **Repoint the runtime** — set the `NEON_DATABASE_URL` **GitHub Actions secret** and your
-   local `.env` to the **restricted** DSN. From here every extract/transform/API run connects
-   as `recalls_app`.
+   local `.env` to the **restricted** DSN. From here every SQLAlchemy run — extract /
+   deep-rescan / `resolve-firms` / `parse-quantities` / API — connects as `recalls_app`. The
+   transform cron's **dbt** steps keep connecting as the owner via the
+   `NEON_HOST/USER/PASSWORD/DBNAME` secrets (dbt needs DDL `recalls_app` doesn't have).
 5. **Verify** — connect as `recalls_app`: `INSERT` into a `*_rejected` table succeeds, `SELECT`
    succeeds, but `DELETE FROM cpsc_recalls_rejected WHERE false` returns **permission denied**
    (the guard works).
@@ -250,6 +259,36 @@ buggy schema is fine; only run migration 0031 against the production environment
 password rotates on the standard 90-day cadence (the "Rotating the Neon Postgres password"
 runbook above rotates whatever role `NEON_DATABASE_URL` points at — now `recalls_app`); the
 privileged owner password rotates separately, operator-held.
+
+### Local validation pass (H-a) — point your shell at `recalls_app`, then back
+
+Before go-live the cron's `recalls_app` path (extracts + `resolve-firms`/`parse-quantities`)
+must be exercised against prod at least once — otherwise the first time the restricted role
+touches prod is the first live cron night, where a missing grant or the migration-0031 REVOKE
+surfaces as an outage. Do this once during H-a:
+
+1. **Point the runtime at `recalls_app` (temporary).** In your local `.env`, set
+   `NEON_DATABASE_URL` to the **`recalls_app`** connection string (Neon console → Roles →
+   `recalls_app` → connection string), then `direnv reload`. **Leave the split fields
+   (`NEON_HOST`/`NEON_USER`/`NEON_PASSWORD`/`NEON_DBNAME`) on `neondb_owner`** — dbt and bare
+   `psql` stay owner, exactly as in prod (Option A).
+2. **Run a simulation day.** `recalls extract …`, `resolve-firms`, `parse-quantities` now connect
+   as `recalls_app`; `dbt build`/`snapshot`/`test` connect as the owner. A clean pass proves the
+   grants are sufficient for the runtime.
+3. **Verify the grant matrix + append-only guard** — run the check *as `recalls_app`* (the
+   `NEON_DATABASE_URL` URI carries the role):
+   ```bash
+   psql "$NEON_DATABASE_URL" -f scripts/sql/_pipeline/verify_recalls_app_grants.sql
+   ```
+   Expect every row `PASS` and Section 3's `DELETE … WHERE false` to fail with
+   `permission denied` (that error **is** the pass).
+4. **Switch back when done.** After the pre-live validation window, restore `NEON_DATABASE_URL`
+   to the **`neondb_owner`** DSN and `direnv reload`, so local `alembic upgrade head` and ad-hoc
+   dev run as the owner again. This swap is **local-only** — in CI/prod the `NEON_DATABASE_URL`
+   *secret* stays pointed at `recalls_app` permanently.
+
+Per-day loaded counts for the H-a artifact (read-only, either role):
+`psql -f scripts/sql/_pipeline/simulation_daily_counts.sql`.
 
 ---
 

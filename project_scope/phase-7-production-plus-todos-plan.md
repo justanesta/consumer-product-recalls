@@ -145,7 +145,7 @@ Notation: gates abbreviated `R`=ruff check+format, `P`=pyright, `T`=pytest, `D`=
 |---|---|---|---|---|---|
 | H-a | *(user-run, no commit)* 2–3 day local production simulation (#33) | Run all extract workflows + `dbt build`/`test` + docs locally on a daily cadence for 2–3 consecutive days against the **main/prod Neon branch** (restricted role?); record expected-vs-actual loaded counts per source per day under `documentation/<source>/`. Folds into the implementation-plan "Pre-cron blocker — deep-rescan validation." | artifacts written | all WS-A…G green | **[U]** |
 | H-b | *(user-run)* deep-rescan validation across all sources (main/prod Neon branch) | Exercise each `deep-rescan-<source>.yml` once on main/prod (restricted role?) Neon; confirm (a) dispatch completes; (b) bronze rows carry `change_type=historical_seed`; **(c) `source_watermarks` NOT advanced**; (d) counts match per-source baselines (CPSC ~9k+backfill, FDA ~API total, USDA ~2k, NHTSA ~322k, USCG TBD). Record per source. Also produces the NHTSA full-enumeration run that makes C16's presence dims valid. | per-source result docs | H-a | **[U]** |
-| H-c | *(user-run)* CPSC historical seed | Dispatch `deep-rescan-cpsc.yml` once with `change_type=historical_seed` on prod Neon (1970 floor returns the full ~9.8k corpus — no `--start-date`; the stale 2005 prose was fixed in C3). Verify counts + `historical_seed` in `extraction_runs`. | seed verified | H-b (CPSC validated) | **[U]** |
+~~| H-c | *(user-run)* CPSC historical seed | Dispatch `deep-rescan-cpsc.yml` once with `change_type=historical_seed` on prod Neon (1970 floor returns the full ~9.8k corpus — no `--start-date`; the stale 2005 prose was fixed in C3). Verify counts + `historical_seed` in `extraction_runs`. | seed verified | H-b (CPSC validated) | **[U]** |~~
 | H-d | `chore(pre-commit): confirm autoupdate automation (#44)` | Confirm the Dependabot `pre-commit` ecosystem is the live answer to #44 (already shipped) and `pre-commit run --all-files` is green on the final tree. Confirm the per-env overlay disposition (C21) — code or documented no-op. | `T`/`A` | C21 | [E] + [U] |
 | H-e | `chore: bump version (final pre-go-live)` | **Manual edit to `pyproject.toml` only.** Minor bump (meaningful chunk: full production-CI + enrichment + USDA upgrade). | `recalls version` reads it | everything above | [E] (user commits) |
 | H-f | `docs(validation): commit simulation + deep-rescan + seed artifacts; close #71` | Land the H-a/H-b/H-c expected-vs-actual result docs under `documentation/<source>/` into the repo (the go-live audit trail — otherwise the validation never reaches `main`). Flip **TODO #71** to `[x]` now that H-b's full-enumerating NHTSA run proved the `track_presence` dims. | doc | H-a, H-b, H-c | [E] |
@@ -191,10 +191,29 @@ alembic upgrade head               # applies the *_rejected REVOKE (after the Ne
 #   GitHub UI → Actions → transform.yml → Run workflow
 
 # WS-H-a — 2-3 day local production simulation (main/prod Neon branch, restricted role), each day:
-recalls extract cpsc && recalls extract fda && recalls extract usda \
-  && recalls extract nhtsa && recalls extract usda_establishments \
-  && recalls extract uscg_manufacturers && recalls extract fda_press_releases --checkpointed
-dbt build && dbt test              # record expected-vs-actual counts under documentation/<source>/
+# 1) Daily extracts — mirrors the 02:00–02:40 UTC grid (incremental/watermark path; runs as recalls_app)
+recalls extract cpsc      # prod 02:00
+recalls extract fda       # prod 02:10
+recalls extract usda      # prod 02:20
+recalls extract uscg      # prod 02:30   ← the cheat-block omits this
+recalls extract nhtsa     # prod 02:40 (Mon–Fri in prod; running it daily in the sim is harmless/idempotent)
+
+# 2) Transform — mirrors transform.yml at 03:00 (dbt as owner; resolve/parse as recalls_app)
+dbt build --exclude-resource-type test   # staging + silver, PRE-resolve
+recalls resolve-firms                     # rebuild firm_crosswalk from fresh staging
+recalls parse-quantities                  # rebuild quantity_crosswalk from fresh staging
+dbt build --exclude-resource-type test   # silver + gold, POST-resolve
+dbt snapshot                              # bank SCD-2 over the resolved firms
+dbt test
+
+# Once across the 2–3 day window — the weekly-cadence jobs
+
+# Run these a single time during the simulation (not daily) so each gets exercised at its real cadence:
+
+recalls extract uscg_manufacturers          # prod weekly Mon 01:00
+recalls extract uscg_manufacturer_details   # prod weekly Mon 01:15 (incremental Tier-2)
+recalls extract usda_establishments         # prod weekly Wed 01:00
+recalls extract fda_press_releases          # prod weekly Mon 02:50 (plain — NOT --checkpointed; that flag is the seed/H-c path)
 
 # WS-H-b — deep-rescan validation across all sources (main/prod Neon, restricted role), per source:
 #   GitHub UI → Actions → deep-rescan-<source>.yml → Run workflow (change_type=historical_seed)

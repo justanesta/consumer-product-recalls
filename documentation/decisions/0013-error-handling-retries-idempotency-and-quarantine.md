@@ -129,11 +129,12 @@ append-only as a **Postgres invariant** for production.
 
 **Two-role topology.** Production now uses two Neon roles:
 
-- a **privileged** role (table owner) used **only** by `alembic` migrations — full DDL/DML;
-- a **restricted application role** (`recalls_app`) used by the pipeline runtime (extractors,
-  the transform cron, the future read-only API). `NEON_DATABASE_URL` for those runs points at
-  the restricted role. It holds `SELECT`/`INSERT` on `*_rejected` and is **revoked**
-  `TRUNCATE`/`DELETE`/`UPDATE` on them.
+- a **privileged** role (table owner) — full DDL/DML — used by `alembic` migrations **and** by
+  dbt (`build`/`snapshot`/`test`), which needs DDL to create the silver/gold relations;
+- a **restricted application role** (`recalls_app`) used by the SQLAlchemy runtime: extractors,
+  the transform cron's `resolve-firms`/`parse-quantities` steps, the future read-only API.
+  `NEON_DATABASE_URL` for those runs points at the restricted role. It holds `SELECT`/`INSERT`
+  on `*_rejected` and is **revoked** `TRUNCATE`/`DELETE`/`UPDATE` on them.
 
 **Mechanism.** Alembic migration `0031_revoke_mutation_on_rejected_tables.py` dynamically
 enumerates every `public.*_rejected` table and revokes `TRUNCATE, DELETE, UPDATE` from
