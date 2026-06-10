@@ -1,6 +1,6 @@
 # 0013 — Error handling: retries, idempotency, and quarantine
 
-- **Status:** Accepted; amended 2026-05-01 (FDA HTML-redirect throttling exception — see "Implementation notes" at end)
+- **Status:** Accepted; amended 2026-05-01 (FDA HTML-redirect throttling exception) + 2026-06-09 (restricted-role mutation guard on `*_rejected` tables — both in "Implementation notes" at end)
 - **Date:** 2026-04-16
 
 ## Context
@@ -116,3 +116,36 @@ The retry-ladder table assumes rate limiting surfaces via standard HTTP status c
 - USDA's Akamai bot-manager protections (ADR 0016 implementation note) are a separate mechanism with a different signal — both are documented because both look like "the request just hung" if not specifically detected.
 
 **Generalization for future sources.** Government-data APIs increasingly run behind anti-abuse middleware that does not honor RFC 6585 (the 429 spec). Probe each new source for non-standard throttle signals during Phase 5 exploration. Common patterns: 302 redirects to apology pages, 200 responses with HTML bodies, slow-loris hangs, deliberately-malformed JSON.
+
+### Implementation notes — restricted-role mutation guard on `*_rejected` (added 2026-06-09)
+
+The three-tier quarantine architecture treats the per-source `*_rejected` tables as an
+**append-only** audit trail (T1; the re-ingest source per ADR 0014; data-loss accounting).
+Until Phase 7 this was operator discipline only — anyone with the app credentials could
+`TRUNCATE`/`DELETE`/`UPDATE` a reject table and silently lose the forensic record (the
+temptation surfaced during the Phase-5b.2 first extraction, when 7,945 records were rejected
+on a missed `city` field and truncating-before-fix-and-retry was tempting). Phase 7 enforces
+append-only as a **Postgres invariant** for production.
+
+**Two-role topology.** Production now uses two Neon roles:
+
+- a **privileged** role (table owner) used **only** by `alembic` migrations — full DDL/DML;
+- a **restricted application role** (`recalls_app`) used by the pipeline runtime (extractors,
+  the transform cron, the future read-only API). `NEON_DATABASE_URL` for those runs points at
+  the restricted role. It holds `SELECT`/`INSERT` on `*_rejected` and is **revoked**
+  `TRUNCATE`/`DELETE`/`UPDATE` on them.
+
+**Mechanism.** Alembic migration `0031_revoke_mutation_on_rejected_tables.py` dynamically
+enumerates every `public.*_rejected` table and revokes `TRUNCATE, DELETE, UPDATE` from
+`recalls_app` — covering all nine source reject tables today and any future source's reject
+table automatically (no hardcoded list). REVOKE of a never-granted privilege is a Postgres
+no-op, so the migration is safe over a minimally-granted role; it raises (pointing at the
+runbook) if the role does not yet exist. `downgrade()` re-grants. **Dev branches keep full
+privileges** — truncating a reject table while iterating on a buggy schema is fine.
+
+**Operator setup + credential storage:** `documentation/operations.md` → "Restricted app
+role" (create the Neon role, grant the runtime privileges, repoint `NEON_DATABASE_URL`, keep
+the privileged DSN for migrations only). **Topology coupling:** because this repoints
+`NEON_DATABASE_URL` for every cron/transform run, the secret-validation steps in
+`transform.yml` + the extract/deep-rescan workflows must reference the restricted DSN; only
+`alembic` uses the privileged DSN (phase-7 plan C25/C31/C32).

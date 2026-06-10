@@ -14,13 +14,15 @@ functions in :mod:`src.bronze.loader`). The write happens in ``Extractor._record
 manifest's ``run_id`` references — see that method for why it cannot live in the bronze
 transaction.
 
-Grain note: the manifest is RECALL-grain (``source_recall_id`` + optional ``langcode``),
-not bronze-identity grain. USDA's bilingual siblings share ``source_recall_id`` and diverge
-only on ``langcode`` (Finding F / ADR 0006), so ``langcode`` is carried when it is part of
-the source's dedup identity; every other in-scope source is single-key and leaves it NULL.
-Richer composite identities (NHTSA's 11-tuple, FDA press-release URLs) are deliberately not
-represented — those sources do not opt into presence tracking (ADR 0026 is USDA-only
-initially; ``DedupContract.default_track_presence`` is the per-source gate).
+Grain note: the manifest is RECALL-grain (``recall_id_field`` + optional ``langcode``), not
+bronze-identity grain. The recall key is ``source_recall_id`` by default, but a source can override
+it via ``DedupContract.presence_recall_id_field`` — NHTSA uses **campno** because its bronze
+``source_recall_id`` is the regen-unstable RECORD_ID (excluded from the content hash) and
+``recall_event`` joins NHTSA on campno (C16). USDA's bilingual siblings share the recall key and
+diverge only on ``langcode`` (Finding F / ADR 0006), so ``langcode`` is carried when it is part of
+the source's dedup identity; every other in-scope source leaves it NULL. Track-presence sources are
+``{usda, nhtsa}`` (``DedupContract.default_track_presence``); WHICH run writes the manifest is gated
+separately by ``Extractor.writes_presence_manifest`` (full-corpus enumerations only).
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ def build_presence_manifest_rows(
     run_id: str,
     source: str,
     langcode_field: str | None = None,
+    recall_id_field: str = "source_recall_id",
 ) -> list[dict[str, Any]]:
     """Build deduped ``extraction_run_identities`` row dicts for one run's records.
 
@@ -44,22 +47,23 @@ def build_presence_manifest_rows(
     ones present in the response. Quarantined records are excluded by the caller (ADR 0026
     Q2: the manifest tracks bronze-table presence, not rejects).
 
-    Each row is ``{run_id, source, source_recall_id, langcode}``. ``source_recall_id`` is
-    read from every record (the bronze-schema convention guarantees the attribute) and
-    **trimmed to silver's canonical recall identity** — ~5 of USDA's ids carry leading/
-    trailing whitespace (Finding R) and `stg_usda_fsis_recalls` trims with `trim()`; the
+    Each row is ``{run_id, source, source_recall_id, langcode}``. The recall key is read from
+    ``recall_id_field`` (default ``"source_recall_id"``; NHTSA passes ``"campno"`` — see the module
+    docstring) and **trimmed to silver's canonical recall identity** — ~5 of USDA's ids carry
+    leading/trailing whitespace (Finding R) and `stg_usda_fsis_recalls` trims with `trim()`; the
     manifest is a silver-feeding join key, so it must match that trimmed form or
-    `recall_lifecycle`'s join to silver silently misses those ids. ``langcode`` is read
-    from ``langcode_field`` when given (USDA), else NULL. Rows are deduped on the trimmed
-    ``(source_recall_id, langcode)`` so whitespace variants and repeated recalls collapse
-    to a single presence row.
+    `recall_lifecycle`'s join to silver silently misses those ids. ``langcode`` is read from
+    ``langcode_field`` when given (USDA), else NULL. Rows are deduped on the trimmed
+    ``(recall_key, langcode)`` so whitespace variants and repeated recalls collapse to a single
+    presence row. The output column stays named ``source_recall_id`` (the manifest table column),
+    whatever record attribute it was sourced from.
 
     Pure function — no DB access, fully unit-testable in isolation.
     """
     seen: set[tuple[str, str | None]] = set()
     rows: list[dict[str, Any]] = []
     for record in records:
-        raw_id = getattr(record, "source_recall_id", None)
+        raw_id = getattr(record, recall_id_field, None)
         if raw_id is None:
             # Defensive: the loader already rejects null-identity records unless a source
             # opts into allow_null_identity, and no presence-tracked source does. Skip

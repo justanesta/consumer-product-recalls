@@ -10,6 +10,6 @@
 -- the snapshot banks a holder change. severity=warn via dbt_project.yml.
 
 select mic, count(distinct company_name) as distinct_holders
-from {{ ref('uscg_manufacturer_attributes_snapshot') }}
+from {{ ref('firm_uscg_attributes_snapshot') }}
 group by mic
 having count(distinct company_name) > 1

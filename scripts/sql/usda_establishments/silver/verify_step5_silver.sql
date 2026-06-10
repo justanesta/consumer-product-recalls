@@ -1,6 +1,6 @@
 -- Verify Phase 5b.2 Step 5 — USDA FSIS Establishment silver implementation.
 -- Run after `dbt build` produces stg_usda_fsis_establishments + firm +
--- firm_establishment_attributes. No psql variables — all probes are
+-- firm_usda_attributes. No psql variables — all probes are
 -- self-contained.
 --
 -- Expected outcomes per documentation/usda/establishment_join_coverage.md
@@ -9,7 +9,7 @@
 --   2. Per-distinct-name match rate >= 95% (vs 82.85% pre-HTML-decode baseline).
 --   3. USDA-establishment firms have observed_company_ids populated for
 --      ~95%+ of distinct establishment names.
---   4. firm_establishment_attributes has one row per FSIS establishment.
+--   4. firm_usda_attributes has one row per FSIS establishment.
 
 \pset null '<NULL>'
 
@@ -78,17 +78,17 @@ select
 from usda_only_establishment_firms u
 join public.firm f using (firm_id);
 
--- 4. firm_establishment_attributes row count vs distinct establishment_number
+-- 4. firm_usda_attributes row count vs distinct establishment_number
 --    in staging. The dim filters out null establishment_number rows; counts
 --    should match `count(distinct establishment_number) where not null`
 --    in staging.
 select
-    (select count(*) from public.firm_establishment_attributes)                          as dim_rows,
+    (select count(*) from public.firm_usda_attributes)                          as dim_rows,
     (select count(distinct establishment_number)
      from public.stg_usda_fsis_establishments
      where establishment_number is not null)                                             as staging_distinct_non_null,
     case
-        when (select count(*) from public.firm_establishment_attributes)
+        when (select count(*) from public.firm_usda_attributes)
              = (select count(distinct establishment_number)
                 from public.stg_usda_fsis_establishments
                 where establishment_number is not null)

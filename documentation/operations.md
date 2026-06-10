@@ -2,10 +2,6 @@
 
 This document covers production operations: scheduled runs, monitoring, secret rotation, and recovery procedures. For architectural rationale, see the ADRs in `documentation/decisions/`. For system architecture and component relationships, see [`architecture.md`](architecture.md).
 
-> ⚠️ **Partially stale (as of 2026-06-01) — full refresh scheduled in the Phase 6f doc-sync** (`project_scope/archive/phase-6-execution-plan.md` §6f). USCG is **live since 2026-05-15** (3 extraction sources: recalls + manufacturers + manufacturer-details; 8 total across the pipeline). The USCG row below and any "4-source" framing predate the reactivation; live USCG cadences are in `documentation/uscg/` and the Phase 6f plan. The rest of this guide is current.
-
----
-
 ## Pipeline overview
 
 Per-source extraction workflows (per [ADR 0010](decisions/0010-ingestion-cadence-and-github-actions-cron.md), with empirical revisions noted):
@@ -35,7 +31,7 @@ Plus a transformation workflow scheduled to run after the latest extraction comp
 
 | Workflow | Schedule | Action |
 |---|---|---|
-| `transform.yml` | Daily, time-shifted ~30 min after the latest daily extractor | `dbt build --project-dir dbt` + `dbt test --project-dir dbt`. Posts dbt docs to Cloudflare Pages on success. |
+| `transform.yml` | Daily, time-shifted ~30 min after the latest daily extractor | `dbt build --project-dir dbt` + `dbt test --project-dir dbt`. |
 
 Pipeline state — per-source watermarks (last-seen publication timestamps, ETags, pagination cursors) and per-run metadata (status, counts, duration, `change_type`) — lives in Neon Postgres: `source_watermarks` and `extraction_runs`. For presence-tracked sources (USDA initially, [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md)) a third table, `extraction_run_identities` (migration 0027), records which recall identities each successful run returned — written automatically inside the run's `_record_run` transaction, **no operator action**. Retention: keep-forever for now (~2K rows per USDA run); revisit a TTL only if disk growth becomes material. Full rationale in [ADR 0020](decisions/0020-pipeline-state-tracking.md). The queries below are written against these tables.
 
@@ -54,11 +50,12 @@ v1 alerting is the GitHub Actions UI. There is no paging, on-call rotation, or p
 
 ## Monitoring
 
-Three complementary surfaces:
+Four complementary surfaces:
 
 1. **GitHub Actions UI** — workflow run history, per-step logs, re-run buttons, manual `workflow_dispatch`.
 2. **Neon Postgres state tables** — SQL-queryable operational state (see canonical queries below).
 3. **dbt** — `source_freshness:` assertions (per [ADR 0015](decisions/0015-testing-strategy.md)) compare `source_watermarks.last_successful_run_at` against expected cadence and warn on staleness.
+4. **Soda Core** (`soda-core-postgres`, [ADR 0040](decisions/0040-data-quality-framework-soda-core.md)) — bronze-layer freshness SLAs, row-count anomaly vs prior run, and schema/column-presence drift; complements dbt (which runs post-transform). Install the opt-in dependency group with `uv sync --group dq`; config lives under `soda/`. The existing dbt silver/gold tests + source-assumption monitors stay in dbt — Soda only covers the bronze + anomaly surface dbt cannot reach pre-transform. Full decision and scoping: [ADR 0040](decisions/0040-data-quality-framework-soda-core.md).
 
 ### Canonical operational queries
 
@@ -123,6 +120,18 @@ A handful are normal; an accumulation suggests GitHub Actions runs are being kil
 
 ---
 
+## Non-validating bronze values — no new lookup-table subsystem (C15 / TODO #57)
+
+TODO #57 asked whether non-validating bronze values (geography free text, quantity strings) warranted a standalone lookup-table subsystem. Decision: **route these into the `freetext-enrichment-backlog.md` enrichment pipeline + a `dbt` parse-coverage monitor (`assert_quantity_parse_coverage`), not a new lookup-table subsystem.** The firm-rollup precedent (`recalls audit-firm-rollups`) already covers the firm-name normalisation surface; geography and quantity follow the same pattern — Python `_parse_*` layer, `recalls parse-quantities` CLI, and coverage tests in dbt. See `project_scope/freetext-enrichment-backlog.md` for the deferred v2 AI extractor work.
+
+---
+
+## Per-environment source-config overlays (`RECALLS_ENV`)
+
+See [`development.md` § `RECALLS_ENV` — per-environment source-config overlays](development.md#recalls_env--per-environment-source-config-overlays-adr-0012) for the full description of how the loader merges `<source>.<env>.yaml` onto the base config. Operationally: set `RECALLS_ENV=prod` (or another string) in the environment and create the matching overlay files carrying only the overriding keys. At go-live no source ships an overlay file, so leaving `RECALLS_ENV` unset is correct for normal runs.
+
+---
+
 ## Secret rotation runbooks
 
 Per [ADR 0016](decisions/0016-secrets-management.md), all credentials are rotated every 90 days. A quarterly scheduled workflow auto-opens a "Rotate secrets" GitHub Issue as a reminder.
@@ -152,6 +161,16 @@ Follow the per-credential runbook below for each set. Rotate one credential at a
 
 **Note:** Neon's connection pooler is shared across all connections; no application-side connection pool flush is required on rotation.
 
+### Rotating the Neon API key (`NEON_API_KEY`)
+
+Separate from the DB password above — this is the **project-scoped API key** the test suite uses to provision ephemeral Neon branches (`scripts/neon_branch.py`, ADR 0015). Neon API keys do not expire, so rotate on the 90-day cycle.
+
+1. In the Neon console (your org → **API Keys**), create a new **project-scoped** key for this project.
+2. Update the `NEON_API_KEY` GitHub Actions repository secret and your local `.envrc`.
+3. Run the e2e Neon-branch smoke (or `TEST_DB_PROVIDER=neon pytest -k neon`) to verify create/delete works with the new key.
+4. Revoke the old key in the console.
+5. Close the "Rotate secrets" issue with a checkmark on the Neon API key.
+
 ### Rotating Cloudflare R2 credentials
 
 1. In the Cloudflare dashboard, open R2 → Manage R2 API Tokens.
@@ -174,6 +193,66 @@ If a credential is suspected compromised, rotate immediately — do not wait for
 
 ---
 
+## Restricted app role (production `*_rejected` mutation guard)
+
+[ADR 0013](decisions/0013-error-handling-retries-idempotency-and-quarantine.md) (2026-06-09
+amendment) enforces the `*_rejected` audit tables as **append-only** in production via two
+Neon roles. This is a **one-time setup** before cron go-live and the prerequisite for
+migration `0031`.
+
+**The two roles:**
+
+- **Privileged role** — the existing table-owner role. Used **only** to run Alembic
+  migrations. Full DDL/DML.
+- **Restricted role `recalls_app`** — used by the pipeline runtime (extractors, the transform
+  cron, the future read-only API). `SELECT`/`INSERT`/`UPDATE` on the working tables; migration
+  0031 **revokes** `TRUNCATE`/`DELETE`/`UPDATE` on every `*_rejected` table, so the runtime can
+  only append + read them.
+
+**Where credentials live:**
+
+| DSN | Role | Stored in | Used by |
+|---|---|---|---|
+| Restricted | `recalls_app` | `NEON_DATABASE_URL` GitHub Actions secret **+** local `.env` | every pipeline run (extract / transform cron / API) |
+| Privileged | owner | **operator-held only** (local `.env.migrations` or a password manager — **not** a GitHub secret) | `alembic upgrade head` only |
+
+Migrations are operator-run (never in CI), so the privileged DSN never needs to live in
+GitHub. `migrations/env.py` reads `NEON_DATABASE_URL`, so you override it just for the
+migration command (step 3).
+
+**Setup procedure (one-time, before go-live):**
+
+1. **Create the role** — Neon console → Roles → New Role (or `neon roles create --name
+   recalls_app`), with a generated password. Its DSN is the same host/db as the owner, role
+   `recalls_app`.
+2. **Grant runtime privileges** — connect as the **owner** and run the single-home script
+   [`scripts/sql/_pipeline/grant_recalls_app.sql`](../scripts/sql/_pipeline/grant_recalls_app.sql)
+   (SELECT/INSERT/UPDATE on all tables + sequences + default privileges for future tables; plus
+   TRUNCATE on the two rebuilt-each-run crosswalk tables — firm_crosswalk (granted in this script)
+   and quantity_crosswalk (granted in migration 0032), which `resolve-firms` / `parse-quantities`
+   truncate-reload; no DELETE, and no TRUNCATE elsewhere — the runtime needs nothing more).
+3. **Apply the mutation guard** — run migration 0031 **as the owner**:
+   ```bash
+   NEON_DATABASE_URL="<privileged-owner-DSN>" alembic upgrade head
+   ```
+   It revokes `TRUNCATE, DELETE, UPDATE` on every `public.*_rejected` from `recalls_app`
+   (raises if the role doesn't exist — do step 1 first).
+4. **Repoint the runtime** — set the `NEON_DATABASE_URL` **GitHub Actions secret** and your
+   local `.env` to the **restricted** DSN. From here every extract/transform/API run connects
+   as `recalls_app`.
+5. **Verify** — connect as `recalls_app`: `INSERT` into a `*_rejected` table succeeds, `SELECT`
+   succeeds, but `DELETE FROM cpsc_recalls_rejected WHERE false` returns **permission denied**
+   (the guard works).
+
+**Dev branches keep full privileges** — truncating a `*_rejected` table while iterating on a
+buggy schema is fine; only run migration 0031 against the production environment using
+`recalls_app`. `downgrade()` re-grants if you need to undo. **Rotation:** the `recalls_app`
+password rotates on the standard 90-day cadence (the "Rotating the Neon Postgres password"
+runbook above rotates whatever role `NEON_DATABASE_URL` points at — now `recalls_app`); the
+privileged owner password rotates separately, operator-held.
+
+---
+
 ## Re-ingestion procedure (after schema change)
 
 Per [ADR 0014](decisions/0014-schema-evolution-policy.md), when an agency changes its schema, the response is:
@@ -192,7 +271,7 @@ Per [ADR 0014](decisions/0014-schema-evolution-policy.md), when an agency change
    # Re-ingest a date range — re-reads R2 raw payloads, re-runs validation
    # and bronze load with the updated schema. Idempotent via content-hash
    # conditional insert.
-   uv run recalls re-ingest <source> \
+   recalls re-ingest <source> \
      --from-date YYYY-MM-DD \
      --to-date YYYY-MM-DD \
      --change-type schema_rebaseline
@@ -242,15 +321,16 @@ systemd-inhibit --what=sleep:idle --mode=block --why="FDA PR seed" \
 
 ### USCG manufacturer-details Tier-2 full sweep (sharded)
 
-The Tier-2 sweep re-fetches **every** MIC's detail page (~16.3k pages at the polite 1 s throttle ≈ 4.5–7.75 h) — the only mechanism that catches **detail-only drift** (a `status` flip, a `Parent MIC` / `Past Company` / `DBA` edit, or a bare `Date Modified` bump) that Tier-1's listing-delta cursor is blind to (`project_scope/phase-5d-uscg-manufacturers-detail.md`, "Tier-1 vs Tier-2 coverage"). Because a whole sweep exceeds the GitHub-Actions **6 h cap**, it runs as a **monthly 1/3 shard rotation** (full corpus every quarter) once the `--min-id/--max-id` shard param lands (per the [ADR 0010 2026-06-08 note](decisions/0010-ingestion-cadence-and-github-actions-cron.md)); the interim is operator-triggered or the chunked-process driver (plan W9).
+The Tier-2 sweep re-fetches **every** MIC's detail page (~16.3k pages at the polite 1 s throttle ≈ 4.5–7.75 h) — the only mechanism that catches **detail-only drift** (a `status` flip, a `Parent MIC` / `Past Company` / `DBA` edit, or a bare `Date Modified` bump) that Tier-1's listing-delta cursor is blind to (`project_scope/phase-5d-uscg-manufacturers-detail.md`, "Tier-1 vs Tier-2 coverage"). Because a whole sweep exceeds the GitHub-Actions **6 h cap**, it runs as a **monthly 1/3 strided shard rotation** (full corpus every quarter) via the `--shard` / `--shard-count` param (**built 2026-06-09**, Q6). `deep-rescan-uscg-manufacturers-detail.yml` derives the shard from the calendar month and runs it on a guarded monthly cron (`timeout-minutes: 330`); a 1/3 shard is ~1.5–2.6 h, under the cap. **Validate a real shard's runtime (WS-H) before relying on the cron** — raise `--shard-count` if a shard runs long.
 
 ```bash
 recalls deep-rescan uscg_manufacturer_details \
   2>&1 | tee logs/uscg_detail_tier2_$(date +%Y%m%dT%H%M%S).log
-# sharded form (once the param exists): append  --min-id <N> --max-id <M>
+# sharded form (one 1/3 slice; the monthly workflow derives N from the month):
+#   recalls deep-rescan uscg_manufacturer_details --shard <N> --shard-count 3
 ```
 
-**Bulk `Date Modified` → mark it a re-baseline.** `date_modified` is **in** the bronze content hash (`src/extractors/uscg_manufacturer_detail.py`), so if USCG bulk-bumps it across the directory (a cosmetic, site-wide timestamp change with no real content edit) a Tier-2 sweep re-inserts the *entire* corpus. Run that sweep with **`--change-type=schema_rebaseline`** so the wave is recorded as a re-baseline, not real edits — keeping the audit trail honest and freshness untouched (the deep-rescan path already skips `_touch_freshness`). The SCD-2 sidecar is unaffected either way: `uscg_manufacturer_attributes_snapshot` excludes `date_modified` from its `check_cols`, so no phantom version is banked.
+**Bulk `Date Modified` → mark it a re-baseline.** `date_modified` is **in** the bronze content hash (`src/extractors/uscg_manufacturer_detail.py`), so if USCG bulk-bumps it across the directory (a cosmetic, site-wide timestamp change with no real content edit) a Tier-2 sweep re-inserts the *entire* corpus. Run that sweep with **`--change-type=schema_rebaseline`** so the wave is recorded as a re-baseline, not real edits — keeping the audit trail honest and freshness untouched (the deep-rescan path already skips `_touch_freshness`). The SCD-2 sidecar is unaffected either way: `firm_uscg_attributes_snapshot` excludes `date_modified` from its `check_cols`, so no phantom version is banked.
 
 ---
 
@@ -377,7 +457,7 @@ Procedure:
 1. Ensure valid credentials are in `.env` (re-recording hits real APIs).
 2. Run the re-record command for the affected source:
    ```bash
-   uv run pytest tests/integration/test_<source>_extractor.py --record-mode=rewrite
+   pytest tests/integration/test_<source>_extractor.py --record-mode=rewrite
    ```
 3. VCR's `before_record_request` filter strips `Authorization` / `X-API-Key` headers automatically, but verify before committing:
    ```bash
@@ -556,7 +636,7 @@ Don't do this without confirming the underlying bug is filed.
 
 **Fix:**
 ```bash
-uv run alembic upgrade head
+alembic upgrade head
 ```
 on the dev branch, then re-run `dbt build`.
 

@@ -13,7 +13,7 @@
 -- FDA-registered establishment (firm) attributes — address + firm-continuity
 -- metadata that doesn't fit on firm.sql (which is keyed on normalized name and
 -- shared across CPSC/FDA/USDA/NHTSA/USCG). The third firm-attribute sidecar,
--- sibling to firm_establishment_attributes (USDA) and firm_manufacturer_attributes
+-- sibling to firm_usda_attributes (USDA) and firm_uscg_attributes
 -- (USCG); see documentation/silver_design_notes.md §3 (firm supertype / per-source
 -- attribute subtype). Capture-expansion (b) PR W1 — fields landed by migration 0019.
 --
@@ -33,7 +33,7 @@
 --   * 15.3% of FEIs carry >1 distinct address across recalls (max 9), so the
 --     latest-wins collapse is genuine Type-1 work, not a no-op. SCD-2 history of
 --     firm moves is deferred to 6c (ADR 0035) — the same call as USCG MIC
---     reassignment in firm_manufacturer_attributes.
+--     reassignment in firm_uscg_attributes.
 --   * 12.4% of FEIs map to >1 normalized name (renamed/variant spellings); the
 --     firm_surviving_nam/fei columns are FDA's own succession signal for those.
 --

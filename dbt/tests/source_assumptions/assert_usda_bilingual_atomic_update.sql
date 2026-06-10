@@ -1,6 +1,7 @@
 -- Singular test: USDA EN/ES bilingual siblings are atomically updated
 -- (last_modified_date matches between the latest English and Spanish
--- versions of the same recall). Returns rows for each non-atomic pair.
+-- versions of the same recall). Returns a single rate-breach row only when the
+-- non-atomic share clears the 0.25 ceiling (see the rate-ceiling note below).
 -- Severity=warn via dbt_project.yml — a benign SOURCE-BEHAVIOR MONITOR, not a
 -- pending defect. Silver consumes English-only (that IS the "reconciliation"),
 -- and the ~13.3% non-atomicity is benign for it in BOTH directions: EN-newer =
@@ -26,14 +27,31 @@ latest_per_pair as (
     select source_recall_id, langcode, last_modified_date
     from latest
     where rn = 1
-)
-select
-    en.source_recall_id,
-    en.last_modified_date as en_last_modified,
-    es.last_modified_date as es_last_modified
-from latest_per_pair en
-join latest_per_pair es
-    on en.source_recall_id = es.source_recall_id
-   and en.langcode = 'English'
-   and es.langcode = 'Spanish'
-where en.last_modified_date is distinct from es.last_modified_date
+),
+pairs as (
+      select
+          en.source_recall_id,
+          (en.last_modified_date is distinct from es.last_modified_date) as is_non_atomic
+      from latest_per_pair en
+      join latest_per_pair es
+          on en.source_recall_id = es.source_recall_id
+         and en.langcode = 'English'
+         and es.langcode = 'Spanish'
+),
+rate as (
+    select
+        count(*) filter (where is_non_atomic)            as non_atomic_pairs,
+        count(*)                                         as bilingual_pairs,
+        count(*) filter (where is_non_atomic)::numeric
+            / nullif(count(*), 0)                        as non_atomic_rate
+    from pairs
+) 
+-- Rate-ceiling drift monitor: the ~13.3% non-atomicity is the documented benign
+-- steady state (bilingual_and_lmd_findings.md). The 0.25 ceiling is ~2x the
+-- baseline — normal fluctuation stays green; only a material shift in FSIS EN/ES
+-- update behavior triggers a breach row. Per-pair detail (date gaps, worst-case
+-- 399-day 058-2018) lives in
+-- scripts/sql/usda_recalls/bronze/assert_bilingual_atomic_update.sql.
+select non_atomic_pairs, bilingual_pairs, round(non_atomic_rate, 4) as non_atomic_rate
+from rate
+where non_atomic_rate > 0.25

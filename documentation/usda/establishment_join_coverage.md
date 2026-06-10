@@ -213,7 +213,7 @@ Source query: `scripts/sql/usda_establishments/silver/list_unmatched_recall_name
 
 **All 4 unmatched residuals are the multi-establishment-field shape from Finding 3 above.** The other failure modes the pre-Step-5 audit anticipated (HTML entities, name-variation drift) were resolved by the HTML-decode and contributed zero residual. Finding 3 — speculated as ~5% of unmatched in the projection — turned out to be 100% of the post-decode residual.
 
-The individual firms encoded in these 4 strings (Ajinomoto Foods North America, Ajinomoto Toyo Frozen Noodle, Inc., FreshRealm, California Ranch Food Company) are all almost certainly present in `firm_establishment_attributes` — a per-firm match rate after splitting these strings would land at essentially 100%. Only the comma-concatenated string can't be matched as a unit.
+The individual firms encoded in these 4 strings (Ajinomoto Foods North America, Ajinomoto Toyo Frozen Noodle, Inc., FreshRealm, California Ranch Food Company) are all almost certainly present in `firm_usda_attributes` — a per-firm match rate after splitting these strings would land at essentially 100%. Only the comma-concatenated string can't be matched as a unit.
 
 ### Phase 6 hand-off
 

@@ -13,7 +13,7 @@ candidates as (
         md5('USDA' || '|' || r.source_recall_id) as recall_event_id,
         e.establishment_id
     from {{ ref('stg_usda_fsis_recalls') }} r
-    join {{ ref('firm_establishment_attributes') }} e
+    join {{ ref('firm_usda_attributes') }} e
         on upper(trim(e.establishment_name)) = upper(trim(r.establishment))
 )
 

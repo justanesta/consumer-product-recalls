@@ -513,6 +513,12 @@ class NhtsaDeepRescanLoader(NhtsaExtractor):
     """
 
     source_name: str = _NHTSA_SOURCE
+    # ADR 0026 / C16: ONLY the deep-rescan enumerates the FULL corpus (PRE_2010 + POST_2010), so
+    # only this loader writes the presence manifest. The daily NhtsaExtractor pulls POST_2010 only
+    # (partial), so it inherits writes_presence_manifest=False — a daily manifest would mark every
+    # pre-2010 campno as a false retraction. Keyed on the loader (not change_type), so the monthly
+    # scheduled deep-rescan refreshes presence even when it runs as change_type='routine'.
+    writes_presence_manifest: bool = True
     # `file_url` is inherited from NhtsaExtractor; the deep-rescan loader uses
     # it as the POST_2010 (incremental) URL. `historical_seed_urls` lists URLs
     # downloaded IN ADDITION to `file_url` — currently exactly one entry, the

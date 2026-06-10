@@ -111,7 +111,7 @@ USDA preserves `''` as the missing sentinel (ADR 0027); silver staging is **Engl
 
 *`labels` 11.1% per the 2026-05-28 R2 Python inspector — not re-measured via nullif this wave.
 
-### USDA establishments → `firm_establishment_attributes`
+### USDA establishments → `firm_usda_attributes`
 | Silver column | USDA bronze source | Empty % | Silver nullability |
 |---|---|---|---|
 | `establishment_number` (PK / `firm.company_id`) | `establishment_number` | 0.0% (**100% unique**) | NOT NULL |
@@ -166,7 +166,7 @@ Missing scalars are genuine SQL NULL (**not** `''` — USCG is the HTML-scraper 
 | firm raw_name | `company_name` (Bug 3) | 1.9% | NOT NULL |
 | firm company_id | `mic` | 6.8% | nullable |
 
-### USCG manufacturers / details → `firm_manufacturer_attributes` (per-MIC dim)
+### USCG manufacturers / details → `firm_uscg_attributes` (per-MIC dim)
 Both tables re-seeded to single snapshots (16,263 each, **0 edit-versions** — the §M reassignments are not in live bronze; the recycle signal lives statically in the detail lineage). Detail seed is complete (1:1 listing coverage, 0 orphans). Fill % below uses nullif(`''`) only — named sentinels slightly inflate.
 | Silver column | USCG bronze source | Fill % | Notes |
 |---|---|---|---|
@@ -198,15 +198,15 @@ Value **sets** for the dbt `accepted_values` tests (cross-source union per canon
 | `recall_event.lifecycle_status` | USDA (`recall_type`) | `Closed Recall`, `Public Health Alert`, `Active Recall` | warn (PDF said 2; corpus 3) |
 | `recall_event.recall_reason` | USDA (`recall_reason`, **exploded**) | 9 tokens: `Product Contamination`, `Misbranding`, `Unreported Allergens`, `Produced Without Benefit of Inspection`, `Import Violation`, `Processing Defect`, `Mislabeling`, `Unfit for Human Consumption`, `Insanitary Conditions` | warn — **test exploded tokens** (30.3% comma-multivalued) |
 | `recall_product.type` | USDA (`processing`, **exploded**) | 10 tokens: `Fully Cooked - Not Shelf Stable` … `Heat Treated - Shelf Stable`, `Unknown`, `Thermally Processed - Commercially Sterile`, `Not Heat Treated - Shelf Stable`, `Eggs/Egg Products` | warn — **test exploded tokens** (2.0% comma-multivalued) |
-| `firm_establishment_attributes.size` | USDA | `Very Small`, `Small`, `Large`, `N / A`, `''` | warn — `N / A` (10.1%, 808 rows) undocumented in PDF |
-| `firm_establishment_attributes.status` | USDA (`status_regulated_est`) | `''` (active, 90.0%), `Inactive` (10.0%) | accepted_values incl `''` |
+| `firm_usda_attributes.size` | USDA | `Very Small`, `Small`, `Large`, `N / A`, `''` | warn — `N / A` (10.1%, 808 rows) undocumented in PDF |
+| `firm_usda_attributes.status` | USDA (`status_regulated_est`) | `''` (active, 90.0%), `Inactive` (10.0%) | accepted_values incl `''` |
 | `recall_product.type` | NHTSA (`rcltype`) | `V` (87.3%), `T` (6.9%), `E` (5.3%), `C` (0.3%), `I` (0.1%), `X` (0.04%) | warn (`I`/`X` rare, undocumented) |
 | `recall_event.influenced_by` | NHTSA | `MFR` (82.8%), `ODI` (14.4%), `OVSC` (2.9%), `ISSUE_INVGSTN` (2 rows) | warn |
 | *(`recall_event.risk_level` — NOT an enum column: derived 1:1 from `classification`, Q2 proof)* | USDA | — | — |
 | `recall_event.severity` | USCG | `H` (38.2%), `L` (34.9%), `M` (1.4%), `S` (0.1%) | warn — 37 lowercase (`upper()`) + `1` outlier; 23.1% NULL |
 | `recall_event.disposition` | USCG | `open`, `closed` (post-`lower()`) | error (4 raw case-forms — `Closed`/`Open`/`CLOSED`/`OPEN` — collapse) |
 | `recall_product.type` | USCG (`boat_type`) | 25 numeric codes (`11`/`12`/`13`/`17`/… ; `0`≡`00`) | — no test (lookup-table gap; semantics unknown, USCG OII ask) |
-| `firm_manufacturer_attributes.status` | USCG (detail) | `In Business`, `Inactive`, `Federal or State Agency`, `''` | warn (`''` = 67.6%, the defunct/OOB set) |
+| `firm_uscg_attributes.status` | USCG (detail) | `In Business`, `Inactive`, `Federal or State Agency`, `''` | warn (`''` = 67.6%, the defunct/OOB set) |
 | *(cross-source severity/classification alignment — FDA 1/2/3/NC vs USDA Class I/II/III vs USCG severity H/L/M/S)* | — | pending consolidation (W2) | — |
 
 **Methodology note proven here:** the 447-record sample reported `voluntary_type_txt` = 2 values and `initial_firm_notification_txt` = 6 values; the full corpus surfaced **`FDA Requested`/`FDA Mandated`** and **`FAX`/`Visit`** respectively. CPSC repeats the lesson: the 2026-05-29 sample reported `RemedyOption` = 4 values; the full corpus surfaced **8** (added `New Instructions` / `Label` / `No Remedy Available` / `Inspect`). Hardcoding `accepted_values` from the sample would have produced false-failing tests — the catalogue must come from corpus profiling. **USDA adds a second discipline — exploded tokens, not raw values:** `processing` and `recall_reason` are comma-joined multi-value, so the raw distinct sets (20 / 26) are combination-inflated; splitting on `,` and trimming recovers the documented base taxonomies (**10 / 9**, matching the PDF). The `accepted_values` test must run on the exploded tokens — testing raw `recall_reason` would false-fail its 30.3% multivalued rows.

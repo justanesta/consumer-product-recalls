@@ -118,6 +118,55 @@ def test_whitespace_only_id_skipped() -> None:
     assert [r["source_recall_id"] for r in rows] == ["A1"]
 
 
+def test_langcode_field_requested_but_record_langcode_none() -> None:
+    # langcode_field is asked for, but the record's langcode is None → carried as NULL,
+    # not raised. ``getattr(record, langcode_field, None)`` returns None gracefully.
+    records = [SimpleNamespace(source_recall_id="A1", langcode=None)]
+    rows = build_presence_manifest_rows(
+        records, run_id="r1", source="usda", langcode_field="langcode"
+    )
+    assert len(rows) == 1
+    assert rows[0]["langcode"] is None
+
+
+def test_langcode_field_requested_but_attr_missing_entirely() -> None:
+    # The record doesn't carry the langcode attribute at all → getattr default None,
+    # no AttributeError. Mixed-shape rosters don't crash the manifest builder.
+    records = [SimpleNamespace(source_recall_id="A1")]  # no langcode attr
+    rows = build_presence_manifest_rows(
+        records, run_id="r1", source="usda", langcode_field="langcode"
+    )
+    assert len(rows) == 1
+    assert rows[0]["langcode"] is None
+
+
+def test_records_sharing_id_with_one_null_langcode_stay_distinct() -> None:
+    # (A1, "English") and (A1, None) are distinct presence keys — the None variant is not
+    # collapsed into the English one.
+    records = [
+        SimpleNamespace(source_recall_id="A1", langcode="English"),
+        SimpleNamespace(source_recall_id="A1", langcode=None),
+    ]
+    rows = build_presence_manifest_rows(
+        records, run_id="r1", source="usda", langcode_field="langcode"
+    )
+    assert len(rows) == 2
+    assert {r["langcode"] for r in rows} == {"English", None}
+
+
+def test_recall_id_field_overrides_the_recall_key() -> None:
+    # C16: NHTSA keys presence on campno, not the bronze source_recall_id (regen-unstable
+    # RECORD_ID). The builder reads whichever attribute recall_id_field names; the OUTPUT column
+    # stays source_recall_id (the manifest table column).
+    records = [SimpleNamespace(source_recall_id="999999", campno="21V-123")]
+    rows = build_presence_manifest_rows(
+        records, run_id="r1", source="nhtsa", recall_id_field="campno"
+    )
+    assert rows == [
+        {"run_id": "r1", "source": "nhtsa", "source_recall_id": "21V-123", "langcode": None}
+    ]
+
+
 # --- Gating tests (Extractor._maybe_write_presence_manifest) ---
 
 
@@ -217,3 +266,56 @@ def test_manifest_no_insert_on_empty_passing_records(
     extractor._maybe_write_presence_manifest(conn, run_id="run-1", status="success")
 
     assert not conn.execute.called
+
+
+def test_track_presence_sources_are_pinned() -> None:
+    """Registry pin (C16 / #71): exactly USDA + NHTSA carry track_presence. The RUN that writes each
+    source's manifest must enumerate the FULL corpus — that gate is pinned separately by
+    test_presence_manifest_writers_are_pinned. A True for CPSC/FDA/USCG would silently produce wrong
+    presence dims; this fails loudly if the set drifts."""
+    from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
+
+    tracked = {
+        name for name, c in DEDUP_CONTRACT_BY_SOURCE_NAME.items() if c.default_track_presence
+    }
+    assert tracked == {"usda", "nhtsa"}
+
+
+def test_manifest_skipped_when_not_a_full_corpus_writer(
+    patch_extractor_dependencies: None, fake_settings: Settings
+) -> None:
+    # C16: a track_presence source whose run is NOT a full-corpus enumeration
+    # (writes_presence_manifest False) writes nothing — the NHTSA daily-POST_2010 case. Simulated
+    # by flipping the flag on the USDA extractor, to avoid standing up the NHTSA loader's download
+    # path.
+    extractor = _usda_extractor(fake_settings)
+    extractor.writes_presence_manifest = False
+    extractor._passing_records = [SimpleNamespace(source_recall_id="A1", langcode="English")]
+    conn = MagicMock()
+
+    extractor._maybe_write_presence_manifest(conn, run_id="run-1", status="success")
+
+    assert not conn.execute.called
+
+
+def test_presence_manifest_writers_are_pinned() -> None:
+    """C16: the manifest is written ONLY by extractors whose run enumerates the FULL corpus —
+    UsdaExtractor (daily full-dump) and NhtsaDeepRescanLoader (both archives). The daily
+    NhtsaExtractor pulls POST_2010 only and must NOT write (a daily manifest would mark pre-2010
+    campnos as false retractions). Pinned so a refactor can't silently flip these."""
+    from src.extractors.nhtsa import NhtsaDeepRescanLoader, NhtsaExtractor
+    from src.extractors.usda import UsdaExtractor
+
+    assert UsdaExtractor.model_fields["writes_presence_manifest"].default is True
+    assert NhtsaDeepRescanLoader.model_fields["writes_presence_manifest"].default is True
+    # The daily incremental extract is POST_2010-only (partial) — it must not write the manifest.
+    assert NhtsaExtractor.model_fields["writes_presence_manifest"].default is False
+
+
+def test_nhtsa_presence_keys_on_campno() -> None:
+    """C16: NHTSA's manifest recall key is campno (the recall_event grain), not the regen-unstable
+    RECORD_ID that bronze stores as source_recall_id; USDA uses the default source_recall_id."""
+    from src.bronze.dedup_contracts import DEDUP_CONTRACT_BY_SOURCE_NAME
+
+    assert DEDUP_CONTRACT_BY_SOURCE_NAME["nhtsa"].presence_recall_id_field == "campno"
+    assert DEDUP_CONTRACT_BY_SOURCE_NAME["usda"].presence_recall_id_field is None

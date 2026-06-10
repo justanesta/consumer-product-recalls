@@ -716,6 +716,57 @@ def test_fetch_existing_hashes_keys_dict_on_composite_identity() -> None:
 
 
 # ---------------------------------------------------------------------------
+# BronzeLoader._fetch_existing_hashes — chunking (PG bind-param safety limit)
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_existing_hashes_chunks_large_input_losslessly() -> None:
+    """The wrapper splits a multi-chunk input across ``_fetch_existing_hashes_chunk``
+    calls and merges the per-chunk dicts losslessly — equal to a single-query result.
+
+    A tiny ``_PG_PARAM_SAFETY_LIMIT`` forces multiple chunks from a small input, so the
+    test needs no 60k-key fixture. The DB layer is mocked at the chunk method (the SQL
+    itself is exercised by the single-chunk tests above)."""
+    loader, _, _ = _make_loader()  # single-col identity → chunk_size == limit
+    conn = _make_conn()
+
+    # 5 keys with chunk_size 2 → chunks of [0,1], [2,3], [4] (3 calls).
+    identity_keys: list[tuple[str, ...]] = [(f"CPSC-{i:03d}",) for i in range(5)]
+    expected: dict[tuple[str, ...], str] = {key: f"hash_{i}" for i, key in enumerate(identity_keys)}
+
+    def fake_chunk(_conn: object, chunk: list[tuple[str, ...]]) -> dict[tuple[str, ...], str]:
+        # Each chunk returns only its own keys' hashes — proves the merge is union, not
+        # last-writer-wins, and that no key is dropped at a chunk boundary.
+        return {key: expected[key] for key in chunk}
+
+    with (
+        patch("src.bronze.loader._PG_PARAM_SAFETY_LIMIT", 2),
+        patch.object(loader, "_fetch_existing_hashes_chunk", side_effect=fake_chunk) as mock_chunk,
+    ):
+        result = loader._fetch_existing_hashes(conn, identity_keys=identity_keys)
+
+    assert result == expected  # lossless union across all chunks
+    assert mock_chunk.call_count == 3  # ceil(5 / 2)
+    # No chunk exceeded the size cap.
+    for call in mock_chunk.call_args_list:
+        assert len(call.args[1]) <= 2
+
+
+def test_fetch_existing_hashes_single_chunk_for_small_input() -> None:
+    """A batch under the limit runs as exactly one chunk call (the CPSC daily-delta case)."""
+    loader, _, _ = _make_loader()
+    conn = _make_conn()
+
+    with patch.object(
+        loader, "_fetch_existing_hashes_chunk", return_value={("CPSC-001",): "h"}
+    ) as mock_chunk:
+        result = loader._fetch_existing_hashes(conn, identity_keys=[("CPSC-001",)])
+
+    assert result == {("CPSC-001",): "h"}
+    assert mock_chunk.call_count == 1
+
+
+# ---------------------------------------------------------------------------
 # BronzeLoader — hash_exclude_fields (query-artifact exclusion)
 # ---------------------------------------------------------------------------
 

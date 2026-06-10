@@ -6,6 +6,9 @@ name: Extract FDA Press Releases
 # — Phase 7 adds the `schedule:` trigger alongside the other sources' crons.
 
 on:
+  # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
+  schedule:
+    - cron: "50 2 * * 1" # weekly Mon 02:50 UTC — after the fda extract (ADR 0010 grid)
   workflow_dispatch:
     inputs:
       limit:
@@ -16,6 +19,7 @@ on:
 jobs:
   extract:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0

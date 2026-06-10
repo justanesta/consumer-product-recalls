@@ -1,0 +1,18 @@
+# Soda Core data source — bronze-layer data-quality scans against Neon.
+#
+# Scope (ADR 0040): Soda owns BRONZE freshness / row-floor / integrity / schema-drift
+# checks — the pre-/post-extract surface dbt's silver/gold tests do NOT cover. It does
+# NOT duplicate the ~210 dbt tests or the 12 source-assumption monitors (those stay in dbt).
+#
+# Credentials come from the SAME env vars dbt-postgres uses (NEON_HOST / NEON_USER /
+# NEON_PASSWORD / NEON_DBNAME — see .env.example). NEVER hardcode a credential here.
+#
+# Run (operator):  soda scan -d recalls_bronze -c soda/configuration.yml soda/checks/
+data_source recalls_bronze:
+  type: postgres
+  host: ${NEON_HOST}
+  port: "5432"
+  username: ${NEON_USER}
+  password: ${NEON_PASSWORD}
+  database: ${NEON_DBNAME}
+  schema: public

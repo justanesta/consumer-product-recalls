@@ -1,16 +1,38 @@
 name: Deep Rescan USCG Manufacturer Details
 
-# Full ~16.3k-row detail-page sweep (Tier-2) — fetches EVERY MIC's detail page,
+# Full ~16.3k-row detail-page sweep (Tier-2) — fetches every MIC's detail page,
 # catching detail-only drift (e.g. a Date Modified bump with no listing change)
-# that the incremental listing-delta cursor misses. Does NOT touch
-# source_watermarks freshness (the incremental extractor owns it — a rebaseline
-# run stays invisible to freshness alerts). ~4.5h at the 1s polite throttle.
+# that the incremental listing-delta cursor misses. Does NOT touch source_watermarks
+# freshness (the incremental extractor owns it).
 #
-# No cron yet — cron turns on in Phase 7. No --start-date / --end-date inputs:
-# the detail pages have no date-range query surface.
+# The FULL sweep is ~4.5–7.75h at the 1s polite throttle — over the GitHub Actions 6h
+# job cap — so it CANNOT run as a single job. Instead it runs a **strided 1/3 shard per
+# month** (phase-7 C32/Q6: `--shard N --shard-count 3`), covering the full corpus every
+# quarter (ADR 0010 grid). The shard index is derived **statelessly from the calendar
+# month** ((month-1) % 3), so no persistent per-shard cursor is needed. A 1/3 shard is
+# ~5.4k pages ≈ 1.5–2.6h — comfortably under the cap.
+#
+# RUNTIME VALIDATION (WS-H, before go-live): confirm a real 1/3 shard completes under the
+# timeout on GHA before relying on the cron. If a shard runs long, raise --shard-count.
 
 on:
-  workflow_dispatch: {}
+  # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
+  schedule:
+    - cron: "30 6 1 * *" # monthly, 06:30 UTC on the 1st — this month's 1/3 shard (ADR 0010 grid)
+  workflow_dispatch:
+    inputs:
+      shard:
+        description: "Shard index (0-based). Blank on dispatch = derive from the month."
+        required: false
+        default: ""
+      shard_count:
+        description: "Total shards (default 3 = full corpus per quarter)."
+        required: false
+        default: "3"
+      change_type:
+        description: "extraction_runs change_type (default routine)."
+        required: false
+        default: "routine"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -19,9 +41,10 @@ concurrency:
 jobs:
   deep-rescan:
     runs-on: ubuntu-latest
-    # No timeout-minutes yet: the full ~14k-page sweep runs ~4.5–7.75h and a real
-    # single-invocation completion time on GHA isn't established. Sizing a timeout
-    # (and the chunked-loop rework) is deferred to the deep-rescan plan's W9.
+    if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
+    # A 1/3 shard is ~1.5–2.6h; 330 min (5.5h) leaves margin under the 6h cap while still
+    # failing a pathological run before GitHub kills it. Validate the real time in WS-H.
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v6
 
@@ -43,8 +66,21 @@ jobs:
       - run: uv python install
       - run: uv sync --frozen
 
-      - name: Run USCG manufacturer-details deep rescan
-        run: uv run recalls deep-rescan uscg_manufacturer_details
+      - name: Run USCG manufacturer-details deep rescan (this month's 1/3 shard)
+        # Stateless rotation: blank --shard on a schedule fire derives the index from the
+        # month ((month-1) % shard_count); a dispatch can override it explicitly.
+        run: |
+          SHARD_COUNT="${{ github.event.inputs.shard_count || '3' }}"
+          CHANGE_TYPE="${{ github.event.inputs.change_type || 'routine' }}"
+          SHARD_INPUT="${{ github.event.inputs.shard }}"
+          if [[ -n "$SHARD_INPUT" ]]; then
+            SHARD="$SHARD_INPUT"
+          else
+            SHARD=$(( ($(date -u +%-m) - 1) % SHARD_COUNT ))
+          fi
+          echo "Running shard $SHARD of $SHARD_COUNT (change_type=$CHANGE_TYPE)"
+          uv run recalls deep-rescan uscg_manufacturer_details \
+            --shard "$SHARD" --shard-count "$SHARD_COUNT" --change-type "$CHANGE_TYPE"
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}

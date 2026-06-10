@@ -58,7 +58,7 @@ candidates as (
         (select array_agg(distinct regexp_replace(upper(g), '[^A-Z0-9]', '', 'g'))
            from unnest(string_to_array(e.establishment_id, '+')) as g)                             as grants
     from recalls r
-    join {{ ref('firm_establishment_attributes') }} e
+    join {{ ref('firm_usda_attributes') }} e
         on upper(trim(e.establishment_name)) = upper(trim(r.establishment))
 ),
 

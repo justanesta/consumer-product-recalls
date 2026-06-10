@@ -144,7 +144,7 @@ uscg_event_firms as (
         md5('USCG' || '|' || r.source_recall_id)                                   as recall_event_id,
         md5(upper(trim(coalesce(m.company_name, r.company_name, r.mic))))          as firm_id,
         'manufacturer'                                                             as role,
-        -- ADR 0035: stamp MIC time-sensitivity from firm_manufacturer_attributes (the
+        -- ADR 0035: stamp MIC time-sensitivity from firm_uscg_attributes (the
         -- SCD-2 current view). A recycled / prior-held MIC means a Type-1 "current holder"
         -- could misattribute a pre-reassignment recall, so flag it rather than silently
         -- (wrongly) attribute. firm_id is byte-identical to firm.sql's uscg_normalized
@@ -171,10 +171,10 @@ uscg_event_firms as (
     from {{ ref('stg_uscg_recalls') }} r
     left join {{ ref('stg_uscg_manufacturers') }} m
         on upper(trim(r.mic)) = upper(trim(m.mic))
-    left join {{ ref('firm_manufacturer_attributes') }} fma
+    left join {{ ref('firm_uscg_attributes') }} fma
         on upper(trim(r.mic)) = upper(trim(fma.mic))
     -- 6c.5 (b/c): the MIC's reassignment year for the as-of-build-year resolution. 1:1 on mic
-    -- (ry.mic is already upper(trim) — sourced from firm_manufacturer_attributes), no fan-out.
+    -- (ry.mic is already upper(trim) — sourced from firm_uscg_attributes), no fan-out.
     left join {{ ref('uscg_mic_reassignment_years') }} ry
         on upper(trim(r.mic)) = ry.mic
     where coalesce(m.company_name, r.company_name, r.mic) is not null

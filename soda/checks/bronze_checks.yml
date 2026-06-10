@@ -1,0 +1,84 @@
+# Soda Core (OSS) bronze checks — ADR 0040.
+#
+# Three families, all chosen to COMPLEMENT (not duplicate) the dbt suite:
+#   1. freshness(extraction_timestamp)  — "did the pipeline run recently" SLA per source
+#      cadence (mirrors silver_design_notes §7; warn = expected window, fail = outer bound).
+#   2. row_count floors                 — bronze is non-empty / hasn't collapsed.
+#   3. integrity                        — content_hash never null (the dedup/lineage anchor);
+#      required-column schema presence  — catches a source dropping/renaming a captured field
+#                                          BEFORE it reaches silver (e.g. the 2026-06 USDA change).
+#
+# OSS Soda Core (no Soda Cloud) is assumed — these are all threshold/metric checks, not
+# anomaly-score checks (which need Cloud). Anomaly-style row-count drift is a follow-up if
+# Soda Cloud is ever added.
+
+# --- CPSC (publishes daily) ---
+checks for cpsc_recalls_bronze:
+  - freshness(extraction_timestamp) < 7d:
+      warn: when > 2d
+      name: CPSC pipeline freshness (daily source)
+  - row_count > 0:
+      name: CPSC bronze not empty
+  - missing_count(content_hash) = 0:
+      name: CPSC content_hash never null
+  - schema:
+      name: CPSC bronze keeps its load-bearing columns
+      fail:
+        when required column missing: [content_hash, extraction_timestamp, source_recall_id]
+
+# --- FDA (Mon–Fri publication) ---
+checks for fda_recalls_bronze:
+  - freshness(extraction_timestamp) < 7d:
+      warn: when > 3d
+      name: FDA pipeline freshness (Mon-Fri source)
+  - row_count > 0:
+      name: FDA bronze not empty
+  - missing_count(content_hash) = 0:
+      name: FDA content_hash never null
+
+# --- NHTSA (near-daily flat-file) ---
+checks for nhtsa_recalls_bronze:
+  - freshness(extraction_timestamp) < 7d:
+      warn: when > 2d
+      name: NHTSA pipeline freshness (near-daily flat file)
+  - row_count > 0:
+      name: NHTSA bronze not empty
+  - missing_count(content_hash) = 0:
+      name: NHTSA content_hash never null
+
+# --- USDA recalls (low-frequency feed) ---
+checks for usda_fsis_recalls_bronze:
+  - freshness(extraction_timestamp) < 30d:
+      warn: when > 14d
+      name: USDA recalls pipeline freshness (low-frequency feed)
+  - row_count > 0:
+      name: USDA recalls bronze not empty
+  - missing_count(content_hash) = 0:
+      name: USDA recalls content_hash never null
+  # 2026-06 API change guard — the 10 multi-value fields are now jsonb arrays in bronze
+  # (migration 0028). A regression to scalars would break the silver native-array consumption;
+  # Soda catches the column going missing here before dbt does downstream.
+  - schema:
+      name: USDA recalls bronze keeps the multi-value columns
+      fail:
+        when required column missing: [recall_reason, processing, states, establishment]
+
+# --- USDA establishments (weekly snapshot) ---
+checks for usda_fsis_establishments_bronze:
+  - freshness(extraction_timestamp) < 30d:
+      warn: when > 14d
+      name: USDA establishments pipeline freshness (weekly snapshot)
+  - row_count > 0:
+      name: USDA establishments bronze not empty
+  - missing_count(content_hash) = 0:
+      name: USDA establishments content_hash never null
+
+# --- USCG recalls (scraped listing, low cadence) ---
+checks for uscg_recalls_bronze:
+  - freshness(extraction_timestamp) < 14d:
+      warn: when > 8d
+      name: USCG recalls pipeline freshness (scraped listing)
+  - row_count > 0:
+      name: USCG recalls bronze not empty
+  - missing_count(content_hash) = 0:
+      name: USCG recalls content_hash never null

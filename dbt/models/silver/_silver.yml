@@ -79,6 +79,29 @@ models:
           - accepted_values:
               arguments:
                 values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
+      # C13: structured quantity parsed from number_of_units via quantity_crosswalk (FDA + USDA;
+      # NULL for other sources / unparseable). v1 is PRECISION-scoped (2026-06-09): a value is emitted
+      # only for clean single-quantity strings (~70% value+unit, +17% value-only); the messy ~10%
+      # (lot/list/code/multi-product) is deliberately NULL, deferred to an AI extractor (v2,
+      # freetext-enrichment-backlog). Raw number_of_units is preserved alongside.
+      - name: quantity_value
+        description: >
+          Parsed numeric quantity for clean single-quantity strings; NULL for sentinels, un-numbered
+          text, and the deliberately-unparsed messy tail (lot/list/code/multi-product → v2).
+      - name: quantity_unit
+        description: Canonical unit (each / case / bottle / pound / …); NULL when no unit recognized.
+      - name: quantity_category
+        description: count | weight | volume | grouping (NULL when no unit).
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['count', 'weight', 'volume', 'grouping']
+      - name: quantity_basis
+        description: per_product | total_all_products | unknown (NULL for non-FDA/USDA rows).
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['per_product', 'total_all_products', 'unknown']
 
   - name: recall_product_history
     description: >
@@ -104,7 +127,7 @@ models:
     description: >
       Conformed firm dimension, deduped by normalized name across all 5 sources
       (ADR 0002). Role-specific structured attributes live in the
-      firm_establishment_attributes (USDA) and firm_manufacturer_attributes
+      firm_usda_attributes (USDA) and firm_uscg_attributes
       (USCG) sidecars, joined via observed_company_ids. Cross-source fuzzy
       name resolution is deferred to Phase 6b.
     columns:
@@ -132,7 +155,7 @@ models:
           search + RapidFuzz match recall (Phase 6b). Flattened + de-duped across the
           canonical firm from firm_crosswalk.alternate_names. Nullable, untested.
 
-  - name: firm_establishment_attributes
+  - name: firm_usda_attributes
     description: >
       FSIS-regulated establishment dim with demographic + geolocation +
       regulatory metadata. Phase 5b.2 Step 5; one row per establishment_id
@@ -161,10 +184,10 @@ models:
               arguments:
                 values: ['', 'Inactive']
 
-  - name: firm_manufacturer_attributes
+  - name: firm_uscg_attributes
     description: >
       USCG-registered boat-manufacturer dim — the CURRENT view (dbt_valid_to is null)
-      over the SCD-2 snapshot uscg_manufacturer_attributes_snapshot (ADR 0035). One row
+      over the SCD-2 snapshot firm_uscg_attributes_snapshot (ADR 0035). One row
       per mic (= USCG Manufacturer Identification Code, also written to
       firm.observed_company_ids for USCG firms via the recalls-side join). Source switched
       from the listing view to the detail-page snapshot, so the address is now the FULL
@@ -445,8 +468,9 @@ models:
       Per-recall lifecycle summary (ADR 0026 / Phase 6c.2), one row per recall_event.
       first_seen_at / last_seen_at / edit_count are bronze-derived (all 5 sources, manifest-
       independent — but bounded by the 6a.5 reseed; use announced_at for recall age).
-      is_currently_active / was_ever_retracted come from the presence manifest and are USDA-only
-      in v1 (NULL elsewhere until a source's track_presence manifest lands). See silver_design_notes.md.
+      is_currently_active / was_ever_retracted come from the presence manifest (USDA + NHTSA; C16).
+      NHTSA presence keys on campno and is written only by the full-corpus deep-rescan, so it is NULL
+      until the first deep-rescan banks a manifest (WS-H). NULL for CPSC/FDA/USCG. See silver_design_notes.md.
     columns:
       - name: recall_event_id
         description: FK to recall_event (1:1).
@@ -492,7 +516,7 @@ models:
       ~23 of 221 OOB-recycled MICs that carry a parseable year appear (gate Q2); the rest are undated.
     columns:
       - name: mic
-        description: MIC anchor (upper(trim), from firm_manufacturer_attributes).
+        description: MIC anchor (upper(trim), from firm_uscg_attributes).
         tests:
           - not_null
           - unique
@@ -503,11 +527,14 @@ models:
 
   - name: recall_distribution_area
     description: >
-      Tier-2 structured distribution geography (Phase 6e geography foundation). One row per
-      recall_event (FDA + USDA) with distribution_state_codes (text[] of USPS 2-letter codes)
-      parsed precision-over-recall from the raw distribution text — FDA via a domestic-segment
-      free-text parse (international-section markers cut first), USDA via comma-token match.
-      recall_events with no parseable state have no row here (geography carried by
+      Tier-2 structured distribution geography (Phase 6e foundation; distribution_country_codes
+      added 2026-06-09, C12). One row per recall_event (FDA + USDA) with >=1 parseable US state OR
+      foreign country. distribution_state_codes (text[] of USPS 2-letter codes) is parsed
+      precision-over-recall from the domestic segment (international markers cut first);
+      distribution_country_codes (text[] of ISO-3166-1 alpha-2) from the international tail via the
+      country_iso seed (names-only, US-state-collision names excluded). Either array may be empty
+      (a country-only recall has empty state_codes[]; a domestic recall empty country_codes[]).
+      recall_events with no parseable geography have no row here (carried by
       recall_event.distribution_scope). Feeds fct_recalls_by_geography + mart_recall_summary.
     columns:
       - name: recall_event_id
@@ -519,5 +546,8 @@ models:
                 to: ref('recall_event')
                 field: recall_event_id
       - name: n_distribution_states
+        tests:
+          - not_null
+      - name: n_distribution_countries
         tests:
           - not_null

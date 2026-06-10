@@ -97,11 +97,25 @@ class TestToStrList:
         # Old-shape scalar wrapped verbatim — NOT split (silver owns tokenization).
         assert _to_str_list("California, Nevada") == ["California, Nevada"]
 
+    def test_scalar_leading_trailing_whitespace_preserved_verbatim(self) -> None:
+        # Storage-forced only: no trim. Silver owns normalization (ADR 0027). The wrapped
+        # element keeps the exact bytes, including surrounding whitespace.
+        assert _to_str_list("  California , Nevada  ") == ["  California , Nevada  "]
+
+    def test_whitespace_only_scalar_wrapped_not_emptied(self) -> None:
+        # Only the literal empty string maps to []; a whitespace-only scalar is non-empty
+        # and wraps verbatim (it is not the ''-sentinel).
+        assert _to_str_list("   ") == ["   "]
+
     def test_empty_list_passthrough(self) -> None:
         assert _to_str_list([]) == []
 
     def test_list_passthrough(self) -> None:
         assert _to_str_list(["a", "b"]) == ["a", "b"]
+
+    def test_list_elements_preserved_verbatim_including_whitespace(self) -> None:
+        # New-shape arrays pass through untouched — element whitespace is NOT trimmed.
+        assert _to_str_list([" a ", "b"]) == [" a ", "b"]
 
     def test_int_raises(self) -> None:
         with pytest.raises(ValueError):

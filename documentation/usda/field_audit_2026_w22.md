@@ -161,7 +161,7 @@ Already in bronze, currently buried in `recall_event.source_payload_raw` JSONB a
 USDA is the only source so far where the firm identifier infrastructure lives on a **separate API** from the recall payload. The current silver design handles this with two tables:
 
 - **`firm`** (cross-source dim, keyed on `normalized_name = md5(upper(trim(raw_name)))`). For USDA, contributing fields are `establishment` from the recall side as `raw_name`, joined to the establishment API by `upper(trim(establishment_name))` to populate `company_id = establishment_number`.
-- **`firm_establishment_attributes`** (USDA-only table, keyed on `establishment_number`). Houses the rich metadata that has no cross-source analog: address, county, FIPS, geolocation, MPI active date, grant date, status, size, district, circuit, activities (JSONB), dbas (JSONB).
+- **`firm_usda_attributes`** (USDA-only table, keyed on `establishment_number`). Houses the rich metadata that has no cross-source analog: address, county, FIPS, geolocation, MPI active date, grant date, status, size, district, circuit, activities (JSONB), dbas (JSONB).
 
 The join from recall side to establishment side is `upper(trim(r.establishment)) = upper(trim(e.establishment_name))` — per `establishment_join_coverage.md`, this hits **~97% of distinct recall names** (lifted from 82.85% by HTML-entity-decoding `&#039;` → `'` and `&amp;` → `&` on the recall side in staging).
 
@@ -169,8 +169,8 @@ The join from recall side to establishment side is `upper(trim(r.establishment))
 
 | Option | Description | Pros | Cons |
 |---|---|---|---|
-| **A — Status quo, formalized** | Keep `firm_establishment_attributes` as USDA-only. Lift cross-source firm attributes that DO exist in other recall payloads (FDA's `firmcitynam`, `firmstateprvncnam` etc., CPSC's per-array `address` fields) into `firm` as cross-source columns where populated, NULL elsewhere. The "rich" USDA-only attributes (DUNS, FIPS, MPI grant date, activities, dbas, lat/lon) stay in `firm_establishment_attributes`. | Preserves cross-source firm anchor without forcing USDA-shape onto sources that don't have analogous data. Explicit table name signals scope. Smallest blast radius. | Discovery problem: landing-page consumers need to know to join `firm` → `firm_establishment_attributes` via `firm.company_id`. The 3% of USDA firms with NULL establishment_number appear in `firm` but not `firm_establishment_attributes`. |
-| **B — Generalize to `firm_attributes`** | Rename `firm_establishment_attributes` → `firm_attributes`. Add columns for FDA address fields, CPSC structured firm fields, USCG mic, etc. Most columns NULL except for the source that contributes them. | Single discovery point for firm metadata. Future-source-friendly. | Wide-but-sparse table. Adding a new source means adding columns. Most landing-page consumers only care about firm metadata for one source at a time, so the cross-source union may not actually help them. |
+| **A — Status quo, formalized** | Keep `firm_usda_attributes` as USDA-only. Lift cross-source firm attributes that DO exist in other recall payloads (FDA's `firmcitynam`, `firmstateprvncnam` etc., CPSC's per-array `address` fields) into `firm` as cross-source columns where populated, NULL elsewhere. The "rich" USDA-only attributes (DUNS, FIPS, MPI grant date, activities, dbas, lat/lon) stay in `firm_usda_attributes`. | Preserves cross-source firm anchor without forcing USDA-shape onto sources that don't have analogous data. Explicit table name signals scope. Smallest blast radius. | Discovery problem: landing-page consumers need to know to join `firm` → `firm_usda_attributes` via `firm.company_id`. The 3% of USDA firms with NULL establishment_number appear in `firm` but not `firm_usda_attributes`. |
+| **B — Generalize to `firm_attributes`** | Rename `firm_usda_attributes` → `firm_attributes`. Add columns for FDA address fields, CPSC structured firm fields, USCG mic, etc. Most columns NULL except for the source that contributes them. | Single discovery point for firm metadata. Future-source-friendly. | Wide-but-sparse table. Adding a new source means adding columns. Most landing-page consumers only care about firm metadata for one source at a time, so the cross-source union may not actually help them. |
 | **C — Merge into `firm`** | Add USDA-only columns (and FDA address columns, etc.) directly to `firm`. Each row carries every source's attributes; consumers filter by source where they need to. | Cleanest discovery — one table, one join. | `firm` becomes USDA-heavy. The cross-source firm anchor purpose (one row per normalized name with multiple `observed_company_ids` from multiple sources) gets diluted by per-source enrichment. Conceptually awkward when one firm appears in multiple sources with different attribute shapes. |
 
 ### My recommendation: Option A — confirmed by user 2026-05-28
@@ -181,7 +181,7 @@ Reasoning:
 3. The discovery problem is real but cheaper to solve with documentation than with restructuring. A `_silver.yml` schema description + the audit doc's existence resolves it. For the FastAPI surface this project is building (per `project_scope/implementation_plan.md`), REST sub-resources (e.g., `GET /firms/{id}/usda-establishment`) naturally abstract the two-table backing.
 4. The 3%-of-USDA-firms-with-NULL-establishment_number problem is a join-coverage issue (Phase 6b RapidFuzz territory), not an architecture issue. Improving the join doesn't require changing tables.
 
-**What does change in Option A:** add cross-source firm-address columns to `firm` (`firm.city`, `firm.state`, `firm.country`, `firm.line1`, `firm.line2`, `firm.postal_code`) populated from FDA's tier-1 (b)-PR additions and CPSC's per-array address fields if they exist, NULL for sources that have no address. USDA's establishment-listing address stays in `firm_establishment_attributes` where it joins by `establishment_number` rather than by name, because that's the more reliable USDA join.
+**What does change in Option A:** add cross-source firm-address columns to `firm` (`firm.city`, `firm.state`, `firm.country`, `firm.line1`, `firm.line2`, `firm.postal_code`) populated from FDA's tier-1 (b)-PR additions and CPSC's per-array address fields if they exist, NULL for sources that have no address. USDA's establishment-listing address stays in `firm_usda_attributes` where it joins by `establishment_number` rather than by name, because that's the more reliable USDA join.
 
 ### Empirical findings from R2 validation (2026-05-28)
 
@@ -223,11 +223,11 @@ All confirmed by user in conversation 2026-05-28 — decisions 1-4 during initia
    - `company_media_contact` → `recall_event.firm_contact_block_text`
 
    Cross-source column names (and possible renames like `description` → `recall_reason` or similar) deferred to cross-source consolidation.
-3. **Firm architecture: Option A.** Keep `firm_establishment_attributes` as USDA-only; add cross-source firm address columns to `firm` when FDA's tier-1 capture-expansion (b)-PR fields land. Document the two-table join pattern in `dbt/models/silver/_silver.yml`. *Empirically confirmed (§6): `establishment_number` 100% unique is the right canonical key; the recall-side `field_establishment` 35.1% NULL caps effective coverage at ~63% per record, which Option B/C wouldn't help with anyway.*
+3. **Firm architecture: Option A.** Keep `firm_usda_attributes` as USDA-only; add cross-source firm address columns to `firm` when FDA's tier-1 capture-expansion (b)-PR fields land. Document the two-table join pattern in `dbt/models/silver/_silver.yml`. *Empirically confirmed (§6): `establishment_number` 100% unique is the right canonical key; the recall-side `field_establishment` 35.1% NULL caps effective coverage at ~63% per record, which Option B/C wouldn't help with anyway.*
 4. **Defer USDA `field_product_items` structured parsing to Phase 6/7.** It's a separate enrichment workstream (extract embedded UPCs, lot codes, FSIS numbers, dates from the free text), not foundation-audit scope.
 5. **Bilingual handling unchanged.** English-only filter at staging is right; Spanish siblings remain in bronze for audit. No silver change.
 6. **`field_summary` HTML-encoded narrative passed verbatim to `recall_event.description` is acceptable for silver.** Landing-page rendering responsibility for entity decode + HTML sanitization; silver shouldn't strip markup since some of it (paragraph breaks, emphasis) carries semantic value.
-7. **`dbas` element-level placeholder filtering in silver.** *(New, post-R2.)* Silver's `firm_establishment_attributes.dbas` should filter the literal element values `'N/A'` (94 occurrences, ~1.5% of all dbas elements) and `'None'` (15) to null at element-level before re-aggregating. Empty resulting lists become null. Preserves the cardinality-signal value of real DBAs while dropping placeholder noise.
+7. **`dbas` element-level placeholder filtering in silver.** *(New, post-R2.)* Silver's `firm_usda_attributes.dbas` should filter the literal element values `'N/A'` (94 occurrences, ~1.5% of all dbas elements) and `'None'` (15) to null at element-level before re-aggregating. Empty resulting lists become null. Preserves the cardinality-signal value of real DBAs while dropping placeholder noise.
 
 ## 8. Capture-expansion items deferred to backlog
 
@@ -272,7 +272,7 @@ USDA is also Akamai-fronted (per `documentation/usda/recall_api_observations.md`
 | Finding | Impact |
 |---|---|
 | `size` has **4 values** (PDF said 3): Very Small (41.7%), Small (38.9%), **"N / A" (10.2%, undocumented)**, Large (6.6%) | §1b updated; worth a Finding addendum in `establishment_api_observations.md` |
-| `establishment_name` is **86.4% unique** (6885 / 7970) — ~1085 establishments share names | §6 confirms `establishment_number` (100% unique) is the right canonical key for `firm_establishment_attributes` |
+| `establishment_name` is **86.4% unique** (6885 / 7970) — ~1085 establishments share names | §6 confirms `establishment_number` (100% unique) is the right canonical key for `firm_usda_attributes` |
 | `establishment_number` is **100% populated and 100% unique**; max length 31 chars (multi-grant `+`-joined forms like `M46712+P46712` are common) | Confirms Option A's choice of `establishment_number` as the primary key |
 | `dbas` **67.7% NULL** (empty `[]`) — only 32.3% of establishments have DBAs | §6 DBA join potential is marginal (covers a small slice of the ~3% per-distinct-name gap, doesn't address the 35.1% recall-side NULL) |
 | `dbas` populated records: 4146 distinct strings across 6340 elements ≈ 2.5 DBAs per populated record | Useful but noisy |
@@ -281,7 +281,7 @@ USDA is also Akamai-fronted (per `documentation/usda/recall_api_observations.md`
 | `activities` is **always multi-valued**: 18,676 elements / 7,935 records ≈ 2.4 activities per establishment | Confirms JSON-array shape is essential |
 | `activities` 43 distinct raw → ~20 canonical after trim. Top: Meat Processing (5515), Poultry Processing (4315), Certification - Export (1420) | Useful for cross-cutting "what kind of establishment" classification |
 | `status_regulated_est` 90.1% "" (active), 9.9% "Inactive" | The 90.1% "NULL" framing is misleading — it's the active sentinel; current `_silver.yml` description should clarify |
-| `address`, `city`, `state`, `zip`, `LatestMPIActiveDate`, `grant_date`, `establishment_id`, `establishment_number`, `establishment_name` all 100% populated | Solid foundation for `firm_establishment_attributes` Option A |
+| `address`, `city`, `state`, `zip`, `LatestMPIActiveDate`, `grant_date`, `establishment_id`, `establishment_number`, `establishment_name` all 100% populated | Solid foundation for `firm_usda_attributes` Option A |
 | `district` has format inconsistency: `'5'` (100 records) coexists with `'05'` (1830 records) — same district, two formats | Data-quality note for future Phase 6/7 normalization |
 | `county` 1.5%, `geolocation` 1.2% null after treating JSON-`false` sentinel as null per `_is_null` | Matches Finding C; no change |
 
@@ -308,7 +308,7 @@ The establishment side has the same artifact: `duns_number` reads 0% SQL-NULL bu
 
 **Exploded tokens recover the PDF taxonomy (Q4–Q6).** The comma-separated multi-value fields explode cleanly to the documented base sets: `processing` → **10 tokens** (from 20 raw combinations; 2.0% multivalued), `recall_reason` → **9 tokens** (from 26 raw combinations; **30.3% multivalued**) — matching the PDF's 10/9 exactly. The W5 `accepted_values` tests **must run on exploded tokens**: testing raw `recall_reason` would false-fail ~30% of rows. Token SSOTs (with %) are in `bronze_corpus_profile.md` §4.
 
-**Establishment join key (Q1–Q3, new sibling).** `establishment_number` is **100% populated + 100% unique** (7,979/7,979) — the empirical basis for Option A keying `firm_establishment_attributes` on it; `establishment_name` is only **86.1% unique** (1,110 shared), confirming the name can't be the key. New shape result: **67.1% of numbers are '+'-joined multi-grant composites** (`M46712+P46712`; prefixes M 81% / V 11% / P 4% / I 3% / G 1%, none outside M/P/I/G/V). Implication: the deferred `product_items` embedded-number match (6b Signal 1) must **split the composite** to match a single embedded grant.
+**Establishment join key (Q1–Q3, new sibling).** `establishment_number` is **100% populated + 100% unique** (7,979/7,979) — the empirical basis for Option A keying `firm_usda_attributes` on it; `establishment_name` is only **86.1% unique** (1,110 shared), confirming the name can't be the key. New shape result: **67.1% of numbers are '+'-joined multi-grant composites** (`M46712+P46712`; prefixes M 81% / V 11% / P 4% / I 3% / G 1%, none outside M/P/I/G/V). Implication: the deferred `product_items` embedded-number match (6b Signal 1) must **split the composite** to match a single embedded grant.
 
 **DBA fallback adds zero join coverage (probe Q2 == Q3 == 82.91%)** — empirically confirms "DBAs marginal." The §7 element-filter removes exactly **94 `'N/A'` + 15 `'None'`** placeholder elements (0 empty-string) of 6,350 total; real-DBA fill is 32.4% (2,585 establishments).
 
@@ -326,7 +326,7 @@ The establishment side has the same artifact: `duns_number` reads 0% SQL-NULL bu
 - `dbt/models/silver/recall_product.sql:83-102` — USDA → recall_product mapping (where Bug 1 lives)
 - `dbt/models/silver/firm.sql:75-86` — USDA → firm with the name-based join
 - `dbt/models/silver/recall_event_firm.sql:65-73` — USDA → recall_event_firm
-- `dbt/models/silver/firm_establishment_attributes.sql` — USDA-only enrichment table (subject of the §6 architectural question)
+- `dbt/models/silver/firm_usda_attributes.sql` — USDA-only enrichment table (subject of the §6 architectural question)
 - `documentation/usda/recall_api_observations.md` — recall API findings A-G (filter behavior, 25 fields, bilingual, etc.), Finding O (Akamai)
 - `documentation/usda/establishment_api_observations.md` — establishment API findings A-G
 - `documentation/usda/establishment_join_coverage.md` — the ~97% join coverage analysis

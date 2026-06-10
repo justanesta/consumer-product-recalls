@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "consumer-product-recalls"
-version = "0.21.1"
+version = "0.23.0"
 description = "EtLT medallion pipeline for US federal consumer product recall data"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -46,6 +46,9 @@ dev = [
     "pyright>=1.1.410,<2",
     "pre-commit>=4.6.0,<5",
     "hypothesis>=6.155.2,<7",
+]
+dq = [
+    "soda-core-postgres>=3.5.6",
 ]
 
 [tool.hatch.build.targets.wheel]

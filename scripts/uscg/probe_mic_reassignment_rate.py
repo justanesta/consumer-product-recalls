@@ -1,7 +1,7 @@
 """Reassignment-rate probe for the USCG manufacturer directory (detail pages).
 
 Decision tool for `project_scope/implementation_plan.md` Step 7 follow-up:
-should we build Path B (detail-page enrichment) + an SCD-2 `firm_manufacturer_attributes`
+should we build Path B (detail-page enrichment) + an SCD-2 `firm_uscg_attributes`
 dim + a HIN-build-date time-aware recall->manufacturer join? That depends on how
 often a MIC has held more than one business over time — and, more sharply, on how
 often a *recalled* MIC has been reassigned (the actual misattribution surface).

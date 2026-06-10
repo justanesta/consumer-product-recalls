@@ -320,7 +320,7 @@ This is the Phase 6b-aligned architecture — same shape as USDA's `firm.company
 
 ### Update 2026-05-30 — Phase 5d Step 7 adds directory enrichment as a third firm-source
 
-Step 7 ingests the USCG manufacturer directory (16,263 records) as a sibling non-recall source `uscg_manufacturers` — paralleling the USDA `usda_establishments` design. Silver lands `stg_uscg_manufacturers` (staging) + `firm_manufacturer_attributes` (per-MIC dim, sibling to `firm_establishment_attributes`). The directory becomes a third firm-name source for `firm.sql`'s USCG branch alongside recalls and the raw `mic` fallback (`coalesce(directory.company_name, recalls.company_name, recalls.mic)` priority).
+Step 7 ingests the USCG manufacturer directory (16,263 records) as a sibling non-recall source `uscg_manufacturers` — paralleling the USDA `usda_establishments` design. Silver lands `stg_uscg_manufacturers` (staging) + `firm_uscg_attributes` (per-MIC dim, sibling to `firm_usda_attributes`). The directory becomes a third firm-name source for `firm.sql`'s USCG branch alongside recalls and the raw `mic` fallback (`coalesce(directory.company_name, recalls.company_name, recalls.mic)` priority).
 
 **Cross-source ID anchor coverage rises materially:** the 99.44% recalls→directory match rate (714/718 distinct USCG recall MICs resolve) puts USCG's structured-ID coverage at parity with USDA when measured corpus-wide. The 4 orphans (`111`, `999`, `777`, `N/A`) are real retirements/sentinels, not coverage gaps. Phase 6b firm-resolution gains a richer anchor: a recall referencing `mic='YDV'` can now resolve to both the structured MIC AND the canonical USCG-registered company name in a single JOIN, with the regulatory address as bonus enrichment.
 

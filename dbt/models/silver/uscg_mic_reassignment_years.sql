@@ -13,7 +13,7 @@
 -- model_year to it: model_year >= current_holder_since_year ⇒ the boat was built during the current
 -- holder's tenure ⇒ the current-holder attribution is confident (uscg_mic_build_date_resolved).
 --
--- Scope is DIRECTORY-WIDE: every OOB-recycled MIC in firm_manufacturer_attributes with a parseable
+-- Scope is DIRECTORY-WIDE: every OOB-recycled MIC in firm_uscg_attributes with a parseable
 -- (OOB YYYY) year (393 of the directory's 3,015 OOB-recycled MICs), NOT just recalled MICs. This is
 -- a reusable lookup dimension — the recall_event_firm join is exact on MIC, so the 379 rows no recall
 -- references are inert. Only 14 MICs (21 recall rows) appear in a USCG recall; 6 of those recalls have
@@ -27,9 +27,9 @@
 -- uses the max. See scripts/sql/cross_source/scd_monitors/verify_uscg_reassignment_funnel.sql.
 
 with detail as (
-    -- firm_manufacturer_attributes is already latest-per-MIC + upper(trim) + has the recycle flag.
+    -- firm_uscg_attributes is already latest-per-MIC + upper(trim) + has the recycle flag.
     select mic, past_company_1, past_company_2, past_company_3
-    from {{ ref('firm_manufacturer_attributes') }}
+    from {{ ref('firm_uscg_attributes') }}
     where mic_oob_recycled
 ),
 

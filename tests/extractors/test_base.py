@@ -56,6 +56,22 @@ def test_is_disconnect_false_on_non_operationalerror() -> None:
     assert _is_disconnect(ValueError("nope")) is False
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "SSL connection has been closed unexpectedly",
+        "connection already closed",
+        "terminating connection due to administrator command",
+    ],
+)
+def test_is_disconnect_true_on_all_libpq_signatures(message: str) -> None:
+    """Each libpq error string observed in the USCG-detail seed logs must be
+    recognised as a disconnect so the run retries rather than aborts.
+    See ``_is_disconnect`` docstring + deep_rescan_reliability_audit.md Problem 2."""
+    exc = _op_error(message)
+    assert _is_disconnect(exc) is True
+
+
 def test_transient_retry_retries_connection_disconnect() -> None:
     calls = {"n": 0}
 
@@ -475,6 +491,42 @@ def test_run_delegates_extract_to_transient_retry() -> None:
     assert transient_mock.call_count == 2
     first_fn = transient_mock.call_args_list[0][0][0]
     assert first_fn.__func__.__name__ == "extract"
+
+
+def test_passing_records_reset_to_none_at_run_start() -> None:
+    """_passing_records is reset to None at the top of every run() so a
+    stale value from a prior successful run can't leak into the manifest of a
+    subsequent failed run (the None gate in _maybe_write_presence_manifest).
+    Verified by letting the first run succeed (populates _passing_records),
+    then letting the second run fail during extract() and asserting None."""
+    schemas = [_FakeSchema(id="1")]
+    extractor = FakeExtractor(
+        extract_result=[{"id": "1"}],
+        validate_result=(schemas, []),
+        check_invariants_result=(schemas, []),
+        load_bronze_result=1,
+    )
+
+    # First run succeeds — _passing_records is populated.
+    with (
+        patch("src.extractors._base._TRANSIENT_RETRY", side_effect=_PASSTHROUGH),
+        patch("src.extractors._base._R2_RETRY", side_effect=_PASSTHROUGH),
+    ):
+        extractor.run()
+
+    assert extractor._passing_records is not None  # populated after success
+
+    # Second run fails at extract() before check_invariants sets _passing_records.
+    extractor.extract_side_effect = TransientExtractionError("network down")
+    with (
+        patch("src.extractors._base._TRANSIENT_RETRY", side_effect=_PASSTHROUGH),
+        patch("src.extractors._base._R2_RETRY", side_effect=_PASSTHROUGH),
+        pytest.raises(TransientExtractionError),
+    ):
+        extractor.run()
+
+    # Must be None — the reset at the top of run() cleared the stale value.
+    assert extractor._passing_records is None
 
 
 def test_run_delegates_land_raw_to_r2_retry() -> None:

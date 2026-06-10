@@ -42,33 +42,41 @@ class DedupContract:
     ``default_allow_null_identity`` are mode-overridable defaults, not part of the oracle.
 
     ``default_track_presence`` enables the ADR 0026 per-run presence manifest
-    (``extraction_run_identities``) for the source — USDA-only initially.
-    ``Extractor._record_run`` reads it via this registry and writes the manifest on every
-    successful run of the source. Unlike ``default_within_batch_dedup`` /
-    ``default_allow_null_identity`` it is a per-source **policy**, not a mode-overridable
-    default.
+    (``extraction_run_identities``) for the source — ``{usda, nhtsa}`` (C16).
+    ``Extractor._record_run`` reads it via this registry and writes the manifest, but ONLY on the
+    run(s) that enumerate the full corpus — gated by ``Extractor.writes_presence_manifest`` (USDA's
+    daily full-dump; NHTSA's deep-rescan, not its daily POST_2010 extract).
+    ``presence_recall_id_field`` overrides which record attribute is the recall key (campno for
+    NHTSA, whose bronze ``source_recall_id`` is the regen-unstable RECORD_ID); None →
+    ``source_recall_id``. Unlike ``default_within_batch_dedup`` / ``default_allow_null_identity``
+    these are per-source **policy**, not mode-overridable defaults.
 
-    **Hard prerequisite — the source must return the FULL corpus on every run this flag
-    covers.** The manifest exists to tell "absent upstream (retracted)" from "unchanged
-    (dedup-skipped)", which only holds if a run enumerates everything currently published.
-    This is the real gate on enabling a source, NOT merely "does it retract":
+    **Hard prerequisite — the RUN that writes the manifest must enumerate the FULL corpus.**
+    The manifest exists to tell "absent upstream (retracted)" from "unchanged (dedup-skipped)",
+    which only holds if that run sees everything currently published. ``writes_presence_manifest``
+    selects which run qualifies, so a source whose FULL enumeration is a non-daily mode can still
+    participate:
 
-      * **USDA qualifies** — it full-dumps every run (Finding D: no server-side filter
-        works), so each daily run is a complete presence snapshot.
+      * **USDA qualifies on its daily run** — it full-dumps every run (Finding D: no server-side
+        filter works), so each daily run is a complete presence snapshot (UsdaExtractor sets
+        ``writes_presence_manifest=True``).
+      * **NHTSA qualifies on its DEEP-RESCAN only (C16)** — the daily incremental pulls
+        ``FLAT_RCL_POST_2010.zip`` ONLY (partial: pre-2010 lives in a separate archive), so a
+        daily manifest would mark every pre-2010 campno as a false retraction. Only
+        ``NhtsaDeepRescanLoader`` (both archives) is a full-corpus snapshot, so only it writes the
+        manifest. And because its bronze ``source_recall_id`` is the regen-unstable RECORD_ID,
+        presence is keyed on **campno** via ``presence_recall_id_field`` — the grain
+        ``recall_event`` joins NHTSA on.
       * **CPSC / FDA do NOT qualify on their daily path** — those runs are watermark-filtered
-        (``LastPublishDate`` / ``eventlmd``), i.e. partial, so a manifest built from one
-        would mark every unchanged recall as "absent" (false retraction). They full-enumerate
-        only on the deep-rescan path, which this *source-level* flag cannot single out (it
-        fires on all of a source's modes) — they need per-mode gating, not a flag flip.
-      * **NHTSA does NOT need a table** — its flat file IS already a full-snapshot manifest
-        (``recall_lifecycle`` derives presence from bronze directly), and its
-        ``source_recall_id`` (RECORD_ID) is regen-unstable (excluded from the hash), so the
-        recall-grain builder would key presence on the wrong field.
+        (``LastPublishDate`` / ``eventlmd``), i.e. partial. They full-enumerate only on the
+        deep-rescan path; if presence is ever wanted there, set ``writes_presence_manifest=True``
+        on the deep-rescan loader (the NHTSA pattern), not the daily extractor.
       * **USCG** full-enumerates (listing scrape) except on short-circuit runs and has no
         retraction evidence yet — plausible later, unmeasured.
 
-    So enabling a *qualifying* (full-enumerating, stable-recall-key) source is a one-line
-    flip; a partial-incremental source needs design first. See ADR 0026 + the Phase 6c plan.
+    So enabling a source is: flip ``default_track_presence``, set
+    ``writes_presence_manifest=True`` on the full-corpus extractor/loader, and (if its bronze recall
+    key is unstable) set ``presence_recall_id_field``. See ADR 0026 + the Phase 6c plan.
     """
 
     identity_fields: tuple[str, ...]
@@ -76,6 +84,10 @@ class DedupContract:
     default_within_batch_dedup: bool = False
     default_allow_null_identity: bool = False
     default_track_presence: bool = False
+    # The record attribute used as the manifest recall key (C16). None → "source_recall_id"; NHTSA
+    # sets "campno" because its bronze source_recall_id is the regen-unstable RECORD_ID and
+    # recall_event joins NHTSA on campno. See Extractor.writes_presence_manifest (which run writes).
+    presence_recall_id_field: str | None = None
 
 
 # Keys MUST match ``EXTRACTOR_BY_SOURCE_NAME`` in src/config/source_registry.py
@@ -128,6 +140,12 @@ DEDUP_CONTRACT_BY_SOURCE_NAME: dict[str, DedupContract] = {
         hash_exclude_fields=frozenset({"source_recall_id"}),
         default_within_batch_dedup=True,
         default_allow_null_identity=True,
+        # C16 (ADR 0026): track presence, keyed on CAMPNO (not the regen-unstable RECORD_ID that
+        # bronze stores as source_recall_id — recall_event joins NHTSA on campno). Only the
+        # deep-rescan enumerates the full corpus (both archives), so only NhtsaDeepRescanLoader
+        # writes the manifest (writes_presence_manifest=True); the daily POST_2010 extract does not.
+        default_track_presence=True,
+        presence_recall_id_field="campno",
     ),
     # uscg.py — details_url excluded (volatile, not content).
     "uscg": DedupContract(

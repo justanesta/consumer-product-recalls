@@ -21,11 +21,11 @@
 drop table if exists _fanout;
 create temporary table _fanout as
 select r.source_recall_id, r.establishment, r.product_items,
-       (select count(*) from firm_establishment_attributes e
+       (select count(*) from firm_usda_attributes e
         where upper(trim(e.establishment_name)) = upper(trim(r.establishment))) as n_candidates
 from stg_usda_fsis_recalls r
 where r.establishment is not null
-  and (select count(*) from firm_establishment_attributes e
+  and (select count(*) from firm_usda_attributes e
        where upper(trim(e.establishment_name)) = upper(trim(r.establishment))) >= 2;
 
 -- Normalized FSIS tokens extracted from product_items (prefixed M/P/I/G/V form).
@@ -47,7 +47,7 @@ from (
   select f.source_recall_id, e.establishment_id,
          array_agg(distinct regexp_replace(upper(g), '[^A-Z0-9]', '', 'g')) as grants
   from _fanout f
-  join firm_establishment_attributes e on upper(trim(e.establishment_name)) = upper(trim(f.establishment)),
+  join firm_usda_attributes e on upper(trim(e.establishment_name)) = upper(trim(f.establishment)),
        lateral unnest(string_to_array(e.establishment_id, '+')) as g
   group by f.source_recall_id, e.establishment_id
 ) c;
@@ -85,7 +85,7 @@ select
   (select count(*) filter (where m.is_matched) from _candmatch m where m.source_recall_id = f.source_recall_id) as n_matching_candidates,
   (select x.toks from _extracted x where x.source_recall_id = f.source_recall_id) as extracted_tokens,
   (select array_agg(e.establishment_id order by e.establishment_id)
-     from firm_establishment_attributes e
+     from firm_usda_attributes e
      where upper(trim(e.establishment_name)) = upper(trim(f.establishment)))    as candidate_numbers,
   left(f.product_items, 240)                                                    as product_items_head
 from _fanout f

@@ -16,7 +16,7 @@
 
 The medallion gold layer (ADR 0004) is the serving/analytics layer: it feeds the planned Phase 8 API (`GET /recalls`, `/recalls/{source}/{id}`, `/products/search`, `/firms/{id}`), the dashboards, the landing pages, and the keyword search promised in the project vision. Until Phase 6e the layer was a single stub (`recalls_by_month`, a view) — there was no decision record for how gold should be shaped, named, materialized, searched, or indexed.
 
-By Phase 6e the silver layer is complete and rich: facts (`recall_event`, `recall_product`, the `recall_event_firm` bridge, `recall_event_press_release`); a conformed `firm` dimension whose `firm_id` is already the 6b cross-source cluster id, with three per-source SCD-2 attribute sidecars (`firm_establishment_attributes`, `firm_manufacturer_attributes`, `firm_fda_attributes`); and history (`recall_event_history`, `recall_lifecycle`, `recall_product_history`). Gold should *consume* this, not re-model it.
+By Phase 6e the silver layer is complete and rich: facts (`recall_event`, `recall_product`, the `recall_event_firm` bridge, `recall_event_press_release`); a conformed `firm` dimension whose `firm_id` is already the 6b cross-source cluster id, with three per-source SCD-2 attribute sidecars (`firm_usda_attributes`, `firm_uscg_attributes`, `firm_fda_attributes`); and history (`recall_event_history`, `recall_lifecycle`, `recall_product_history`). Gold should *consume* this, not re-model it.
 
 Three constraints bound the decision:
 

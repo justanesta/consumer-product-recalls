@@ -8,7 +8,7 @@
 -- about genuinely different facilities sharing a name (multi_state + mixed). Also profiles the
 -- activities domain (Signal 3) and the cold-storage operators (wrong-firm-attribution surface).
 --
--- Reads firm_establishment_attributes (the silver dim, one row per establishment_id — the same
+-- Reads firm_usda_attributes (the silver dim, one row per establishment_id — the same
 -- candidate set the resolution model disambiguates over). NOTE: the dim aliases
 -- `establishment_number AS establishment_id`, so establishment_id HOLDS the FSIS grant number
 -- (M.../P.../G.../I.../V..., incl. '+'-composites) — it is not a surrogate key.
@@ -26,7 +26,7 @@ select
   count(*) filter (where establishment_id like '%+%')       as composite_numbers,
   round(100.0 * count(*) filter (where establishment_id like '%+%') / nullif(count(*),0), 1) as pct_composite,
   round(100.0 * count(distinct establishment_name) / nullif(count(*),0), 1) as pct_name_unique
-from firm_establishment_attributes;
+from firm_usda_attributes;
 
 \echo ''
 \echo '=== Q2: duplicate-name category split (city-aware) — settles the same-facility question ==='
@@ -41,7 +41,7 @@ with groups as (
     count(distinct establishment_id)                 as distinct_numbers,
     bool_or(status_regulated_est = 'Inactive')           as any_inactive,
     bool_or(establishment_id like '%+%')             as any_composite
-  from firm_establishment_attributes
+  from firm_usda_attributes
   group by establishment_name
   having count(*) > 1
 ),
@@ -70,7 +70,7 @@ order by group_count desc;
 \echo ''
 \echo '=== Q3: activities domain (Signal 3 vocabulary — recall.processing must map to these) ==='
 select trim(elem) as activity, count(*) as n_establishments
-from firm_establishment_attributes, lateral jsonb_array_elements_text(activities) as elem
+from firm_usda_attributes, lateral jsonb_array_elements_text(activities) as elem
 where activities is not null
 group by trim(elem)
 order by n_establishments desc;
@@ -83,7 +83,7 @@ order by n_establishments desc;
 select establishment_name, count(*) as n_facilities,
        string_agg(distinct establishment_id, ', ' order by establishment_id) as numbers,
        (array_agg(distinct activities::text))[1] as sample_activities
-from firm_establishment_attributes
+from firm_usda_attributes
 where establishment_name ~* 'lineage|americold|cold storage|cold-storage|logistics|warehous'
    or (activities::text ~* 'storage|warehous|freez|distribution center'
        and activities::text !~* 'slaughter|processing|production')
@@ -100,7 +100,7 @@ limit 40;
 \o data/exploratory/usda_establishments/u4_dupname_groups.csv
 with groups as (
   select establishment_name
-  from firm_establishment_attributes
+  from firm_usda_attributes
   group by establishment_name
   having count(*) > 1
 )
@@ -111,7 +111,7 @@ select
   e.city,
   e.state,
   case when e.status_regulated_est = 'Inactive' then 'Inactive' else 'Active' end as status
-from firm_establishment_attributes e
+from firm_usda_attributes e
 join groups g on g.establishment_name = e.establishment_name
 order by count(*) over (partition by e.establishment_name) desc, e.establishment_name, e.establishment_id;
 \o

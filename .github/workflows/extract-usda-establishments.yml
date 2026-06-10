@@ -6,11 +6,15 @@ name: Extract USDA FSIS Establishments
 # content-hash dedup handles idempotency.
 
 on:
+  # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
+  schedule:
+    - cron: "0 1 * * 3" # weekly Wed 01:00 UTC — FSIS directory refreshed Mon/Tue (ADR 0010 grid)
   workflow_dispatch:
 
 jobs:
   extract:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0

@@ -30,6 +30,7 @@ from src.config.source_registry import (
     build_extractor_kwargs,
 )
 from src.enrichment.crosswalk_writer import audit_rollup_clusters, resolve_firm_crosswalk
+from src.enrichment.quantity_crosswalk_writer import write_quantity_crosswalk
 from src.extractors.fda_press_release import FdaPressReleaseCheckpointedSeedLoader
 from src.landing.r2 import R2LandingClient
 
@@ -413,6 +414,28 @@ def deep_rescan(
             ),
         ),
     ] = None,
+    shard: Annotated[
+        int | None,
+        typer.Option(
+            "--shard",
+            help=(
+                "uscg_manufacturer_details only: run strided shard N (0-based) of "
+                "--shard-count of the full detail work-list, so the Tier-2 sweep fits under "
+                "the Actions 6h cap. The monthly workflow derives N from the calendar month. "
+                "Ignored by other sources."
+            ),
+        ),
+    ] = None,
+    shard_count: Annotated[
+        int | None,
+        typer.Option(
+            "--shard-count",
+            help=(
+                "uscg_manufacturer_details only: total shards (e.g. 3 = full corpus per "
+                "quarter at a monthly 1/3 rotation). Required with --shard."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run a historical / deep-rescan load for a given source over a date window.
 
@@ -539,6 +562,28 @@ def deep_rescan(
         typer.echo(
             f"{source}: --limit / --resume-after-event-id apply only to "
             "fda_press_releases; ignored."
+        )
+
+    # uscg_manufacturer_details-only: strided shard of the full Tier-2 sweep so a single
+    # monthly job fits under the Actions 6h cap (ADR 0010 1/3 rotation). Stateless — the
+    # workflow derives --shard from the month, so no persistent per-shard cursor.
+    if source == "uscg_manufacturer_details":
+        if (shard is None) != (shard_count is None):
+            typer.echo("--shard and --shard-count must be given together", err=True)
+            raise typer.Exit(code=1)
+        if shard_count is not None:
+            assert shard is not None  # paired check above
+            if shard_count < 1:
+                typer.echo("--shard-count must be >= 1", err=True)
+                raise typer.Exit(code=1)
+            if shard < 0 or shard >= shard_count:
+                typer.echo(f"--shard must be in [0, {shard_count}); got {shard}", err=True)
+                raise typer.Exit(code=1)
+            loader.shard_index = shard  # type: ignore[attr-defined]
+            loader.shard_count = shard_count  # type: ignore[attr-defined]
+    elif shard is not None or shard_count is not None:
+        typer.echo(
+            f"{source}: --shard / --shard-count apply only to uscg_manufacturer_details; ignored."
         )
 
     result = loader.run(change_type=change_type)
@@ -835,6 +880,35 @@ def resolve_firms(
         f"written={summary.rows_written} cleaned={summary.cleaned_count} "
         f"aliased={summary.alias_count} fei_merged={summary.fei_merged} "
         f"fuzzy_merged={summary.fuzzy_merged} fei_gated={summary.fei_gated}"
+    )
+
+
+@app.command(name="parse-quantities")
+def parse_quantities(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report parse counts without writing quantity_crosswalk."),
+    ] = False,
+) -> None:
+    """Rebuild quantity_crosswalk from distinct FDA/USDA staging quantity strings (C13).
+
+    Reads the distinct ``product_distributed_quantity`` (FDA) + ``qty_recovered`` (USDA) strings
+    from the ``stg_*`` views, parses each through ``src.enrichment.quantity.parse_quantity`` into
+    ``(value, unit, category, basis)``, and truncate-reloads ``quantity_crosswalk``. Silver
+    ``recall_product`` LEFT JOINs it on ``number_of_units`` for the structured columns; the
+    ``basis`` flag (per_product vs total_all_products) lets ``fct_units_recalled`` avoid summing a
+    recall-wide total that repeats per product row. Idempotent; no API/watermark side effects. Run
+    AFTER ``dbt build --select staging`` (it reads the ``stg_*`` views), before the full dbt build.
+    """
+    configure_logging()
+    settings = Settings()  # type: ignore[call-arg]
+    engine = make_engine(settings.neon_database_url.get_secret_value())
+    summary = write_quantity_crosswalk(engine, dry_run=dry_run)
+    dry = " [dry-run]" if summary.dry_run else ""
+    typer.echo(
+        f"parse-quantities{dry}: distinct={summary.distinct_values} "
+        f"written={summary.rows_written} parsed_value={summary.parsed_value} "
+        f"parsed_unit={summary.parsed_unit}"
     )
 
 

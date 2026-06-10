@@ -128,7 +128,7 @@ from latest;
 \echo ''
 \echo '=== Q6: status enum distribution (accepted_values SSOT) ==='
 -- Observed: 'In Business' / 'Inactive' / 'Federal or State Agency'. Corpus value set →
--- the firm_manufacturer_attributes.status accepted_values list. '' shown via nullif.
+-- the firm_uscg_attributes.status accepted_values list. '' shown via nullif.
 with latest as (
   select distinct on (source_recall_id) *
   from uscg_manufacturer_details_bronze

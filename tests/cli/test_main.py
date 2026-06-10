@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+    from pathlib import Path
 
     import pytest
 
@@ -731,3 +732,228 @@ def test_deep_rescan_nhtsa_ignores_date_args(monkeypatch: pytest.MonkeyPatch) ->
 
     assert result.exit_code == 0
     assert "ignored" in result.output
+
+
+# ---------------------------------------------------------------------------
+# re-ingest command — guard branches (all fire before any Settings()/DB access)
+# ---------------------------------------------------------------------------
+
+
+def test_reingest_unsupported_source_exits_with_error() -> None:
+    # NHTSA is JSON-replay-out-of-scope → guard fires before any DB/network access.
+    result = runner.invoke(
+        app,
+        [
+            "re-ingest",
+            "nhtsa",
+            "--from-date",
+            "2026-01-01",
+            "--to-date",
+            "2026-01-31",
+            "--change-type",
+            "schema_rebaseline",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "re-ingest not supported for source: nhtsa" in result.output
+
+
+def test_reingest_invalid_change_type_exits_with_error() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "re-ingest",
+            "fda",
+            "--from-date",
+            "2026-01-01",
+            "--to-date",
+            "2026-01-31",
+            "--change-type",
+            "routine",  # not a valid re-baseline label
+        ],
+    )
+    assert result.exit_code == 1
+    assert "--change-type must be one of" in result.output
+
+
+def test_reingest_bad_date_format_exits_with_error() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "re-ingest",
+            "fda",
+            "--from-date",
+            "not-a-date",
+            "--to-date",
+            "2026-01-31",
+            "--change-type",
+            "schema_rebaseline",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "must be YYYY-MM-DD" in result.output
+
+
+def test_reingest_from_after_to_exits_with_error() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "re-ingest",
+            "fda",
+            "--from-date",
+            "2026-02-01",
+            "--to-date",
+            "2026-01-01",
+            "--change-type",
+            "schema_rebaseline",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "is after" in result.output
+
+
+# ---------------------------------------------------------------------------
+# resolve-firms / audit-firm-rollups — CLI dispatch (mock the underlying call)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_summary() -> MagicMock:
+    summary = MagicMock()
+    summary.distinct_names = 1200
+    summary.rows_written = 1200
+    summary.cleaned_count = 30
+    summary.alias_count = 12
+    summary.fei_merged = 0
+    summary.fuzzy_merged = 7
+    summary.fei_gated = 2
+    summary.dry_run = False
+    return summary
+
+
+def test_resolve_firms_dispatches_with_default_options() -> None:
+    summary = _resolve_summary()
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.cli.main.Settings"),
+        patch("src.cli.main.make_engine", return_value=MagicMock()),
+        patch("src.cli.main.resolve_firm_crosswalk", return_value=summary) as mock_resolve,
+    ):
+        result = runner.invoke(app, ["resolve-firms"])
+
+    assert result.exit_code == 0
+    assert "distinct_names=1200" in result.output
+    assert "written=1200" in result.output
+    # Defaults: rollup on, fei_merge off, threshold 90.
+    mock_resolve.assert_called_once()
+    kwargs = mock_resolve.call_args.kwargs
+    assert kwargs["dry_run"] is False
+    assert kwargs["rollup"] is True
+    assert kwargs["fei_merge"] is False
+    assert kwargs["rollup_threshold"] == 90.0
+
+
+def test_resolve_firms_forwards_flags_to_underlying_call() -> None:
+    summary = _resolve_summary()
+    summary.dry_run = True
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.cli.main.Settings"),
+        patch("src.cli.main.make_engine", return_value=MagicMock()),
+        patch("src.cli.main.resolve_firm_crosswalk", return_value=summary) as mock_resolve,
+    ):
+        result = runner.invoke(
+            app,
+            ["resolve-firms", "--dry-run", "--no-rollup", "--rollup-threshold", "97"],
+        )
+
+    assert result.exit_code == 0
+    assert "[dry-run]" in result.output
+    kwargs = mock_resolve.call_args.kwargs
+    assert kwargs["dry_run"] is True
+    assert kwargs["rollup"] is False
+    assert kwargs["rollup_threshold"] == 97.0
+
+
+def test_audit_firm_rollups_dispatches_and_writes_csv(tmp_path: Path) -> None:
+    out_path = tmp_path / "review.csv"
+    review = MagicMock()
+    review.canonical_name = "ACME CORP"
+    review.n_members = 3
+    review.min_jaccard = 0.8
+    review.weakest_anchor_df = 2
+    review.min_score = 99.0
+    review.shared_tokens = ["acme", "corp"]
+    review.members = ["ACME CORP", "ACME CORPORATION"]
+    review.signature = "sig-1"
+
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.cli.main.Settings"),
+        patch("src.cli.main.make_engine", return_value=MagicMock()),
+        patch("src.cli.main.audit_rollup_clusters", return_value=[review]) as mock_audit,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "audit-firm-rollups",
+                "--out",
+                str(out_path),
+                "--reviewed-ok",
+                str(tmp_path / "ok.txt"),
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "rollup_clusters=1" in result.output
+    mock_audit.assert_called_once()
+    # The ranked CSV is written to --out with a header + one data row.
+    assert out_path.exists()
+    lines = out_path.read_text(encoding="utf-8").strip().splitlines()
+    assert lines[0].startswith("risk_rank,")
+    assert "ACME CORP" in lines[1]
+
+
+def _quantity_summary() -> MagicMock:
+    summary = MagicMock()
+    summary.distinct_values = 58727
+    summary.rows_written = 58727
+    summary.parsed_value = 52000
+    summary.parsed_unit = 41000
+    summary.dry_run = False
+    return summary
+
+
+def test_parse_quantities_dispatches_with_defaults() -> None:
+    summary = _quantity_summary()
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.cli.main.Settings"),
+        patch("src.cli.main.make_engine", return_value=MagicMock()),
+        patch("src.cli.main.write_quantity_crosswalk", return_value=summary) as mock_write,
+    ):
+        result = runner.invoke(app, ["parse-quantities"])
+
+    assert result.exit_code == 0
+    assert "distinct=58727" in result.output
+    assert "written=58727" in result.output
+    mock_write.assert_called_once()
+    # Default is a real write, not a dry-run.
+    assert mock_write.call_args.kwargs["dry_run"] is False
+
+
+def test_parse_quantities_dry_run_forwards_flag() -> None:
+    summary = _quantity_summary()
+    summary.dry_run = True
+    summary.rows_written = 0
+    with (
+        patch("src.cli.main.configure_logging"),
+        patch("src.cli.main.Settings"),
+        patch("src.cli.main.make_engine", return_value=MagicMock()),
+        patch("src.cli.main.write_quantity_crosswalk", return_value=summary) as mock_write,
+    ):
+        result = runner.invoke(app, ["parse-quantities", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "[dry-run]" in result.output
+    mock_write.assert_called_once()
+    assert mock_write.call_args.kwargs["dry_run"] is True

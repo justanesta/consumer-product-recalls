@@ -67,8 +67,8 @@ flowchart TB
     %% ===== SILVER: firm cluster =====
     subgraph FIRM["Silver · Firm cluster"]
         firm["firm"]
-        fea["firm_establishment_attributes"]
-        fma["firm_manufacturer_attributes"]
+        fea["firm_usda_attributes"]
+        fma["firm_uscg_attributes"]
         ffa["firm_fda_attributes"]
         umry["uscg_mic_reassignment_years"]
         fx[("firm_crosswalk · Python")]
@@ -77,9 +77,9 @@ flowchart TB
 
     %% ===== SCD-2 history (silver_snapshots schema) =====
     subgraph SNAP["silver_snapshots · SCD-2 history"]
-        s_est["firm_establishment_attributes_snapshot"]
+        s_est["firm_usda_attributes_snapshot"]
         s_fda["firm_fda_attributes_snapshot"]
-        s_uscg["uscg_manufacturer_attributes_snapshot"]
+        s_uscg["firm_uscg_attributes_snapshot"]
         s_nhtsa["nhtsa_recall_product_snapshot"]
     end
 
@@ -100,6 +100,7 @@ flowchart TB
         f_cl["fct_recalls_by_classification"]
         f_st["fct_recall_status"]
         f_geo["fct_recalls_by_geography"]
+        f_co["fct_recalls_by_country"]
         f_un["fct_units_recalled"]
     end
 
@@ -157,14 +158,14 @@ encodes the grade; the table below names it explicitly.
 | `recall_product` | fact | one row per affected product/line |
 | `firm` | conformed dimension | one row per 6b cross-source canonical firm cluster |
 | `recall_event_firm` | **bridge** (M:N, role-bearing) | event ↔ firm, with `role` + `match_confidence` |
-| `firm_establishment_attributes` † | SCD-2 dimension sidecar (USDA/FSIS) | current view over `…_snapshot`, anchor `establishment_number` |
-| `firm_manufacturer_attributes` † | SCD-2 dimension sidecar (USCG) | current view over `uscg_…_snapshot`, anchor `mic` |
+| `firm_usda_attributes` † | SCD-2 dimension sidecar (USDA/FSIS) | current view over `…_snapshot`, anchor `establishment_number` |
+| `firm_uscg_attributes` † | SCD-2 dimension sidecar (USCG) | current view over `uscg_…_snapshot`, anchor `mic` |
 | `firm_fda_attributes` † | SCD-2 dimension sidecar (FDA) | current view over `…_snapshot`, anchor `firm_fei_num` |
 | `recall_event_history` | accumulating history (field-level edits) | LAG-derived change rows |
 | `recall_product_history` | SCD-2 history (NHTSA products) | Policy-C peer of the current view |
 | `recall_lifecycle` | derived per-recall summary | 1:1 with `recall_event` |
 | `recall_event_press_release` | event child fact (FDA) | M:1 to event |
-| `recall_distribution_area` | event child fact (geography) | 1:1, FDA+USDA |
+| `recall_distribution_area` | event child fact (geography) | 0..1, FDA+USDA (≥1 state or country) |
 | `recall_event_establishment_resolution` | resolution map (USDA → FSIS) | 1:1 USDA |
 | `uscg_mic_reassignment_years` | reference helper (MIC temporal) | MIC → current-holder-since-year |
 | `firm_fei_edges` | resolution input (**dormant**) | built but not wired into the live firm build (ADR 0037) |
@@ -250,6 +251,8 @@ erDiagram
         text    recall_event_id        PK,FK
         text    distribution_state_codes
         integer n_distribution_states
+        text    distribution_country_codes
+        integer n_distribution_countries
     }
     recall_event_establishment_resolution {
         text recall_event_id      PK,FK
@@ -295,14 +298,14 @@ erDiagram
       recall_event_firm }o--|| firm           : "bridge (Fig 2)"
       firm_fei_edges    }o..o{ firm_crosswalk : "deferred: fei_merge off (ADR 0037)"
 
-      firm ||..o{ firm_establishment_attributes : "soft: observed_company_ids (USDA)"
-      firm ||..o{ firm_manufacturer_attributes  : "soft: observed_company_ids (USCG)"
+      firm ||..o{ firm_usda_attributes : "soft: observed_company_ids (USDA)"
+      firm ||..o{ firm_uscg_attributes  : "soft: observed_company_ids (USCG)"
       firm ||..o{ firm_fda_attributes           : "soft: observed_company_ids (FDA)"
 
-      firm_establishment_attributes ||--|{ firm_establishment_attributes_snapshot : "SCD-2 versions"
+      firm_usda_attributes ||--|{ firm_usda_attributes_snapshot : "SCD-2 versions"
       firm_fda_attributes           ||--|{ firm_fda_attributes_snapshot           : "SCD-2 versions"
-      firm_manufacturer_attributes  ||--|{ uscg_manufacturer_attributes_snapshot  : "SCD-2 versions"
-      firm_manufacturer_attributes  ||--o| uscg_mic_reassignment_years            : "OOB year (thin)"
+      firm_uscg_attributes  ||--|{ firm_uscg_attributes_snapshot  : "SCD-2 versions"
+      firm_uscg_attributes  ||--o| uscg_mic_reassignment_years            : "OOB year (thin)"
 
       firm {
           text  firm_id              PK
@@ -324,7 +327,7 @@ erDiagram
           text firm_surviving_fei
           text current_fei
       }
-      firm_establishment_attributes {
+      firm_usda_attributes {
           text establishment_id     PK
           text establishment_name
           text state
@@ -332,7 +335,7 @@ erDiagram
           text status_regulated_est
           text and_more_cols
       }
-      firm_manufacturer_attributes {
+      firm_uscg_attributes {
           text    mic                  PK
           text    detail_url
           boolean mic_has_prior_holder
@@ -348,7 +351,7 @@ erDiagram
           text surviving
           text and_more_cols
       }
-      firm_establishment_attributes_snapshot {
+      firm_usda_attributes_snapshot {
           text        dbt_scd_id           PK
           text        establishment_number
           timestamptz dbt_valid_from
@@ -360,7 +363,7 @@ erDiagram
           timestamptz dbt_valid_from
           timestamptz dbt_valid_to
       }
-      uscg_manufacturer_attributes_snapshot {
+      firm_uscg_attributes_snapshot {
           text        dbt_scd_id PK
           text        mic
           timestamptz dbt_valid_from
@@ -386,7 +389,7 @@ build lineage.
 `firm_id`s collapse into one `canonical_firm_id` (= `firm.firm_id`). The three sidecars soft-join
 `firm` on the anchor (`establishment_number` / `mic` / `firm_fei_num`) carried in
 `firm.observed_company_ids`; each is the **current view** (`dbt_valid_to IS NULL`) over its SCD-2
-snapshot. Note `firm_manufacturer_attributes` reads **`uscg_manufacturer_attributes_snapshot`** — the
+snapshot. Note `firm_uscg_attributes` reads **`firm_uscg_attributes_snapshot`** — the
 lone snapshot whose name doesn't match its view (pending rename, role-grade footnote above).
 
 **Cardinality + status.** A name-merged `firm` can carry **several** establishment_numbers / MICs /
@@ -426,8 +429,8 @@ flowchart LR
         rel["recall_lifecycle"]
         reh["recall_event_history"]
         rda["recall_distribution_area"]
-        fea["firm_establishment_attributes"]
-        fma["firm_manufacturer_attributes"]
+        fea["firm_usda_attributes"]
+        fma["firm_uscg_attributes"]
         ffa["firm_fda_attributes"]
     end
 
@@ -445,6 +448,7 @@ flowchart LR
         f_cl["fct_recalls_by_classification"]
         f_st["fct_recall_status"]
         f_geo["fct_recalls_by_geography (table)"]
+        f_co["fct_recalls_by_country"]
         f_un["fct_units_recalled"]
         f_fm["fct_recalls_by_firm"]
     end

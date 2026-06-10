@@ -1,7 +1,7 @@
 -- Phase 6 (feature/silver-field-remap, W1) — USCG manufacturer-directory bronze shape.
 --
 -- CAVEAT: population / format / sentinel / fragmentation EVIDENCE for the silver firm
--- remap — the `stg_uscg_manufacturers` staging + the `firm_manufacturer_attributes`
+-- remap — the `stg_uscg_manufacturers` staging + the `firm_uscg_attributes`
 -- per-MIC dim + the recalls→directory firm JOIN. NOT a re-derivation of which fields to
 -- capture (Phase 6a, done — see documentation/uscg/field_audit_2026_w22.md +
 -- manufacturer_scraping_observations.md). Empty-in-bronze describes capture state only.
@@ -116,7 +116,7 @@ limit 20;
 \echo '=== Q5: address truncation cliff (§F.1 — ~30-char listing-only limitation) ==='
 -- Listing address is source-truncated at ~29-30 chars (a VARCHAR cap); the full address
 -- is detail-page-only. at_or_near_cap_29plus quantifies how much is clipped — the cost of
--- listing-only extraction for firm_manufacturer_attributes.address.
+-- listing-only extraction for firm_uscg_attributes.address.
 with latest as (
   select distinct on (source_recall_id) *
   from uscg_manufacturers_bronze

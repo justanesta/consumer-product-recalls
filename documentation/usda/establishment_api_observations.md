@@ -344,7 +344,7 @@ Two empirical findings:
    closure rate). All establishments had been dormant in bronze for 9–13 days (last seen active
    on 5/2 or 5/6) before flipping on 5/15.
 
-**Downstream implication:** silver `firm_establishment_attributes` is materialized as `table`
+**Downstream implication:** silver `firm_usda_attributes` is materialized as `table`
 and re-runs on every `dbt build`, so the 13 establishments will appear with their new
 `'Inactive'` status after the next transform with **no history preserved in silver**. The
 `accepted_values: ['', 'Inactive']` test added to `dbt/models/silver/_silver.yml`

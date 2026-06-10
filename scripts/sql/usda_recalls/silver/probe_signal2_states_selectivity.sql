@@ -43,12 +43,12 @@ select r.source_recall_id, r.establishment, r.states,
        (r.states ~* 'nationwide') as is_nationwide
 from stg_usda_fsis_recalls r
 where r.establishment is not null
-  and (select count(*) from firm_establishment_attributes e
+  and (select count(*) from firm_usda_attributes e
        where upper(trim(e.establishment_name)) = upper(trim(r.establishment))) >= 2;
 
 \echo '=== Q0: format check — establishment.state vs recall states tokens (full name? abbrev?) ==='
 select 'establishment.state' as side, upper(trim(state)) as val, count(*) as n
-from firm_establishment_attributes where state is not null group by 1,2 order by n desc limit 8;
+from firm_usda_attributes where state is not null group by 1,2 order by n desc limit 8;
 
 -- Normalized recall state set (abbrev), excluding nationwide recalls.
 drop table if exists _rs;
@@ -65,7 +65,7 @@ create temporary table _cand as
 select f.source_recall_id, e.establishment_id,
        coalesce((select abbr from _sm where _sm.name = upper(trim(e.state))), upper(trim(e.state))) as est_st
 from _fo f
-join firm_establishment_attributes e on upper(trim(e.establishment_name)) = upper(trim(f.establishment));
+join firm_usda_attributes e on upper(trim(e.establishment_name)) = upper(trim(f.establishment));
 
 \echo ''
 \echo '=== Q1: Signal-2 resolution of the fan-out set ==='

@@ -31,9 +31,10 @@ Surrogate keys are **reused from silver verbatim** (`recall_event_id`, `recall_p
 
 **Aggregates (dashboards):** `fct_recalls_by_week`/`_by_month`/`_by_year`, `fct_recalls_monthly_trend`
 (rolling averages + YoY over a dense month spine), `fct_recalls_by_firm` (leaderboard), `fct_recalls_by_classification`,
-`fct_recall_status` (active/inactive), `fct_recalls_by_geography`, `fct_units_recalled`. Most carry a
-`source` dimension with an `'ALL'` rollup via `GROUPING SETS` (one model serves a per-source page and
-the cross-source total).
+`fct_recall_status` (active/inactive), `fct_recalls_by_geography` (US states), `fct_recalls_by_country`
+(distribution countries, FDA+USDA; ISO-3166-1 alpha-2 with a derived `US` cell), `fct_units_recalled`.
+Most carry a `source` dimension with an `'ALL'` rollup via `GROUPING SETS` (one model serves a
+per-source page and the cross-source total).
 
 ## Design notes worth knowing
 
@@ -43,43 +44,79 @@ the cross-source total).
   - ***`distribution`*** = **where the recalled product went** — `recall_distribution_area.distribution_state_codes[]`
     (FDA free-text parse + USDA states; precision-over-recall). **FDA + USDA only**; CPSC/NHTSA/USCG
     carry no distribution field, so they contribute nothing. This is the clean *"where did the product
-    go / who was potentially affected"* answer.
-  - ***`firm_location`*** = **where the responsible firm is *registered*** — `firm.observed_company_ids`
-    → the per-source SCD-2 sidecar state (`firm_establishment_attributes.state` /
-    `firm_manufacturer_attributes.state` / `firm_fda_attributes.firm_state_cd`). It is **not** "all
+    go / who was potentially affected"* answer. **Countries (C12, 2026-06-09):** the sidecar now also
+    carries `distribution_country_codes[]` (ISO-3166-1 alpha-2, parsed from the FDA international tail
+    via the `country_iso` seed), parallel to the state array; its grain expanded to *≥1 state OR
+    country*, so a country-only recall now gets a row with empty `state_codes[]`. The `distribution`
+    lens here is **unchanged** — it unnests `distribution_state_codes[]` and is inert to country-only
+    rows (an empty array unnests to nothing). The world-map companion **`fct_recalls_by_country` was
+    built (C12 follow-on, 2026-06-09)**: foreign cells unnest `distribution_country_codes[]`, and the
+    **`US` cell is *derived*** from `distribution_scope`(Nationwide/Regional) + `distribution_state_codes`
+    — *not* stored in silver, which keeps `distribution_country_codes[]` a clean foreign-only
+    international-presence array. Empirically US dominates (50,854 recalls vs ~4.5k for the next country,
+    Canada); only ~273 recalls are truly non-US.
+  - ***`firm_registration`*** (renamed from `firm_location`, C17 2026-06-09) = **where the responsible firm is *registered*** — `firm.observed_company_ids`
+    → the per-source SCD-2 sidecar state (`firm_usda_attributes.state` /
+    `firm_uscg_attributes.state` / `firm_fda_attributes.firm_state_cd`). It is **not** "all
     firms": only firms whose 6b canonical cluster carries an FSIS `establishment_number`, USCG `mic`, or
     FDA `firm_fei_num` — directly, or via a name-merge to one — appear; a pure CPSC/NHTSA firm (no
     structural id) contributes nothing.
-  - **Four caveats make `firm_location` *not* a consumer-impact geography:** (1) **registration ≠ harm**
+  - **Caveats make `firm_registration` *not* a consumer-impact geography:** (1) **registration ≠ harm**
     — the FEI/establishment address is the firm's *registered* (often corporate-HQ) address (Walmart's
     FEI → AR/Bentonville, Target → MN), so "Walmart recall → AR" means *Walmart is registered in AR*,
-    not that the product came from or affected AR; (2) **multi-counting** — a recall is counted in
-    **every** state where any of its firms is registered, and a name-merged firm can carry multiple
-    FEIs/MICs across states, so the per-state counts **sum to more than the distinct-recall total**
-    (recall × firm-registered-state incidences, not distinct recalls per state); (3) **coverage skew**
+    not that the product came from or affected AR; (2) **multi-counting (kept by design)** — a recall is
+    counted in **every** state where any of its firms is registered, and a firm can carry facilities in
+    multiple states (up to **7** observed), so per-state counts **sum to more than the distinct-recall
+    total** (an *industry-footprint* reading: recall × firm-registered-state incidences, not distinct
+    recalls per state). The C18 single-primary-state collapse was evaluated 2026-06-09 and **reverted** —
+    65% of multi-state firms tie at ~1 registration/state, so it attributed an arbitrary state to **6.6%**
+    of recalls (`scripts/sql/gold/inspect_firm_state_ties.sql`); (3) **coverage skew**
     — only the three sidecar-backed sources (+ name-merged CPSC/NHTSA) feed it; (4) **merge-sensitive**
     — a 6b over-merge attributes one firm's state to another's recalls.
-  - **Use:** read `distribution` as "where the product went," `firm_location` as "which states' firms
+  - **Use:** read `distribution` as "where the product went," `firm_registration` as "which states' firms
     get recalled" (an industry/regulatory lens) — **never** as where consumers were affected. Neither is
-    "where the product was *made*" (no production-site field exists). **Deferred enhancements** (code,
-    post-6f): rename `geography_basis` value `firm_location → firm_registration` for honesty, and/or
-    collapse a firm to a single *primary* registered state to remove the multi-counting — both noted,
-    neither adopted.
-- **Units are narrow and not cross-source comparable** (`fct_units_recalled`). Only NHTSA (vehicles)
-  and USCG (boats) have a clean integer `unit_count`; CPSC/FDA/USDA are free-text (USDA = pounds).
-  NHTSA's `recall_product` is the 7-tuple (many component rows per campaign) and `potaff` (an
-  event-level count) repeats across them, so it is collapsed to **one per recall** before aggregating
-  (a naive product-grain sum overcounts ~100×; `potaff` verified constant within a campno → the
-  collapse is exact). USCG's `recall_product` is 1:1 with `recall_event`, so it never fans out — no
-  explosion. `total_units` sums per-recall affected counts — a recall-**magnitude** measure, not unique
-  vehicles (a vehicle recurs across recalls). Free-text value+unit parse (CPSC/FDA/USDA) is deferred to
-  the units-enrichment TODO.
+    "where the product was *made*" (no production-site field exists). **Done 2026-06-09 (C17):** the
+    `geography_basis` value was renamed `firm_location → firm_registration` for honesty. **C18
+    (single-primary-state collapse) was evaluated and reverted** — the multi-counting is a legitimate,
+    documented industry-footprint property; collapsing it picked an arbitrary state for 6.6% of recalls
+    (no uniform cross-source recency date exists to break the pervasive ~1-registration-per-state ties).
+    Evidence: `scripts/sql/gold/inspect_firm_state_ties.sql` (the probe that surfaced the 65%
+    ~1-registration/state tie rate and the 6.6% affected-recall figure driving the revert).
+- **Units are narrow and not cross-source comparable** (`fct_units_recalled`, grain source ×
+  `unit_category` × month). The **measure means different things per source** — NHTSA/USCG = vehicles/
+  boats *potentially affected* (clean integer `unit_count`); FDA = quantity *distributed*; USDA =
+  weight *recovered* — so always filter by source; no 'ALL' rollup. `unit_category`
+  (count/weight/volume/grouping) keeps incommensurable units apart (1,000 cases ≠ 1,000 lbs).
+  NHTSA's `recall_product` is the 7-tuple (many component rows per campaign) and `potaff` repeats
+  across them, so it is collapsed to **one max per recall** (a naive product-grain sum overcounts
+  ~100×; `potaff` verified constant within a campno → exact). USCG is 1:1 with `recall_event` (no
+  fan-out). **FDA/USDA added 2026-06-09 (C13)** from the `recall_product` quantity parse,
+  **basis-aware**: `per_product` rows are *summed* across the recall's products, a `total_all_products`
+  value (a recall-wide total repeated on every product row) is *max'd* — the `quantity_basis` flag is
+  what prevents an N× overcount. `total_units` sums per-recall magnitudes — a recall-**magnitude**
+  measure, not unique items. **CPSC stays free-text-only** (no parse); the value/unit parse for it
+  remains in the units-enrichment backlog.
 - **Indexing** (ADR 0038): silver/gold indexes are declared in dbt `config(indexes=[...])` so they
   re-create on each table rebuild. Two load-bearing specials: a **functional index on
   `firm_fda_attributes((firm_fei_num::text))`** (the firm→sidecar join casts FEI to text), and
   **`ANALYZE` post_hooks** on the firm-join-chain tables so a freshly-rebuilt table has fresh planner
   stats immediately (without them, an incremental rebuild fell back to seq-scans — `fct_recalls_by_geography`
   went 3s → 130s until ANALYZE was added).
+- **Performance rewrites (2026-06-09, no schema change):** the two items below are pure query
+  rewrites with no observable output change. Note: the `geography_basis` value rename
+  (`firm_location → firm_registration`, C17) also touched `fct_recalls_by_geography` this session
+  but is a separate **schema change** — documented in the `firm_registration` lens note above.
+  - `mart_firm_profile` had a firm × product fan-out: the pre-rewrite CTE re-joined `recall_event_firm`
+    and `recall_product` separately, so a multi-firm + multi-product NHTSA recall (e.g. a 139-component
+    Takata campno) exploded to firms × products rows before `count(distinct)` — the root of the ~180s
+    build time. Fixed by a single `materialized` CTE (`firm_recalls`) at the event grain (one row per
+    firm × event × role), then counting products per event first (`event_products`), then summing over
+    the firm's distinct events — exact, no double-count, and no fan-out.
+  - `fct_recalls_by_geography` had a correlated cross-join-lateral subquery per `company_id` to look up
+    the matching sidecar state (a seq-scan-per-row bottleneck). Rewritten to the same hash-join pattern
+    as `mart_firm_profile.firm_attr_rows`: unnest `observed_company_ids` into `firm_company_ids`, then
+    `LEFT JOIN` all three sidecars + `coalesce` the state — the disjoint id namespaces ensure each id
+    matches at most one sidecar.
 - **Phase-7 follow-up:** re-profile indexes against real API traffic (`pg_stat_statements`); promote
   warn→error tests where stable; add the statistical/baseline tests that need production data.
 
@@ -112,10 +149,17 @@ announced/published), `dim_source` / `dim_classification` from the existing enum
 `fct_recall_event` / `fct_recall_product` carrying measures + dim-FKs; `recall_event_firm` becomes a
 factless bridge.
 
-**The one no-regret early piece is `dim_date`** — a generated calendar that replaces the `date_trunc`
-logic repeated inline across the nine `fct_*` models and unlocks fiscal/holiday calendars cheaply.
-**Decided 2026-06-08:** it will be built pre-Phase-8 regardless of the star call (tracked in
-`project_scope/implementation_plan.md`, Architectural follow-ups).
+**The one no-regret early piece is `dim_date`** — a generated calendar that replaces the inline
+`date_trunc` logic in the **five** date-grained `fct_*` models (by_month / by_year / by_week /
+monthly_trend / units; the other four `fct_*` carry no `date_trunc`) and unlocks fiscal/holiday
+calendars cheaply. **Built + wired 2026-06-09 (C10/C11):** `dim_date` (**1940-01-01** .. current-year+2,
+dynamic; unique `date_day`) is built, and the five models join it on `published_at::date` (verified
+lossless — 0 null / 0 out-of-range — and output byte-identical to the prior `date_trunc` form). The
+1940 floor matches `assert_recall_event_date_sanity`'s ERROR floor, so any `published_at` that passes
+the sanity test is guaranteed a `dim_date` row — INNER JOINs in the `fct_*` models can never silently
+drop a sane recall (ISSUE-7). Column definitions (year/quarter/month/week/iso/dow/us_fiscal_year) are
+in `documentation/data_schemas.md`. The full Kimball star stays deferred (above); `dim_date` was the
+no-regret slice.
 
 **When:** decide at Phase 8 framing — [ADR 0024](decisions/README.md) already owns "the relationship
 between API endpoints and dbt gold views" — once the website's feed + chart inventory are known.

@@ -269,9 +269,11 @@ which has `cache-control: public, max-age=3100`. Filtered requests always go to 
 
 ### Finding K — Drupal taxonomy ID mappings (from Appendix A of PDF documentation)
 
-Confirmed from documentation (no empirical probe needed — IDs are fully documented in Appendix A).
+Confirmed from documentation (no empirical probe needed — IDs are fully documented in Appendix A). **Re-verified and fully synced 2026-06-09 against the June 2026 PDF (`documentation/usda/usda_fsis_recall_api_documentation_june_2026.pdf`, pages 7–15).** The tables below reflect the June 2026 PDF as the source of truth; earlier versions of this doc cited some year IDs as unverified — they are now confirmed.
 
 **`field_year_id` (Recall Issue Year) — filters by the year the recall was issued (`field_recall_date` year). Immutable.**
+
+Verified from June 2026 PDF Appendix A (pages 13–15).
 
 | Year | ID | Year | ID | Year | ID |
 |---|---|---|---|---|---|
@@ -289,11 +291,11 @@ Confirmed from documentation (no empirical probe needed — IDs are fully docume
 | | | 2008 | 220 | 2025 | 684 |
 | | | 2009 | 219 | 2026 | 685 |
 | | | 2010 | 218 | 2027 | 686 |
-| | | 2011 | 217 | | |
-| | | 2012 | 216 | | |
+| | | 2011 | 217 | 2028 | 932 |
+| | | 2012 | 216 | 2029 | 933 |
 | | | 2013 | 215 | | |
 
-**`field_closed_year_id` (Closed Year)** — same IDs as `field_year_id` for overlapping years (1970–2024 per PDF); filters by the year the recall was closed (`field_closed_year`). Not documented beyond 2024.
+**`field_closed_year_id` (Closed Year)** — same IDs as `field_year_id` for all overlapping years; filters by the year the recall was closed (`field_closed_year`). Fully documented through 2029 in the June 2026 PDF Appendix A (pages 9–11). The complete ID set is identical to `field_year_id` above (1970→470 through 2029→933).
 
 **These are NOT incremental watermarks.** `field_year_id` is immutable (issue year never changes). `field_closed_year_id` captures newly-closed records but misses amendments and records without a close date. Neither solves the incremental extraction problem — full-dump remains the correct strategy (Finding D).
 
@@ -311,18 +313,18 @@ Confirmed from documentation (no empirical probe needed — IDs are fully docume
 | `field_processing_id` | Eggs/Egg Products→162, Fully Cooked-Not Shelf Stable→159, Heat Treated-Not Fully Cooked-Not Shelf Stable→160, Heat Treated-Shelf Stable→158, Not Heat Treated-Shelf Stable→157, Products with Secondary Inhibitors-Not Shelf Stable→161, Raw-Intact→154, Raw-Non Intact→155, Slaughter→153, Thermally Processed-Commercially Sterile→156, Unknown→625 |
 | `field_translation_language` | English→en, Spanish→es |
 | `field_related_to_outbreak` | TRUE→1, FALSE→0 |
-| `field_states_id` | Full 50-state + territory mapping in PDF Appendix A pages 5–7. Sample: Alabama→25, California→29, Florida→33, New York→57, Texas→68, Nationwide→557, DC→76, Puerto Rico→80, Guam→78. Range: 25–82 (states) + 557 (Nationwide). |
+| `field_states_id` | Full 50-state + territory mapping verified from June 2026 PDF Appendix A pages 7–9. Complete listing: Alabama→25, Alaska→26, American Samoa→77, Arizona→27, Arkansas→28, California→29, Colorado→30, Connecticut→31, Delaware→32, District of Columbia→76, Florida→33, Georgia→34, Guam→78, Hawaii→35, Idaho→36, Illinois→37, Indiana→38, Iowa→39, Kansas→40, Kentucky→41, Louisiana→42, Maine→43, Maryland→44, Massachusetts→45, Michigan→46, Minnesota→47, Mississippi→48, Missouri→50, Montana→51, Nationwide→557, Nebraska→52, Nevada→53, New Hampshire→54, New Jersey→55, New Mexico→56, New York→57, North Carolina→58, North Dakota→59, Northern Mariana Islands→79, Ohio→60, Oklahoma→61, Oregon→62, Pennsylvania→63, Puerto Rico→80, Rhode Island→64, South Carolina→65, South Dakota→66, Tennessee→67, Texas→68, United States Minor Outlying Islands→81, Utah→69, Vermont→70, Virgin Islands U.S.→82, Virginia→71, Washington→72, West Virginia→73, Wisconsin→74, Wyoming→75. |
 
 **Text-type documented filter parameters (not taxonomy IDs):**
 
 | Parameter | Type | Format / Behavior |
 |---|---|---|
-| `field_closed_date_value` | Text | YYYY-MM-DD (e.g., `2023-07-18`) — exact date match for `field_closed_date` |
+| `field_closed_date_value` | Text | YYYY-MM-DD (e.g., `2023-07-18`) — filter-input parameter for the recall's close date. **Filter input only** — `field_closed_date` is no longer returned in responses as of the June 2026 API change (Finding S); use `field_closed_year` / `field_closed_year_id` for close-year filtering instead. |
 | `field_recall_number` | Text | `DDD-YYYY` format (e.g., `021-2023`) — **contains/substring match**, not exact |
 | `field_product_items_value` | Text | Free text — **contains match**, not exact |
 | `field_summary_value` | Text | Free text — **contains match**, not exact |
 
-`field_closed_date_value` is the only documented date-based filter parameter. It operates on the recall's close date, not last_modified_date or recall_date — useful for narrowing historical deep-rescans by close window, but cannot serve as a general watermark (many records have no close date).
+`field_closed_date_value` is a documented filter input but **`field_closed_date` is no longer returned in responses** (dropped in the June 2026 API change — see Finding S). The response now carries only `field_closed_year` (year grain). `field_closed_date_value` remains useful for filtering historical deep-rescans by exact close date, but cannot serve as a general watermark. For close-year filtering prefer `field_closed_year_id` (taxonomy IDs in Finding K). Note: like `field_last_modified_date`, whether `field_closed_date_value` actually works server-side is unverified empirically — USDA filters have a history of being silently ignored (Finding D). Full-dump extraction remains the production strategy.
 
 ---
 
@@ -725,11 +727,18 @@ Discovered 2026-06-06: a routine `recalls extract usda` rejected **2006/2006** r
 
 1. **Ten fields flipped scalar string → JSON array.** `recall_reason`, `processing`, `states`, `establishment`, `labels`, `product_items`, `distro_list`, `company_media_contact`, `en_press_release`, `press_release`. Even empty values are arrays (`[]`), and single values are wrapped (`["Pegasus Foods Inc."]`). This is FSIS moving the multi-value fields off delimited strings — the same fields the W2/6b audit was building comma-splitting for.
 2. **One new field:** `field_recall_number_export` (scalar, observed identical to `field_recall_number`, e.g. `"006-2020"`).
-3. **One field dropped:** `field_closed_date` is no longer returned (0/2006 records). Harmless to validation (the field is `Optional`/`default=None`), but **new rows land `closed_date = NULL`** — a data-availability regression (see follow-up below).
+3. **One field dropped, replaced by a year-grain field:** `field_closed_date` (full `YYYY-MM-DD`) is no longer returned (0/2006 records), but **`field_closed_year` (year only) IS returned** — and has been captured in bronze since migration 0005 (the `closed_year` column). So the loss is *date-grain precision*, not the close signal entirely. Harmless to validation (`closed_date` is `Optional`/`default=None`), but **new rows land `closed_date = NULL` while `closed_year` is populated** — silver `terminated_at` / lifecycle `closed_at` should fall back to year-grain `closed_year` (the phase-7 C6 fix), not go NULL. Confirmed against the June-2026 PDF — see addendum below.
 
 **Fix (2026-06-06, Phase 6c branch — migration `0028`).** Bronze stores the arrays faithfully as `jsonb` (the 10 columns moved `TEXT → JSONB`); `src/schemas/usda.py` `_UsdaStrList` makes those fields `list[str] | None` via a `BeforeValidator` that **accepts both scalar and list** — robust to the change *and* to R2-replay of pre-change payloads/cassettes (ADR 0028), wrapping a scalar verbatim (`"a, b"` → `["a, b"]`, **not** split — silver owns tokenization) and mapping `""` → `[]`. `recall_number_export` added as a scalar TEXT column. **Silver staging (`stg_usda_fsis_recalls.sql`) collapses the arrays back to the comma-joined text the current downstream contract expects** via the `jsonb_array_to_csv` macro, so no downstream silver model changed; exploiting the native arrays (retiring the `field_states` tokenization / `recall_reason`→`reason_category` / comma-enum→`text[]` backlog) is a deferred follow-up.
 
 **Re-version wave.** Every USDA record's `content_hash` changes on the next successful extract (text-hash → list-hash). The recovery extract must run as `recalls deep-rescan usda --change-type=schema_rebaseline` so Phase 6c's `recall_event_history` excludes the wave from edit detection (ADR 0027).
+
+**June 2026 PDF confirmation (2026-06-09, `documentation/usda/usda_fsis_recall_api_documentation_june_2026.pdf`).** The official doc validates the three changes and resolves the open questions:
+
+- **Returned fields.** The response now carries `field_closed_year` (year), `field_recall_number_export`, `field_active_notice`, and `field_media_contact` alongside the 10 array fields — all already captured by `src/schemas/usda.py`, all backed by existing bronze columns (`closed_year`/`year` since migration 0005; `recall_number_export` since 0028). No further capture gap.
+- **`field_recall_number_export` is OUTPUT-ONLY — identity anchor stays `field_recall_number` (phase-7 C7, DECIDED).** `field_recall_number_export` is absent from the filter table (page 6) and observed identical to `field_recall_number` (e.g. `"020-2025"`), confirming it is a redundant export alias with no filter or taxonomy entry. `source_recall_id` / `field_recall_number` remains the identity key. Re-anchoring on the export form would force re-hashing every `content_hash` for zero gain. `recall_number_export` is stored as a plain TEXT column (migration 0028) for auditability; it plays no role in dedup or filtering.
+- **The filter set GREW** (page 6): `field_recall_number` (`DDD-YYYY` text), `field_summary_value` + `field_product_items_value` (substring text, "not exact match"), `field_closed_date_value` (`YYYY-MM-DD`), `field_closed_year_id`, `field_year_id`, plus the existing selection filters. **Whether any work server-side is UNVERIFIED** — USDA has a history of silently ignoring filters (Finding D: `field_last_modified_date` is ignored), so a server-side incremental cursor (e.g. `field_year_id`) needs the same empirical probe before any trust; **full-dump stays the production strategy** until then.
+- **Appendix A taxonomy — fully verified and synced (phase-7 C9, DONE).** The June 2026 PDF Appendix A (pages 7–15) confirms all taxonomy IDs. `field_states_id` Nationwide=`557`, FL=`33`, AL=`25`, AK=`26`, GA=`34`; the example URL on page 7 uses `field_states_id=33&field_closed_year_id=446`. The `field_year_id` / `field_closed_year_id` tables extend through 2029: 2026→685, 2027→686, 2028→932, 2029→933. These figures were previously cited as unverified; the June 2026 PDF confirms them. The full re-synced tables are in Finding K above.
 
 ---
 
@@ -741,8 +750,16 @@ Discovered 2026-06-06: a routine `recalls extract usda` rejected **2006/2006** r
 - [x] Confirm bilingual pair structure for `field_has_spanish=True` recalls (Finding F) — confirmed 2026-04-29: 2 records per recall number (EN+ES), identical `field_last_modified_date` across pair, `field_has_spanish=True` on both versions, `field_recall_url` is an undocumented field (Finding H)
 - [x] Confirm `field_recall_number` filter behavior (Finding I) — confirmed 2026-04-29: returns full bilingual pair (2 records), no spurious matches, natural composite key is `(field_recall_number, langcode)`
 - [x] Document archive behavior (Finding J) — confirmed 2026-04-29: filter works, 1,829 archived, 46% have empty `field_last_modified_date`, only 5 active Spanish records, filtered requests are not CDN-cached
-- [x] Document Drupal taxonomy ID mapping for all selection filters (Finding K) — confirmed from PDF Appendix A; full mapping documented above including `field_processing_id` and `field_states_id`; no empirical probe needed
+- [x] Document Drupal taxonomy ID mapping for all selection filters (Finding K) — confirmed from PDF Appendix A; re-verified 2026-06-09 against June 2026 PDF; full mapping updated including complete `field_states_id` (50 states + 8 territories) and `field_year_id`/`field_closed_year_id` through 2029 (2028→932, 2029→933)
 - [ ] Verify `field_last_modified_date` reliability on known-edited recall (Finding E)
 - [ ] Optionally probe `field_closed_date_value` behavior (Finding K text filters) — documented as YYYY-MM-DD exact date filter on close date; test whether it works server-side (unlike `field_last_modified_date`)
-- [ ] **Finding S follow-up — `field_closed_date` disappearance.** Investigate whether FSIS dropped it permanently, renamed it, or moved it to another endpoint; until resolved, `closed_at` is NULL for all post-2026-06 USDA recalls (silver `recall_event.terminated_at`/lifecycle `closed_at` go stale).
-- [ ] **Finding S follow-up — exploit native arrays.** Now that the 10 multi-value fields are jsonb arrays in bronze, retire the downstream comma-splitting (`field_states` tokenization, `recall_reason`→`reason_category`, comma-enum→`text[]`) and consume the arrays directly in silver. Deferred from the 2026-06-06 drift fix, which only collapses arrays→CSV to preserve the current contract.
+- [x] **Finding S follow-up — `field_closed_date` disappearance — RESOLVED 2026-06-09 (June-2026 PDF).** FSIS replaced the full-date `field_closed_date` with the year-grain **`field_closed_year`** in the response; `field_closed_date_value` survives **only as a filter input** (a `YYYY-MM-DD` search param, page-6 filter table — type "Text", format YYYY-MM-DD), not returned data. `closed_year` is already a bronze column (migration 0005) and is captured by the schema. **Action (silver, phase-7 C6): DONE** — `closed_year` is projected in `stg_usda_fsis_recalls.sql` and `recall_event.sql` coalesces a year-grain `terminated_year` from it when `closed_at` is null. The `terminated_year` column is flagged as year-grain (see `documentation/silver_design_notes.md`). No further open action.
+- [~] **Finding S follow-up — exploit native arrays — MEASURED low-value for the *establishment/states* consumption (2026-06-09, phase-7 C4).** The array→CSV→re-split round-trip was checked against the data and is **not** causing meaningful loss: only **4** USDA recalls list 2+ establishments (length tally: 0→852, 1→1577, 2→1, 3→3), and the `field_states` CSV-split is comma-safe (state names contain no commas). So consuming the arrays *in the existing join/parse logic* is **not worth it** — and not for a simple "shifts the gate counts" reason but because of a **grain mismatch**, detailed below so nobody re-attempts it naively. Monitor: `dbt/tests/source_assumptions/assert_usda_multi_establishment_recalls.sql` (baseline 4); examine: `scripts/sql/usda_recalls/silver/inspect_multi_establishment_recalls.sql`.
+
+  - **What happens today.** `stg_usda_fsis_recalls` collapses the `establishment` array to CSV (`jsonb_array_to_csv`); `recall_event_establishment_resolution` joins that *whole string* by exact name (`establishment_name = r.establishment`). For a multi-establishment recall (e.g. `005-2026-EXP` = `["Ajinomoto Foods North America", "Ajinomoto Toyo Frozen Noodle, Inc.", "Ajinomoto Foods North America"]`) no establishment is *named* the comma-joined string → **0 candidates** → it's excluded from the model → no `establishment_number` (it still gets a firm-by-name, just unresolved to the FSIS registry). All 4 behave this way (0/4 resolve).
+  - **Why per-element joining breaks the calibration.** The model is built to pick **one** establishment per recall (a 1-row-per-recall table that `recall_event_firm` joins **1:1**); its signal hierarchy (gates `562/115/11/98`) is calibrated on `n_candidates` meaning *"how many establishments share this **one** name."* Joining per element changes that meaning — Ajinomoto would gain candidates from **three different companies** (Ajinomoto Foods NA's 5 same-name plants + Ajinomoto Toyo's 1 + a dup), conflating "same-name fan-out the signals disambiguate" with "genuinely-different establishments all responsible." The model would then pick **one of the three companies** — the same **arbitrary single-pick reverted in C18**. The recall genuinely involves all three.
+  - **The correct fix is a grain change, not a join swap.** Emit one `(recall, establishment)` row per element → Ajinomoto = 3 bridge rows. That changes this model's grain, makes `recall_event_firm`'s 1:1 join 1:many, and **re-calibrates the whole signal hierarchy** — a real redesign, to correctly handle 4 recalls.
+  - **The latent comma-in-name trap.** `"Ajinomoto Toyo Frozen Noodle, Inc."` has a comma *inside* the name, so the CSV form is genuinely un-splittable (`string_to_array(establishment, ',')` would corrupt it to `…Noodle` + `Inc.`). The array is the only correct boundary; the round-trip is safe **only because** nothing re-splits `establishment` on comma today.
+  - **What we keep losing (inelegance, accepted):** the 4 recalls carry no `establishment_number`; the bronze-array → CSV → `string_to_array(states,',')` double-transform; and `establishment` reading as singular when it's plural. All tolerable at n=4; revisit when the monitor shows the count is no longer a rounding error.
+
+  **Still genuinely valuable + additive** (separate item C14, doing now): exposing `recall_reason`/`processing` as `text[]` token columns for consumer single-token filtering (the clean exploding split — `freetext-enrichment-backlog.md`); additive, does **not** touch the resolution model.

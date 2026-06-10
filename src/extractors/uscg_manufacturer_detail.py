@@ -208,6 +208,22 @@ def _value_for_label(strong: Tag) -> str | None:
     return None
 
 
+def shard_work_list(
+    work: list[dict[str, Any]], shard_index: int, shard_count: int
+) -> list[dict[str, Any]]:
+    """Deterministic 1/N slice of a work-list: shard ``shard_index`` of ``shard_count``.
+
+    Uses strided slicing (``work[shard_index::shard_count]``) so the N shards partition the
+    work-list exactly — every item lands in exactly one shard, shard sizes differ by at most
+    one, and the partition stays stable as the work-list grows (a new MIC simply falls into
+    one shard). Stateless by design: the caller derives ``shard_index`` from the calendar
+    month (e.g. ``(month - 1) % shard_count``), so the Tier-2 monthly rotation needs **no**
+    persistent per-shard cursor — the concern ADR 0010 flagged as the blocker. ``shard_index``
+    in ``[0, shard_count)`` and ``shard_count >= 1`` are caller invariants (CLI-validated).
+    """
+    return work[shard_index::shard_count]
+
+
 class UscgManufacturerDetailExtractor(HtmlScrapingExtractor[UscgManufacturerDetailRecord]):
     """Extractor for the USCG manufacturer detail pages — incremental (Tier-1) path.
 
@@ -227,6 +243,15 @@ class UscgManufacturerDetailExtractor(HtmlScrapingExtractor[UscgManufacturerDeta
     # in uscg_directory_id order because the incremental cursor + content-hash
     # dedup skip already-loaded MICs each pass. Inherited by the deep-rescan loader.
     work_list_limit: int | None = None
+
+    # Optional strided shard of the work-list for the Tier-2 full sweep (CLI ``--shard`` /
+    # ``--shard-count``). The full ~16.3k-row detail sweep is 4.5–7.75h > the GitHub Actions
+    # 6h job cap, so the monthly deep-rescan runs one 1/N strided shard (``shard_work_list``)
+    # per month, covering the full corpus every N months (ADR 0010 grid: 1/3 rotation).
+    # Stateless — the workflow derives the index from the month, so no per-shard cursor.
+    # ``None`` = no sharding (full sweep). Inherited by the deep-rescan loader.
+    shard_index: int | None = None
+    shard_count: int | None = None
 
     _engine: sa.Engine = PrivateAttr()
     _r2_client: R2LandingClient = PrivateAttr()
@@ -254,6 +279,21 @@ class UscgManufacturerDetailExtractor(HtmlScrapingExtractor[UscgManufacturerDeta
                 f"USCG manufacturer-detail work-list returned {len(work)} rows — exceeds "
                 f"guard of {_MAX_DETAIL_ROWS}. Possible cause: work-list join blow-up or "
                 "upstream record-count explosion."
+            )
+
+        # ``--shard``/``--shard-count`` (CLI): take one strided 1/N slice of the full
+        # work-list, AFTER the blow-up guard (which must see the true size) and BEFORE
+        # ``--limit``. Lets the Tier-2 monthly deep-rescan fit under the Actions 6h cap.
+        if self.shard_count is not None:
+            assert self.shard_index is not None  # CLI validates both-or-neither
+            full_size = len(work)
+            work = shard_work_list(work, self.shard_index, self.shard_count)
+            logger.info(
+                "uscg_manufacturer_details.work_list_sharded",
+                shard_index=self.shard_index,
+                shard_count=self.shard_count,
+                fetching=len(work),
+                work_list_size=full_size,
             )
 
         # ``--limit`` (CLI): cap AFTER the blow-up guard (which must see the true

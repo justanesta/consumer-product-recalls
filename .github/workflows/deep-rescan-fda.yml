@@ -10,6 +10,9 @@ name: Deep Rescan FDA Recalls
 # static null-EVENTLMD archive tail) for a one-time re-seed. No `schedule:` yet — Phase 7.
 
 on:
+  # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
+  schedule:
+    - cron: "30 5 * * 0" # weekly Sun 05:30 UTC, rolling 90-day window (ADR 0010 grid)
   workflow_dispatch:
     inputs:
       start_date:
@@ -34,6 +37,7 @@ jobs:
   deep-rescan:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v6
 

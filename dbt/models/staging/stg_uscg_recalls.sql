@@ -77,7 +77,12 @@ select
     -- W4 Phase A normalizations (USCG audit §9): boat_type 0/00 → lpad(2);
     -- severity case-fold (Finding-R parallel — l/h → L/H).
     lpad(nullif(boat_type, ''), 2, '0')                     as boat_type,
-    upper(nullif(severity, ''))                             as severity,
+    -- One out-of-set severity value warns accepted_values [H,L,M,S] (2026-06-09). NULL it in silver
+    -- until its provenance is known (probe: scripts/sql/uscg_recalls/bronze/inspect_out_of_set_severity.sql);
+    -- bronze keeps the raw value verbatim (ADR 0027). accepted_values ignores NULLs, so the warn clears.
+    case
+        when upper(nullif(severity, '')) in ('H', 'L', 'M', 'S') then upper(nullif(severity, ''))
+    end                                                     as severity,
 
     -- Cosmetic; preserved for audit lineage but never load-bearing.
     details_url,

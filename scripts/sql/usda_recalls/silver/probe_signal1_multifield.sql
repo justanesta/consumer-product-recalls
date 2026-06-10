@@ -26,7 +26,7 @@ select r.source_recall_id, r.establishment,
        coalesce(r.product_items,'') || '  ' || coalesce(r.summary,'') || '  ' || coalesce(r.labels,'') as alltext
 from stg_usda_fsis_recalls r
 where r.establishment is not null
-  and (select count(*) from firm_establishment_attributes e
+  and (select count(*) from firm_usda_attributes e
        where upper(trim(e.establishment_name)) = upper(trim(r.establishment))) >= 2;
 
 -- STRICT: grant tokens (prefix-before OR letter-after) normalized to canonical LETTER+NUMBER+SUFFIX.
@@ -52,7 +52,7 @@ select f.source_recall_id, e.establishment_id,
        array_agg(distinct regexp_replace(upper(g), '[^A-Z0-9]', '', 'g')) as grants,
        array_agg(distinct regexp_replace(g, '[^0-9]', '', 'g'))           as cores
 from _fo f
-join firm_establishment_attributes e on upper(trim(e.establishment_name)) = upper(trim(f.establishment)),
+join firm_usda_attributes e on upper(trim(e.establishment_name)) = upper(trim(f.establishment)),
      lateral unnest(string_to_array(e.establishment_id, '+')) as g
 group by f.source_recall_id, e.establishment_id;
 
@@ -111,7 +111,7 @@ select
   mt.n_matching,
   (select x.toks from _ext x where x.source_recall_id = f.source_recall_id)                       as extracted_tokens,
   (select array_agg(e.establishment_id order by e.establishment_id)
-     from firm_establishment_attributes e where upper(trim(e.establishment_name)) = upper(trim(f.establishment))) as candidate_numbers,
+     from firm_usda_attributes e where upper(trim(e.establishment_name)) = upper(trim(f.establishment))) as candidate_numbers,
   left(f.summary, 200)        as summary_head,
   left(f.product_items, 160)  as product_items_head
 from _fo f join mt on mt.source_recall_id = f.source_recall_id

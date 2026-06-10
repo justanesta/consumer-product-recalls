@@ -1,0 +1,71 @@
+name: Deep Rescan USCG Recalls
+
+# Monthly safety-net for the USCG short-circuit incremental path. The daily
+# incremental short-circuits on no-change days, so a back-dated edit to an old
+# recall (or a missed day) could slip past it; the full HTML re-scrape here
+# re-verifies the whole corpus. Purely additive to bronze — content-hash dedup
+# absorbs duplicate rows and the incremental extractor owns source_watermarks,
+# so a rescan stays invisible to freshness alerts.
+#
+# No --start-date / --end-date inputs: USCG recalls have no date-range query
+# surface (the deep rescan re-scrapes the full listing). No USCG auth secrets —
+# public scraped source, no key required.
+
+on:
+  # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
+  schedule:
+    - cron: "15 6 1 * *" # monthly, 06:15 UTC on the 1st (ADR 0010 grid)
+  workflow_dispatch:
+    inputs:
+      change_type:
+        description: "Run label for extraction_runs (default: routine)"
+        required: false
+        default: routine
+        type: choice
+        options:
+          - routine
+          - historical_seed
+          - schema_rebaseline
+          - hash_helper_rebaseline
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  deep-rescan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate required secrets
+        run: |
+          [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
+          [[ -n "$R2_BUCKET_NAME" ]] || (echo "::error::R2_BUCKET_NAME secret is missing" && exit 1)
+          [[ -n "$R2_ACCOUNT_ID" ]] || (echo "::error::R2_ACCOUNT_ID secret is missing" && exit 1)
+          [[ -n "$R2_ACCESS_KEY_ID" ]] || (echo "::error::R2_ACCESS_KEY_ID secret is missing" && exit 1)
+          [[ -n "$R2_SECRET_ACCESS_KEY" ]] || (echo "::error::R2_SECRET_ACCESS_KEY secret is missing" && exit 1)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install
+      - run: uv sync --frozen
+
+      - name: Run USCG deep rescan
+        # On a schedule trigger the dispatch input is absent (""), so default to
+        # routine — a scheduled rescan is a routine re-verification. An operator
+        # dispatching historical_seed still wins.
+        run: uv run recalls deep-rescan uscg --change-type "${{ github.event.inputs.change_type || 'routine' }}"
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}

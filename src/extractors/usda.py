@@ -119,6 +119,10 @@ class UsdaExtractor(FsisConditionalGetExtractor[UsdaFsisRecord]):
     """
 
     source_name: str = _USDA_SOURCE
+    # ADR 0026 / C16: USDA full-dumps the entire corpus every run (Finding D), so each successful
+    # run is a complete presence snapshot — this extractor (and its deep-rescan loader) writes the
+    # manifest. See Extractor.writes_presence_manifest + DedupContract.default_track_presence.
+    writes_presence_manifest: bool = True
     # settings, etag_enabled (production default ON since 2026-05-09 per Finding P —
     # etag_viability.sql green-lit it), the engine/R2 + ETag-capture state, and
     # model_post_init are inherited from FsisConditionalGetExtractor.

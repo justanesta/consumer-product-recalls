@@ -6,6 +6,9 @@ name: Extract USDA FSIS Recalls
 # dataset every run; bronze content-hash dedup handles idempotency.
 
 on:
+  # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
+  schedule:
+    - cron: "20 2 * * *" # daily 02:20 UTC (ADR 0010 grid)
   workflow_dispatch:
     inputs:
       lookback_days:
@@ -16,6 +19,7 @@ on:
 jobs:
   extract:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0

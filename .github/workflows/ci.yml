@@ -34,6 +34,12 @@ jobs:
       - name: Type check (pyright)
         run: uv run pyright
 
+      # Defense in depth (ADR 0018 §3): the same hooks run as pre-commit locally,
+      # but CI re-runs them on every PR so a developer who skipped
+      # `pre-commit install` (or used `--no-verify`) still gets caught.
+      - name: Pre-commit (all hooks)
+        run: uv run pre-commit run --all-files
+
       - name: Run tests
         run: uv run pytest --cov-fail-under=85
         env:
@@ -58,6 +64,16 @@ jobs:
           NEON_USER: ${{ secrets.NEON_USER }}
           NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
           NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
+
+      - name: E2E smoke + invariant-fire (ephemeral Neon branch, C24/C30)
+        # Provisions a throwaway Neon branch (test_db_url, C23), builds a model + proves the
+        # assert_no_orphan_products invariant fires on a planted violation; deletes the branch on
+        # teardown. The dbt subprocess gets its connection from the branch URI. Under the 10-min
+        # budget (one staging view + two singular-test runs).
+        run: uv run pytest tests/e2e -q
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
 
       # dbt build against live Neon is Phase 7 (production CI per ADR 0018);
       # PR checks stop at `dbt parse` for now. Models are validated against

@@ -1,6 +1,6 @@
 # 0036 — Cross-source canonical silver column naming
 
-- **Status:** Proposed — policy written 2026-06-02 (decisions **D1–D7** resolved in [`cross_source_consolidation.md`](../audit/cross_source_consolidation.md) §0). **Ratifies → Accepted** when `feature/silver-field-remap` merges with the renames applied (W4).
+- **Status:** Accepted — ratified at the **#58 merge** (`feature/silver-field-remap`, commit 728a9a3) with the renames applied (W4), per the PR-merge status-flip convention. Policy written 2026-06-02 (decisions **D1–D7** resolved in [`cross_source_consolidation.md`](../audit/cross_source_consolidation.md) §0).
 - **Date:** 2026-06-02
 - **Owning plan:** [`project_scope/silver-field-remap-plan.md`](../../project_scope/silver-field-remap-plan.md) (W2/W3)
 - **Substantive home:** [`documentation/audit/cross_source_consolidation.md`](../audit/cross_source_consolidation.md) — §1–§3 the full field→canonical-column map, §5 the rename ledger, §0 the resolved naming decisions. This ADR records the **policy + rationale**; the per-concept detail stays there (single-home).

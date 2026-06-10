@@ -1,6 +1,21 @@
 version: 2
 
 models:
+  - name: dim_date
+    description: >
+      Generated calendar dimension (ADR 0038 §2; built 2026-06-08 decision). One row per
+      calendar day, 1960-01-01..(current year + 2, dynamic). Replaces the inline date_trunc(published_at)
+      across the date-grained fct_* models (the C11 wiring step). dim_ prefix per ADR 0038.
+    columns:
+      - name: date_day
+        description: Calendar day — the unique dimension key.
+        tests: [not_null, unique]
+      - name: year
+        tests: [not_null]
+      - name: us_fiscal_year
+        description: US federal fiscal year (starts Oct 1, labelled by the year it ends in).
+        tests: [not_null]
+
   - name: fct_recalls_by_month
     description: Monthly recall counts per source + 'ALL' rollup (GROUPING SETS). Renamed from recalls_by_month.
     columns:
@@ -111,17 +126,26 @@ models:
 
   - name: fct_units_recalled
     description: >
-      Units recalled per source × month — NHTSA (vehicles) + USCG (boats) ONLY (the clean-count
-      sources). NOT cross-source comparable; no 'ALL' rollup. NHTSA potaff is collapsed to one count
-      per recall first (it repeats across component rows, else ~100x overcount). Free-text-units
-      sources (CPSC/FDA/USDA, incl. USDA pounds) deferred to the units-enrichment TODO.
+      Units recalled per source × unit_category × month. Per-source the measure differs (NHTSA/USCG
+      = vehicles/boats potentially affected; FDA = quantity distributed; USDA = weight recovered), so
+      it is NOT cross-source comparable — always filter by source, no 'ALL' rollup. unit_category
+      (count/weight/volume/grouping) keeps incommensurable units apart. NHTSA potaff is collapsed to
+      one count per recall (repeats across component rows). FDA/USDA come from the C13 quantity parse,
+      basis-aware: per_product rows are summed, total_all_products (a recall-wide total repeated per
+      product row) is max'd. CPSC remains free-text-only (no parse).
     columns:
       - name: source
         tests:
           - not_null
           - accepted_values:
               arguments:
-                values: ['NHTSA', 'USCG']
+                values: ['NHTSA', 'USCG', 'FDA', 'USDA']
+      - name: unit_category
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['count', 'weight', 'volume', 'grouping']
       - name: period
         tests: [not_null]
       - name: total_units
@@ -210,16 +234,19 @@ models:
   - name: fct_recalls_by_geography
     description: >
       Recalls per US state, two lenses (Phase 6e, ADR 0038): 'distribution' (where the product went,
-      from recall_distribution_area — FDA+USDA) and 'firm_location' (where the firm is registered,
-      from the SCD-2 sidecars — USDA+USCG+FDA). GROUPING SETS emits per-source rows + an 'ALL'
-      all-source rollup. State codes constrained to the us_state_abbr seed.
+      from recall_distribution_area — FDA+USDA) and 'firm_registration' (where the firm is registered,
+      from the SCD-2 sidecars — USDA+USCG+FDA; renamed from 'firm_location' for honesty, C17). A recall
+      is counted in EVERY state where any of its firms is registered (industry-footprint reading), so
+      per-state counts sum to more than the distinct-recall total; the C18 single-primary-state collapse
+      was reverted (it attributed an arbitrary state to 6.6% of recalls). GROUPING SETS emits per-source
+      rows + an 'ALL' all-source rollup. State codes constrained to the us_state_abbr seed.
     columns:
       - name: geography_basis
         tests:
           - not_null
           - accepted_values:
               arguments:
-                values: ['distribution', 'firm_location']
+                values: ['distribution', 'firm_registration']
       - name: source
         tests:
           - not_null
@@ -227,6 +254,29 @@ models:
               arguments:
                 values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG', 'ALL']
       - name: state_code
+        tests:
+          - not_null
+      - name: recall_count
+        tests:
+          - not_null
+
+  - name: fct_recalls_by_country
+    description: >
+      Recalls per distribution COUNTRY (Phase 7, C12 follow-on) — the country analogue of
+      fct_recalls_by_geography's 'distribution' state lens. FDA + USDA only (the sources with a
+      distribution field). country_code is ISO-3166-1 alpha-2; 'US' is DERIVED from
+      distribution_scope (Nationwide/Regional) + distribution_state_codes (not stored in silver,
+      which keeps distribution_country_codes a foreign-only array), foreign codes unnest that array.
+      Multi-valued: a US+abroad recall counts once for US and once per foreign country, so per-country
+      counts sum to more than the distinct-recall total. GROUPING SETS adds the 'ALL'-source rollup.
+    columns:
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['FDA', 'USDA', 'ALL']
+      - name: country_code
         tests:
           - not_null
       - name: recall_count

@@ -11,13 +11,13 @@ order by recall_count desc limit 12;
 
 \echo '=== top 12 FIRM-LOCATION-lens states (ALL sources) — where firms are registered ==='
 select state_code, recall_count from fct_recalls_by_geography
-where geography_basis = 'firm_location' and source = 'ALL'
+where geography_basis = 'firm_registration' and source = 'ALL'
 order by recall_count desc limit 12;
 
 \echo '=== firm-location coverage by source (FDA/USDA/USCG direct; CPSC/NHTSA only via cross-source-shared firms) ==='
 select source, count(*) as n_state_rows, sum(recall_count) as total_recall_states
 from fct_recalls_by_geography
-where geography_basis = 'firm_location' and source <> 'ALL'
+where geography_basis = 'firm_registration' and source <> 'ALL'
 group by source order by source;
 
 \echo '=== cross-source inheritance proof: CPSC/NHTSA recalls whose firm carries an FDA/USDA/USCG address ==='
@@ -27,8 +27,8 @@ from recall_event_firm ref
 join recall_event re on re.recall_event_id = ref.recall_event_id and re.source in ('CPSC', 'NHTSA')
 join firm f on f.firm_id = ref.firm_id
 cross join lateral jsonb_array_elements_text(coalesce(f.observed_company_ids, '[]'::jsonb)) as cid(company_id)
-left join firm_establishment_attributes ea on ea.establishment_id = cid.company_id
-left join firm_manufacturer_attributes ma  on ma.mic = cid.company_id
+left join firm_usda_attributes ea on ea.establishment_id = cid.company_id
+left join firm_uscg_attributes ma  on ma.mic = cid.company_id
 left join firm_fda_attributes fa           on fa.firm_fei_num::text = cid.company_id
 where coalesce(ea.state, ma.state, fa.firm_state_cd) is not null
 limit 25;

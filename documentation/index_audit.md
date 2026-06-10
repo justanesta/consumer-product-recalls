@@ -43,8 +43,8 @@ All on `materialized='table'` models (the SCD-2 sidecars are current tables, ind
 | `recall_event_press_release` | unique `recall_event_press_release_id`; `recall_event_id` |
 | `recall_event_establishment_resolution` | unique `recall_event_id` |
 | `recall_distribution_area` | unique `recall_event_id`; **GIN** `distribution_state_codes` (array containment) |
-| `firm_establishment_attributes` | unique `establishment_id`; `state` |
-| `firm_manufacturer_attributes` | unique `mic`; `state` |
+| `firm_usda_attributes` | unique `establishment_id`; `state` |
+| `firm_uscg_attributes` | unique `mic`; `state` |
 | `firm_fda_attributes` | unique `firm_fei_num`; `firm_state_cd`; **functional** `(firm_fei_num::text)` (post_hook) |
 | `uscg_mic_reassignment_years` | unique `mic` |
 

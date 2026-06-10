@@ -2,8 +2,8 @@
 -- Workstream W1 of the (b) capture-expansion PR
 -- (project_scope/silver-field-capture-expansion-plan.md).
 --
--- The two existing firm sidecars (firm_establishment_attributes,
--- firm_manufacturer_attributes) are keyed on their source's registry id
+-- The two existing firm sidecars (firm_usda_attributes,
+-- firm_uscg_attributes) are keyed on their source's registry id
 -- (establishment_number / mic) and fed by a one-row-per-entity directory source.
 -- FDA has NO directory — its firm fields ride inline on the recall feed, one row
 -- per product — so firm_fda_attributes must collapse to one row per key. This

@@ -38,8 +38,8 @@ firm_attr_rows as (
         fa.firm_fei_num,
         to_jsonb(fa) as fda_json
     from firm_ids fi
-    left join {{ ref('firm_establishment_attributes') }} ea on ea.establishment_id = fi.company_id
-    left join {{ ref('firm_manufacturer_attributes') }} ma  on ma.mic = fi.company_id
+    left join {{ ref('firm_usda_attributes') }} ea on ea.establishment_id = fi.company_id
+    left join {{ ref('firm_uscg_attributes') }} ma  on ma.mic = fi.company_id
     left join {{ ref('firm_fda_attributes') }} fa           on fa.firm_fei_num::text = fi.company_id
 ),
 
@@ -53,42 +53,59 @@ firm_attrs as (
     group by firm_id
 ),
 
-firm_event_stats as (
+-- Single MATERIALIZED pass over the firm⋈recall-event bridge — previously scanned 2-3× (event stats,
+-- source counts, and the product fan-out each re-joined recall_event_firm). One row per (firm, event,
+-- role); count(distinct event) collapses the role duplication.
+firm_recalls as materialized (
     select
         ref.firm_id,
-        count(distinct ref.recall_event_id)                                  as total_recalls,
-        count(distinct ref.recall_event_id) filter (where re.is_active)       as active_recalls,
-        min(re.published_at)                                                  as first_recall_at,
-        max(re.published_at)                                                  as last_recall_at,
-        jsonb_agg(distinct ref.role)                                          as roles
+        ref.recall_event_id,
+        ref.role,
+        re.source,
+        re.is_active,
+        re.published_at
     from {{ ref('recall_event_firm') }} ref
     join {{ ref('recall_event') }} re on re.recall_event_id = ref.recall_event_id
-    group by ref.firm_id
 ),
 
-firm_source_counts as (
+firm_event_stats as (
     select
-        ref.firm_id,
-        re.source,
-        count(distinct ref.recall_event_id) as cnt
-    from {{ ref('recall_event_firm') }} ref
-    join {{ ref('recall_event') }} re on re.recall_event_id = ref.recall_event_id
-    group by ref.firm_id, re.source
+        firm_id,
+        count(distinct recall_event_id)                          as total_recalls,
+        count(distinct recall_event_id) filter (where is_active) as active_recalls,
+        min(published_at)                                        as first_recall_at,
+        max(published_at)                                        as last_recall_at,
+        jsonb_agg(distinct role)                                 as roles
+    from firm_recalls
+    group by firm_id
 ),
 
 firm_source_agg as (
     select firm_id, jsonb_object_agg(source, cnt) as recalls_by_source
-    from firm_source_counts
+    from (
+        select firm_id, source, count(distinct recall_event_id) as cnt
+        from firm_recalls
+        group by firm_id, source
+    ) s
     group by firm_id
 ),
 
+-- distinct_products per firm WITHOUT the firm×product fan-out that made this the ~180s bottleneck: a
+-- multi-firm, multi-product NHTSA recall (e.g. a 139-component Takata campno) exploded ref×rp into
+-- firms×products rows before count(distinct). Instead count products per EVENT once, then sum over the
+-- firm's distinct events — a recall_product_id belongs to exactly one event, so the per-event distinct
+-- counts sum to the firm's distinct-product total (no double-count).
+event_products as (
+    select recall_event_id, count(distinct recall_product_id) as n_products
+    from {{ ref('recall_product') }}
+    group by recall_event_id
+),
+
 firm_product_counts as (
-    select
-        ref.firm_id,
-        count(distinct rp.recall_product_id) as distinct_products
-    from {{ ref('recall_event_firm') }} ref
-    join {{ ref('recall_product') }} rp on rp.recall_event_id = ref.recall_event_id
-    group by ref.firm_id
+    select fr.firm_id, sum(ep.n_products) as distinct_products
+    from (select distinct firm_id, recall_event_id from firm_recalls) fr
+    join event_products ep on ep.recall_event_id = fr.recall_event_id
+    group by fr.firm_id
 )
 
 select

@@ -211,14 +211,46 @@ uscg_products as (
         )                                             as source_specific_attrs
     from {{ ref('stg_uscg_recalls') }}
     where announced_at is not null
+),
+
+all_products as (
+    select * from cpsc_products
+    union all
+    select * from fda_products
+    union all
+    select * from usda_products
+    union all
+    select * from nhtsa_products
+    union all
+    select * from uscg_products
 )
 
-select * from cpsc_products
-union all
-select * from fda_products
-union all
-select * from usda_products
-union all
-select * from nhtsa_products
-union all
-select * from uscg_products
+-- C14: clean processing-category token array (jsonb), derived ONCE from the unioned `type` column
+-- but ONLY for USDA (USDA's `type` is the multi-value `processing` field; the other sources' `type`
+-- is a single-value product-type code, so it is left scalar and gets NULL tokens). Same comma-split
+-- rationale as recall_event.reason_category_tokens (the 2026-06 jsonb arrays wrap, not split —
+-- Finding S; the 10 processing tokens have no internal commas, guarded by the membership test).
+-- jsonb (not text[]): bronze-consistent, containment-filterable, and dodges the dbt-postgres
+-- unit-test ARRAY-cast limitation. Enables single-category filtering.
+select
+    ap.*,
+    case
+        when ap.source = 'USDA' and ap.type is not null
+        then (
+            select jsonb_agg(trim(t))
+            from unnest(string_to_array(ap.type, ',')) as t
+            where trim(t) <> ''
+        )
+    end as processing_categories,
+    -- C13: structured quantity parsed from the raw number_of_units via quantity_crosswalk
+    -- (`recalls parse-quantities`). FDA + USDA populate it; other sources' number_of_units mostly
+    -- miss the crosswalk (NULL). quantity_basis separates a per-product quantity from a recall-wide
+    -- total (the same total repeats on every product row — fct consumers must not sum those). The raw
+    -- number_of_units is preserved alongside. LEFT JOIN to a unique PK → no fan-out.
+    xq.quantity_value,
+    xq.quantity_unit,
+    xq.quantity_category,
+    xq.quantity_basis
+from all_products ap
+left join {{ source('enrichment', 'quantity_crosswalk') }} xq
+    on xq.raw_quantity = ap.number_of_units

@@ -17,7 +17,7 @@ models:
           - unique
       - name: size
         description: >
-          Establishment size class (→ firm_establishment_attributes.size). warn:
+          Establishment size class (→ firm_usda_attributes.size). warn:
           'N / A' (with spaces, 10.1% / 808 rows) is undocumented beyond the PDF's
           Very Small / Small / Large taxonomy; '' is nullif'd to NULL in staging.
         tests:
@@ -28,7 +28,7 @@ models:
                 severity: warn
       - name: status_regulated_est
         description: >
-          Regulatory status (→ firm_establishment_attributes.status_regulated_est).
+          Regulatory status (→ firm_usda_attributes.status_regulated_est).
           '' = active (90.0%), 'Inactive' (10.0%) — the '' is a meaningful value,
           not a missing sentinel, so it stays in the accepted set.
         tests:

@@ -1,6 +1,6 @@
 # FDA press-release (Tier-3) historical seed + durable deep-rescan — plan
 
-- **Status:** Active (2026-06-07). Step 0 landed; Steps 1–4 pending.
+- **Status:** Active (2026-06-09) — **code/infra complete**: S0–S5 (full-natural-key dedup fix, `deep_rescan_checkpoints` migration 0030, checkpointed recent-first resumable driver + `--checkpointed` CLI, sampling/floor probes, doc-sync) shipped via PR #63, plus self-healing 503 cooldown + circuit-breaker via PR #69. **Remaining: the one-time historical seed RUN** (operator step — WS-H of `project_scope/phase-7-production-plus-todos-plan.md`); archive once it completes (phase-7 plan C36).
 - **Branch:** `feature/capture-fda-press-release-backlog-b`
 - **Owns:** completing the FDA Tier-3 press-release historical seed (the last backlogged
   recall-data capture for production) + the FDA-shaped durability work that the universal

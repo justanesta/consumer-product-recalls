@@ -18,7 +18,7 @@ Dn refs appear inline in §1–§2. All landed on the recommended default; D2/D4
 | **D3** ✅ | `recall_product.type` (5 disjoint domains) | one **`type`** column, source-native, **per-source** accepted_values (no union test) | conform the *column*, not the *domain*. |
 | **D4** ✅ | `recall_initiator` conform | **CONFORM** — FDA `voluntary_type` + NHTSA `influenced_by` co-live in **`recall_initiator`** source-native (**no value changes**) **+ additive derived `initiated_by ∈ {firm, agency}`** | **Only FDA + NHTSA** have the field (CPSC/USDA/USCG = NULL). The firm/agency flag is a *new* column; it never overwrites the raw values. |
 | **D5** ✅ | `number_of_units` text vs int | **`number_of_units` TEXT** canonical **+ Tier-1 `unit_count` INTEGER** for NHTSA/USCG now; FDA/USDA/CPSC `unit_count` → Tier-2 | — |
-| **D6** ✅ | firm sidecar dims | **Option A** — `firm_establishment_attributes` (USDA) + `firm_manufacturer_attributes` (USCG) kept **separate** | — |
+| **D6** ✅ | firm sidecar dims | **Option A** — `firm_usda_attributes` (USDA) + `firm_uscg_attributes` (USCG) kept **separate** | — |
 | **D7** ✅ | `distribution_scope` cross-source | derive Tier-1 **`distribution_scope`** for **FDA *and* USDA**; structured `distribution_states[]` → Tier-2 | — |
 
 ---
@@ -117,9 +117,9 @@ The **conformed dimension** of the whole schema. Keyed on `normalized_name = upp
 | **`role` domain** | `{establishment, manufacturer, importer, distributor, filer}` — **remove `retailer`** (CPSC Option B), **add `filer`** (NHTSA split) |
 | **CPSC** | M/I/D arrays → firm dim; **`retailers[]` removed** → `recall_event.sales_channel_narrative` (Option B, −44.2% of CPSC firm rows). Suffix/DBA fragmentation (Bug 2) → **6b**. `company_id` always empty. |
 | **FDA** | `firm_legal_nam` → `raw_name`, role `establishment`; `company_id = firm_fei_num`. Firm-address fields → **(b)**. |
-| **USDA** | `establishment` → `raw_name`, role `establishment`; `company_id = establishment_number` (join, 100% unique key). Sidecar **`firm_establishment_attributes`** (Option A). |
+| **USDA** | `establishment` → `raw_name`, role `establishment`; `company_id = establishment_number` (join, 100% unique key). Sidecar **`firm_usda_attributes`** (Option A). |
 | **NHTSA** | **filer/manufacturer split** — emit 2 rows: `mfgname` role `filer` + `mfgtxt` role `manufacturer` (95.9% disjoint when differing). `company_id = NULL`. |
-| **USCG** | `coalesce(directory.company_name, recalls.company_name, mic)` → `raw_name`, role `manufacturer`; `company_id = mic`. Sidecar **`firm_manufacturer_attributes`** (Option A). **`mic` is a Type-2-NEED SCD anchor** (reassignment) — see §8. |
+| **USCG** | `coalesce(directory.company_name, recalls.company_name, mic)` → `raw_name`, role `manufacturer`; `company_id = mic`. Sidecar **`firm_uscg_attributes`** (Option A). **`mic` is a Type-2-NEED SCD anchor** (reassignment) — see §8. |
 | **`observed_company_ids`** | union of FDA FEI + USDA establishment_number + USCG MIC (3 namespaces). CPSC/NHTSA contribute none. |
 | **Deferred** | all RapidFuzz / suffix-strip / DBA / `alternate_names` / per-recall disambiguation → **6b**. Keep `firm.sql`/`recall_event_firm.sql` clean for 6b; no fuzzy matching in (a). |
 

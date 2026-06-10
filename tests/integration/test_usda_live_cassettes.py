@@ -32,7 +32,7 @@ no post-recording trimming required.
 To record live cassettes (requires network access; ensure a clean IP to avoid
 Akamai bot-reputation degradation — Finding O in
 documentation/usda/recall_api_observations.md):
-    uv run pytest --vcr-record=all tests/integration/test_usda_live_cassettes.py \\
+    pytest --vcr-record=all tests/integration/test_usda_live_cassettes.py \\
         -k "happy_path_full_dump or content_hash_dedup"
 
 Commit the generated YAML files under tests/fixtures/cassettes/usda/.

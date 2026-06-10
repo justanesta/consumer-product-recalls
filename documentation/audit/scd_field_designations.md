@@ -73,7 +73,7 @@ The catalogue stays honest by a simple loop, not a one-time audit:
 
 **DONE — Phase 6c.3 (2026-06-06).** Four monitors are now wired as `severity=warn` singular tests under `dbt/tests/source_assumptions/` (auto-warn via `dbt_project.yml`); the psql scripts in §4 stay the rich ad-hoc / forensic surface (the dbt tests carry only the CI-alarm slice):
 - `assert_classification_stable` / `assert_lifecycle_stable` — read the classification / lifecycle_status slices of `recall_event_history` (6c.1), which already excludes re-baselines (ADR 0027) and folds cosmetic noise. A returned row ⇒ amendment/transition detected ⇒ graduate that row's designation ASSUMED → MEASURED here.
-- `assert_mic_holder_stable` — the **dynamic** half only: a MIC whose `company_name` changes across `uscg_manufacturer_attributes_snapshot` versions (a forward-observed reassignment). The static source-native recycle surface is already enforced by `assert_uscg_mic_reassignment_flag_present` (6b).
+- `assert_mic_holder_stable` — the **dynamic** half only: a MIC whose `company_name` changes across `firm_uscg_attributes_snapshot` versions (a forward-observed reassignment). The static source-native recycle surface is already enforced by `assert_uscg_mic_reassignment_flag_present` (6b).
 - `assert_no_join_key_erasure_usda` — new erasure tripwire: a USDA join-key field (`establishment`, `company_media_contact`; jsonb arrays per Finding S) populated in a prior snapshot but empty/null in the latest.
 
 ---

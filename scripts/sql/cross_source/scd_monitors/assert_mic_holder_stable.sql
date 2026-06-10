@@ -27,7 +27,7 @@
 -- probe_mic_prior_holder_not_oob.sql. The original paren-only `~ '\(OOB'` undercounted; this now
 -- matches word-boundary `~ '\yOOB\y'` (excludes `(previous name)` renames). Recalled OOB-recycled
 -- accordingly rises 205 -> 221 (the +16 dash-form); has-any-prior-holder is unchanged at 365 of 718.
--- The silver flag firm_manufacturer_attributes.mic_oob_recycled uses the same `\yOOB\y`.
+-- The silver flag firm_uscg_attributes.mic_oob_recycled uses the same `\yOOB\y`.
 
 \set ON_ERROR_STOP on
 \pset null '<NULL>'

@@ -19,7 +19,7 @@
 \pset null '<NULL>'
 
 -- Shared: latest detail per RECALLED MIC that has a prior holder (the 365 set), past-company
--- sentinels cleaned to match firm_manufacturer_attributes / the monitors.
+-- sentinels cleaned to match firm_uscg_attributes / the monitors.
 drop view if exists uscg_refine;
 create temporary view uscg_refine as
 with recall_mics as (

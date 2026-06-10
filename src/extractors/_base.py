@@ -176,6 +176,13 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
     # are observed in production.
     rejection_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
 
+    # ADR 0026 / C16: whether THIS extractor/loader writes the per-run presence manifest. True only
+    # on extractors whose run enumerates the FULL source corpus (a complete presence snapshot):
+    # UsdaExtractor (daily full-dump) and NhtsaDeepRescanLoader (both archives). The daily
+    # NhtsaExtractor pulls POST_2010 only, so it inherits False. Gated together with the contract's
+    # default_track_presence in _maybe_write_presence_manifest.
+    writes_presence_manifest: bool = False
+
     # Response-capture state for the extraction_runs forensic columns (migrations
     # 0010 + 0011). The operation-type subclasses populate these via their
     # _capture_response(); the shared _record_run() template below reads them.
@@ -337,11 +344,17 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
 
         Gated to:
           * ``status == "success"`` — aborted / failed runs do not assert presence.
-          * the source's ``DedupContract.default_track_presence`` (USDA-only initially,
-            ADR 0026); every other source no-ops here.
+          * the source's ``DedupContract.default_track_presence`` ({usda, nhtsa}; ADR 0026 /
+            C16); every other source no-ops here.
+          * ``self.writes_presence_manifest`` — True only on extractors whose run enumerates the
+            FULL corpus (UsdaExtractor's daily full-dump; NhtsaDeepRescanLoader's both-archives
+            pull). NHTSA's daily POST_2010 extract is partial, so it does NOT write the manifest.
           * ``_passing_records`` stashed by :meth:`run` (None on a run that failed before
             validation; ``[]`` on a 304 — both write no manifest).
 
+        The manifest's recall key is ``contract.presence_recall_id_field`` (campno for NHTSA, whose
+        bronze ``source_recall_id`` is the regen-unstable RECORD_ID), defaulting to
+        ``source_recall_id``.
         Quarantined records are excluded by construction — ``run`` stashes the
         invariant-passing records only (ADR 0026 Q2).
         """
@@ -350,12 +363,18 @@ class Extractor[T: BaseModel](abc.ABC, BaseModel):
         contract = DEDUP_CONTRACT_BY_SOURCE_NAME.get(self.source_name)
         if contract is None or not contract.default_track_presence:
             return
+        # Only a run that enumerates the FULL corpus is a complete presence snapshot (C16). USDA's
+        # daily full-dump qualifies; NHTSA only on the deep-rescan (both archives), not the daily
+        # POST_2010 extract — so this is gated per extractor/loader, not just per source.
+        if not self.writes_presence_manifest:
+            return
         langcode_field = "langcode" if "langcode" in contract.identity_fields else None
         rows = build_presence_manifest_rows(
             self._passing_records,
             run_id=run_id,
             source=self.source_name,
             langcode_field=langcode_field,
+            recall_id_field=contract.presence_recall_id_field or "source_recall_id",
         )
         if rows:
             conn.execute(extraction_run_identities.insert(), rows)

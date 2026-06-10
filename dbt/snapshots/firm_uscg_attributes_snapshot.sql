@@ -1,4 +1,4 @@
-{% snapshot uscg_manufacturer_attributes_snapshot %}
+{% snapshot firm_uscg_attributes_snapshot %}
 {{
   config(
     schema='silver_snapshots',

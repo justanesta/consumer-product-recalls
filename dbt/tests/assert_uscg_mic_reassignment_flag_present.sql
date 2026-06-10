@@ -18,7 +18,7 @@
 
 with oob_mics as (
     select upper(trim(mic)) as mic
-    from {{ ref('firm_manufacturer_attributes') }}
+    from {{ ref('firm_uscg_attributes') }}
     where mic_oob_recycled
 ),
 

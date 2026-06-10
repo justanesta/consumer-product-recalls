@@ -1,8 +1,9 @@
 # Deep-rescan reliability & workload — plan
 
-- **Status:** Active — graduation (PR #50) + Tier 1 (PR #51) + Tier 2 (W5; PR #52) + Tier 3 W7+W8
-  (PR #53) merged. W6 (NHTSA inner-SHA short-circuit + migration 0021 + backfill) is in progress as PR #54 on
-  `feature/deep-rescan-nhtsa-short-circuit`; only Tier 4 (W9, W10) remains, both deferred-pending-measurement.
+- **Status:** Active (Tier-4 residual only) — Tiers 1–3 merged (graduation PR #50, Tier 1 PR #51, Tier 2
+  W5 PR #52, Tier 3 W7+W8 PR #53). W6 (NHTSA inner-SHA short-circuit + migration 0021 + backfill) **merged
+  as PR #54** (commit 734c48b). Only Tier 4 (W9 USCG-detail subprocess chunking, W10 NHTSA staging anti-join)
+  remains, both deferred-pending-measurement — this plan stays open to own them.
 - **Owns:** the fix ladder for deep-rescan reliability + workload ahead of Phase-7 scheduled GitHub
   Actions, and the PRE_2010 `response_inner_content_sha256` mitigation (#1–#3).
 - **Points at:** `documentation/audit/deep_rescan_reliability_audit.md` for *what we found* (this doc

@@ -75,3 +75,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# neonctl local context/state (may hold credentials) — never commit
+.neon

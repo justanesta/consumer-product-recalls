@@ -1,9 +1,9 @@
 # Branch sequencing and workflow strategy
 
-- **Status:** Active — as of 2026-06-01: Phase 6a audit done (#39), Phase 6a.5 historical backfill in progress (FDA full-corpus seed run 2026-06-01); the USCG detail-capture branch merged (#42).
+- **Status:** **Complete / Archived** — sunset condition met: Phase 6 complete (implementation_plan marks Phase 6 complete 2026-06-08) and the v1.5 migration (ADR 0034) cutover is done. **Archived 2026-06-09** (phase-7 plan C36) — see `project_scope/archive/branch_sequencing_strategy.md`.
 - **Scope:** Coordinates concurrent workstreams off `main` — Phase 6 execution, NHTSA silver v1.5 migration, weekly daily-findings branches, and (now merged) USCG manufacturer detail capture (Phase 5d Step 7 detail)
 - **Supersedes:** Branching guidance scattered across `project_scope/archive/silver_v15_migration_plan.md` (its "Branching strategy" section, now a pointer back here), `project_scope/archive/phase-6-execution-plan.md`, and prior weekly findings retros
-- **Sunset condition:** Phase 6 complete + v1.5 migration landed (Layer 3 merged); update or delete this doc when both are true
+- **Sunset condition:** Phase 6 complete + v1.5 migration landed (Layer 3 merged) — **MET.**
 
 ## Workstreams in flight
 

@@ -4,14 +4,19 @@ name: Deep Rescan FDA Press Releases
 # historical seed and the catch-all for press releases added to old, otherwise-unchanged
 # events (which the incremental event_lmd cursor misses).
 #
-# CHUNKED BY DESIGN: ~25K GETs at the polite inter-event pace exceeds the GitHub Actions
-# 6h job limit, so run it in chunks. Dispatch with `limit` = chunk size; note the last
-# recall_event_id from the run's work-list log; re-dispatch with that as
-# `resume_after_event_id` plus the same `limit`. Content-hash dedup makes an overlapping
-# re-run idempotent. No date window (press releases have no date-range query surface).
-# No `schedule:` — this is an operator-run seed / drift sweep, not a cron.
+# TWO MODES. The QUARTERLY schedule (and manual checkpointed=true, the default) runs the
+# RESUMABLE, RECENT-FIRST checkpointed seed (ADR 0010): recall_initiation_dt DESC, self-managed
+# batch size + a persistent cursor, so an interruption never loses the dense recent PRs and the
+# sweep resumes across runs. The ~25K GETs at the polite inter-event pace exceed the GitHub Actions
+# 6h limit, so one run does as much as it can and the next resumes from the committed cursor.
+# Manual checkpointed=false is the LEGACY ascending chunked mode: dispatch with `limit` = chunk size,
+# note the last recall_event_id from the work-list log, re-dispatch with that as
+# `resume_after_event_id` + the same `limit`. Content-hash dedup makes overlaps idempotent.
 
 on:
+  # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
+  schedule:
+    - cron: "0 7 1 1,4,7,10 *" # quarterly, 07:00 UTC on the 1st of Jan/Apr/Jul/Oct (ADR 0010 grid)
   workflow_dispatch:
     inputs:
       limit:
@@ -22,6 +27,10 @@ on:
         description: "Resume cursor: skip events with recall_event_id <= N. Blank → from the start."
         required: false
         default: ""
+      checkpointed:
+        description: "true (default) = resumable recent-first checkpointed seed (ignores limit/resume); false = legacy ascending chunked mode."
+        type: boolean
+        default: true
 
 concurrency:
   group: ${{ github.workflow }}
@@ -33,6 +42,7 @@ jobs:
     # Just under the GitHub Actions 6h hard limit — size `limit` so the chunk finishes
     # within this window at the extractor's inter-event pace.
     timeout-minutes: 350
+    if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -61,11 +71,18 @@ jobs:
       - name: Run FDA press-release deep rescan
         run: |
           ARGS=()
-          if [[ -n "${{ github.event.inputs.limit }}" ]]; then
-            ARGS+=(--limit "${{ github.event.inputs.limit }}")
-          fi
-          if [[ -n "${{ github.event.inputs.resume_after_event_id }}" ]]; then
-            ARGS+=(--resume-after-event-id "${{ github.event.inputs.resume_after_event_id }}")
+          # Scheduled quarterly run, or manual checkpointed=true (the default): the resumable,
+          # recent-first checkpointed seed (ADR 0010). It self-manages batch size + a persistent
+          # cursor (recall_initiation_dt DESC), so it resumes across runs — no manual --limit/--resume.
+          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.checkpointed }}" == "true" ]]; then
+            ARGS+=(--checkpointed)
+          else
+            if [[ -n "${{ github.event.inputs.limit }}" ]]; then
+              ARGS+=(--limit "${{ github.event.inputs.limit }}")
+            fi
+            if [[ -n "${{ github.event.inputs.resume_after_event_id }}" ]]; then
+              ARGS+=(--resume-after-event-id "${{ github.event.inputs.resume_after_event_id }}")
+            fi
           fi
           uv run recalls deep-rescan fda_press_releases "${ARGS[@]}"
         env:

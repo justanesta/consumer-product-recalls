@@ -20,6 +20,9 @@ name: Deep Rescan CPSC Recalls
 # floor is fixed in code. No CPSC auth secrets — public source, no key required.
 
 on:
+  # Guarded by vars.CRON_ENABLED (off until go-live, phase-7 C40).
+  schedule:
+    - cron: "0 5 * * 0" # weekly Sun 05:00 UTC (ADR 0010 grid)
   workflow_dispatch:
     inputs:
       change_type:
@@ -41,6 +44,7 @@ jobs:
   deep-rescan:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -63,7 +67,10 @@ jobs:
       - run: uv sync --frozen
 
       - name: Run CPSC deep rescan
-        run: uv run recalls deep-rescan cpsc --change-type "${{ github.event.inputs.change_type }}"
+        # On a schedule trigger the dispatch input is absent (""), so default to
+        # routine — a scheduled rescan is a routine re-verification. An operator
+        # dispatching historical_seed still wins.
+        run: uv run recalls deep-rescan cpsc --change-type "${{ github.event.inputs.change_type || 'routine' }}"
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}

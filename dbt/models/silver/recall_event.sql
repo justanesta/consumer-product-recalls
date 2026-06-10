@@ -54,6 +54,7 @@ with cpsc_events as (
         'Unspecified'                          as distribution_scope,
         cast(null as text)                     as distribution_states,
         cast(null as timestamptz)              as terminated_at,
+        cast(null as int)                      as terminated_year,
         cast(null as timestamptz)              as campaign_started_at,
         cast(null as timestamptz)              as campaign_ended_at,
         cast(null as timestamptz)              as last_editorial_date,
@@ -146,6 +147,7 @@ fda_events as (
         {{ classify_distribution_scope('distribution_area_summary_txt') }} as distribution_scope,
         cast(null as text)                                               as distribution_states,
         termination_dt                                                   as terminated_at,
+        extract(year from termination_dt)::int                           as terminated_year,
         cast(null as timestamptz)                                        as campaign_started_at,
         cast(null as timestamptz)                                        as campaign_ended_at,
         cast(null as timestamptz)                                        as last_editorial_date,
@@ -223,6 +225,10 @@ usda_events as (
         {{ classify_distribution_scope('states') }}        as distribution_scope,
         states                                             as distribution_states,
         closed_at                                          as terminated_at,
+        -- C6 (Finding S): year-grain close. closed_year (year-only) when the precise
+        -- closed_date is gone (post-2026-06); the year of closed_at for older records.
+        -- terminated_at stays NULL for year-only closes — no fabricated date.
+        coalesce(closed_year::int, extract(year from closed_at)::int) as terminated_year,
         cast(null as timestamptz)                          as campaign_started_at,
         cast(null as timestamptz)                          as campaign_ended_at,
         cast(null as timestamptz)                          as last_editorial_date,
@@ -296,6 +302,7 @@ nhtsa_events as (
         'Nationwide'                                                   as distribution_scope,  -- derived default: federal vehicle recalls are national (no state field)
         cast(null as text)                                             as distribution_states,
         cast(null as timestamptz)                                      as terminated_at,
+        cast(null as int)                                              as terminated_year,
         cast(null as timestamptz)                                      as campaign_started_at,
         cast(null as timestamptz)                                      as campaign_ended_at,
         cast(null as timestamptz)                                      as last_editorial_date,
@@ -372,6 +379,7 @@ uscg_events as (
         'Unspecified'                                                  as distribution_scope,
         cast(null as text)                                             as distribution_states,
         case_close_date                                                as terminated_at,
+        extract(year from case_close_date)::int                        as terminated_year,
         campaign_open_date                                             as campaign_started_at,
         campaign_close_date                                            as campaign_ended_at,
         last_date                                                      as last_editorial_date,
@@ -421,14 +429,35 @@ uscg_events as (
         raw_landing_path
     from {{ ref('stg_uscg_recalls') }}
     where announced_at is not null
+),
+
+all_events as (
+    select * from cpsc_events
+    union all
+    select * from fda_events
+    union all
+    select * from usda_events
+    union all
+    select * from nhtsa_events
+    union all
+    select * from uscg_events
 )
 
-select * from cpsc_events
-union all
-select * from fda_events
-union all
-select * from usda_events
-union all
-select * from nhtsa_events
-union all
-select * from uscg_events
+-- C14: clean reason-token array (jsonb), derived ONCE from the unioned reason_category (USDA-only
+-- multi-value; the others' reason_category is NULL → tokens NULL). NOTE: the 2026-06 jsonb arrays
+-- WRAP the comma-joined string rather than splitting it (Finding S), so tokenizing requires a
+-- comma-split regardless of the array; the 9 reason tokens have no internal commas, so it's clean.
+-- jsonb (not text[]): matches the bronze representation, supports containment filtering
+-- (`reason_category_tokens ? 'Unreported Allergens'`), and avoids the dbt-postgres unit-test
+-- `cast(null as ARRAY)` limitation that a text[] column trips.
+select
+    *,
+    case
+        when reason_category is not null
+        then (
+            select jsonb_agg(trim(t))
+            from unnest(string_to_array(reason_category, ',')) as t
+            where trim(t) <> ''
+        )
+    end as reason_category_tokens
+from all_events
