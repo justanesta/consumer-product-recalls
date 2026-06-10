@@ -13,9 +13,14 @@
 -- GRAIN TRAPS:
 --   * NHTSA potaff repeats across a campaign's component rows → collapse to ONE max per recall
 --     (verified CONSTANT 2026-06-07, so max is EXACT). USCG is 1 product/recall (no explosion).
---   * FDA `total_all_products` rows carry a recall-WIDE total that repeats on every product row, so
---     take the MAX (the distinct total), NOT a sum; `per_product` rows SUM across the recall's
---     products. The C13 `quantity_basis` flag drives this — without it, totals would be summed N×.
+--   * FDA/USDA distributed-quantity is RECALL-grain free text: the recall-wide figure repeats
+--     identically across the recall's product rows (e.g. "15,779,607 units" on all 14 rows), so a SUM
+--     over-counts by the row count. The recall-wide figure is the MAX per (recall, category) — listed
+--     per-variety subtotals are always < the total. So `units = max(quantity_value)`, basis-agnostic
+--     (2026-06-09 corpus dump — scripts/sql/cross_source/silver/dump_quantity_discordance.sql; replaces
+--     the basis-sum/GREATEST logic). The v1 parser emits a value only for clean single-quantity strings
+--     and NULLs messy multi-product breakdowns (quantity.py precision guards; messy tail → AI extractor
+--     v2, freetext-enrichment-backlog), so the rows reaching here are clean → max is the recall total.
 -- total_units is a SUM OF PER-RECALL magnitudes (a recall-magnitude measure), not unique items.
 with clean_count as (
     select
@@ -36,11 +41,8 @@ parsed_qty as (
         re.recall_event_id,
         re.published_at,
         rp.quantity_category as unit_category,
-        case
-            when bool_or(rp.quantity_basis = 'total_all_products')
-            then max(rp.quantity_value) filter (where rp.quantity_basis = 'total_all_products')
-            else sum(rp.quantity_value) filter (where rp.quantity_basis = 'per_product')
-        end as units
+        -- max, not sum: FDA/USDA quantity is recall-grain (repeats across product rows) — see header.
+        max(rp.quantity_value) as units
     from {{ ref('recall_event') }} re
     join {{ ref('recall_product') }} rp on rp.recall_event_id = re.recall_event_id
     where re.source in ('FDA', 'USDA')

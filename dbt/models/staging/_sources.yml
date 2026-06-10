@@ -342,8 +342,9 @@ sources:
       - name: extraction_run_identities
         description: >
           Per-run presence manifest (ADR 0026, migration 0027): one row per (run_id, source,
-          source_recall_id, langcode) returned by a successful run. USDA-only today
-          (DedupContract.default_track_presence). Consumed by recall_lifecycle for
+          source_recall_id, langcode) returned by a successful run. Written by USDA (daily) +
+          NHTSA (deep-rescan only; keyed on campno) — DedupContract.default_track_presence +
+          Extractor.writes_presence_manifest. Consumed by recall_lifecycle for
           is_currently_active / was_ever_retracted; join run_id → extraction_runs for run timing.
         columns:
           - name: run_id

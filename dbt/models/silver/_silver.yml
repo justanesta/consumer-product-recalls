@@ -80,9 +80,14 @@ models:
               arguments:
                 values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
       # C13: structured quantity parsed from number_of_units via quantity_crosswalk (FDA + USDA;
-      # NULL for other sources / unparseable). Raw number_of_units is preserved alongside.
+      # NULL for other sources / unparseable). v1 is PRECISION-scoped (2026-06-09): a value is emitted
+      # only for clean single-quantity strings (~70% value+unit, +17% value-only); the messy ~10%
+      # (lot/list/code/multi-product) is deliberately NULL, deferred to an AI extractor (v2,
+      # freetext-enrichment-backlog). Raw number_of_units is preserved alongside.
       - name: quantity_value
-        description: Parsed numeric quantity (NULL for sentinels / un-numbered text).
+        description: >
+          Parsed numeric quantity for clean single-quantity strings; NULL for sentinels, un-numbered
+          text, and the deliberately-unparsed messy tail (lot/list/code/multi-product → v2).
       - name: quantity_unit
         description: Canonical unit (each / case / bottle / pound / …); NULL when no unit recognized.
       - name: quantity_category
@@ -463,8 +468,9 @@ models:
       Per-recall lifecycle summary (ADR 0026 / Phase 6c.2), one row per recall_event.
       first_seen_at / last_seen_at / edit_count are bronze-derived (all 5 sources, manifest-
       independent — but bounded by the 6a.5 reseed; use announced_at for recall age).
-      is_currently_active / was_ever_retracted come from the presence manifest and are USDA-only
-      in v1 (NULL elsewhere until a source's track_presence manifest lands). See silver_design_notes.md.
+      is_currently_active / was_ever_retracted come from the presence manifest (USDA + NHTSA; C16).
+      NHTSA presence keys on campno and is written only by the full-corpus deep-rescan, so it is NULL
+      until the first deep-rescan banks a manifest (WS-H). NULL for CPSC/FDA/USCG. See silver_design_notes.md.
     columns:
       - name: recall_event_id
         description: FK to recall_event (1:1).

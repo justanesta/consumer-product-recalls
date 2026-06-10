@@ -147,19 +147,25 @@ usda_lifecycle as (
 ),
 
 -- NHTSA presence-manifest dims (C16) --------------------------------------------------------
--- IDENTICAL shape to USDA, with ONE critical gate: only FULL-enumerating runs
--- (change_type='historical_seed' — the deep-rescan/seed) write a COMPLETE NHTSA manifest. Routine
--- cron runs are incremental, so only changed campnos reach _passing_records (the manifest source)
--- and their manifest is PARTIAL — counting them would falsely read most campnos as "absent". Gating
--- to historical_seed means: until a full NHTSA deep-rescan/seed runs (WS-H H-b), nhtsa_enum_runs is
--- EMPTY → every NHTSA presence dim is NULL, never wrong. (USDA needs no gate — it full-dumps each
--- run.) The signal is OBSERVED feed presence (campno dropped from / present in the source pull), NOT
--- an authoritative agency retraction — interpreting "withdrawn on date X" is v2 (ADR 0026).
+-- IDENTICAL shape to USDA. The manifest is keyed on campno (recall-event grain) — NOT the bronze
+-- source_recall_id (RECORD_ID, regen-unstable) — and is written ONLY by the deep-rescan loader
+-- (NhtsaDeepRescanLoader.writes_presence_manifest=True), because only the deep-rescan enumerates the
+-- FULL corpus (both PRE_2010 + POST_2010 archives). The daily incremental extract pulls POST_2010
+-- only, so it is NOT a full-corpus snapshot and deliberately writes no manifest — otherwise pre-2010
+-- campnos (absent from the daily pull) would read as false retractions. So nhtsa_enum_runs are the
+-- deep-rescan runs (no change_type gate — the already-scheduled monthly deep-rescan refreshes
+-- presence even as change_type='routine'). Until the first deep-rescan banks a manifest (WS-H H-b),
+-- these CTEs are EMPTY → NHTSA presence dims are NULL, never wrong. The signal is OBSERVED feed
+-- presence (campno present in / absent from the full-corpus pull), NOT an authoritative agency
+-- retraction — interpreting "withdrawn on date X" is v2 (ADR 0026).
 nhtsa_enum_runs as (
+    -- runs that wrote NHTSA manifest rows = the deep-rescan full-corpus enumerations (the daily
+    -- POST_2010 extract does NOT write the manifest — see the block comment above). No change_type
+    -- filter: the monthly scheduled deep-rescan (change_type='routine') refreshes presence too.
     select eri.run_id, max(er.started_at) as started_at
     from {{ source('pipeline', 'extraction_run_identities') }} eri
     join {{ source('pipeline', 'extraction_runs') }} er on er.run_id = eri.run_id
-    where eri.source = 'nhtsa' and er.change_type = 'historical_seed'
+    where eri.source = 'nhtsa'
     group by eri.run_id
 ),
 

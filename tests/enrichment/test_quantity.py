@@ -89,6 +89,20 @@ _CASES: list[tuple[str, Decimal | None, str | None, str | None, str]] = [
     ("1547 US; 2772 OUS", D("1547"), None, None, PER_PRODUCT),
     ("664 x 12 oz", D("664"), None, None, PER_PRODUCT),
     ("26,160 cartons of 110 chewing pieces", D("26160"), "carton", "count", PER_PRODUCT),
+    # --- "N/M unit" container compounds (ISSUE-3): the leading number is a container COUNT; the
+    #     slash-unit is the per-container SIZE, so drop the unit (keep the value) ---
+    ("78/50-lb bags", D("78"), None, None, PER_PRODUCT),
+    ("1,008/50 lb bags", D("1008"), None, None, PER_PRODUCT),
+    # a bare leading weight before the "N/M ..." breakdown is a real total weight (guard skips it):
+    ("1,165 lbs - 160/1 lb bags", D("1165"), "pound", "weight", PER_PRODUCT),
+    # --- v1 precision guards: leading number is an IDENTIFIER, not the quantity -> NULL (AI v2) ---
+    ("09328: 80/10 lb. tubs; 2872: 2/10 lb. tubs", None, None, None, PER_PRODUCT),
+    ("Lot 2101405: 32 lbs., Lot 2831405: 32 lbs.", None, None, None, PER_PRODUCT),
+    ("1) 65,904 units; 2) 270,321 units", None, None, None, PER_PRODUCT),
+    ("Total (Listed #1 thru 101) = 304735 units", None, None, None, TOTAL_ALL_PRODUCTS),
+    ("822304001 - (1 Lot) 2,351 vials", None, None, None, PER_PRODUCT),  # leading code, dash sep
+    # a CLEAN leading quantity is KEPT despite a trailing breakdown/lot mention (leading-only):
+    ("1,740 total units; 597 from lot 0415", D("1740"), "each", "count", TOTAL_ALL_PRODUCTS),
     # --- niche / unknown units: value kept, unit None (deferred tail) ---
     ("126 corneas", D("126"), None, None, PER_PRODUCT),
     ("97 loaves", D("97"), None, None, PER_PRODUCT),

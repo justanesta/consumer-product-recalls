@@ -218,8 +218,10 @@ migration command (step 3).
    `recalls_app`.
 2. **Grant runtime privileges** — connect as the **owner** and run the single-home script
    [`scripts/sql/_pipeline/grant_recalls_app.sql`](../scripts/sql/_pipeline/grant_recalls_app.sql)
-   (SELECT/INSERT/UPDATE on all tables + sequences + default privileges for future tables; no
-   DELETE/TRUNCATE anywhere — the runtime never needs them).
+   (SELECT/INSERT/UPDATE on all tables + sequences + default privileges for future tables; plus
+   TRUNCATE on the two rebuilt-each-run crosswalk tables — firm_crosswalk (granted in this script)
+   and quantity_crosswalk (granted in migration 0032), which `resolve-firms` / `parse-quantities`
+   truncate-reload; no DELETE, and no TRUNCATE elsewhere — the runtime needs nothing more).
 3. **Apply the mutation guard** — run migration 0031 **as the owner**:
    ```bash
    NEON_DATABASE_URL="<privileged-owner-DSN>" alembic upgrade head

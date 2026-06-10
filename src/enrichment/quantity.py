@@ -2,19 +2,25 @@
 
 FDA ``product_distributed_quantity`` and USDA ``qty_recovered`` are firm-typed free text
 ("1,200 cases", "919,616.31 total pounds, for all products", "Unknown", "one unit"). This module
-turns them into structured fields for ``recall_product`` + ``fct_units_recalled``, precision-over-
-recall: a clean leading number + a recognized unit, plus a ``basis`` flag distinguishing a
-per-product quantity from a recall-wide **total** — the same total repeats on every product row of a
-recall, so ``fct_units_recalled`` must sum only ``per_product`` (take one-per-recall for totals).
-Ambiguous / narrative values yield NULLs.
+turns them into structured fields for ``recall_product`` + ``fct_units_recalled``.
+
+**v1 is PRECISION-scoped to shape** (2026-06-09 full-corpus dump). It emits a value only when the
+LEADING number IS the quantity — a clean single-quantity clause (``[approx] <number> [modifier]
+<unit> [total-marker]``): ~70% of rows get value+unit, ~17% a reliable value-only. The messy ~10%
+where the leading number is an IDENTIFIER, not a quantity — lot ids (``Lot 2101405: …``), list
+indices (``1) …``), code prefixes (``09328: …``), N/M container compounds, multi-product breakdowns
+— yields NULL rather than a confidently-wrong value (a lot id parsed as millions over-counts the
+gold metric). Reliably extracting that tail needs sentence-level reasoning → deferred to an
+LLM-extractor **v2** (``freetext-enrichment-backlog.md``); the cleaned text stays in
+``recall_product.number_of_units``. ``basis`` is retained as an attribute, but
+``fct_units_recalled`` aggregates with ``max`` per recall+category — the field is recall-grain (the
+recall-wide figure repeats across product rows), so summing over-counts.
 
 Pure + side-effect-free → unit-tested against the full-corpus grammar distribution
-(``tests/enrichment/test_quantity.py``). Designed 2026-06-09 against the 123,548-row FDA +
-4,011-row USDA corpus (plan C13; corpus dump in ``scripts/sql/cross_source/bronze/``). Two design
-decisions the corpus forced: (1) the unit is the first *taxonomy noun* after skipping modifier words
-(``# retail units`` / ``# total units`` are common — naive "first word" picks junk); (2) every
-canonical unit carries a ``category`` (count / weight / volume / grouping) because
-you cannot sum 1,000 units against 1,000 lbs.
+(``tests/enrichment/test_quantity.py``). Two design decisions the corpus forced: (1) the unit is the
+first *taxonomy noun* after skipping modifier words (``# retail units`` / ``# total units`` are
+common — naive "first word" picks junk); (2) every canonical unit carries a ``category`` (count /
+weight / volume / grouping) because you cannot sum 1,000 units against 1,000 lbs.
 """
 
 from __future__ import annotations
@@ -237,9 +243,29 @@ def parse_quantity(raw: str | None) -> ParsedQuantity:
     number_match = _NUMBER_RE.search(body)
     if number_match is None:
         return ParsedQuantity(None, None, None, basis)
+    post = body[number_match.end() :]
+    pre = body[: number_match.start()]
+    # v1 precision guard: the LEADING number is an IDENTIFIER, not the quantity, when immediately
+    # followed by ':' or ')' (code/label "09328:", list index "1)"), by ' - ' (code-list separator,
+    # "822304001 - (1 Lot) 2,351 vials"), or preceded by 'Lot'/'#' ("Lot 2101405:", "#1"). The real
+    # quantity, if any, sits mid/end-string; recovering it is the AI-extractor v2 job — emit NULL
+    # rather than a confidently-wrong value (an 822M lot id landing in the units metric). The dash
+    # rule needs a SPACE before the '-' so it doesn't catch glued units ("1,234-lbs") or a trailing
+    # "<n> <unit> - <breakdown>" ("1,165 lbs - 160/1 lb bags"), where the dash follows the unit.
+    if (
+        re.match(r"^\s*[:)]", post)
+        or re.match(r"^\s+-", post)
+        or re.search(r"(?:\blot\b|#)\s*$", pre, re.IGNORECASE)
+    ):
+        return ParsedQuantity(None, None, None, basis)
     try:
         value = Decimal(number_match.group().replace(",", ""))
     except InvalidOperation:  # pragma: no cover — _NUMBER_RE already guarantees a valid decimal
         value = None
+    # "N/M unit" compound (ISSUE-3): in "1,008/50 lb bags" the leading 1008 is a bag COUNT and the
+    # slash-unit "50 lb" is the per-container size, not the count's unit — keep the value, drop the
+    # unit. A bare "1,165 lbs - 160/1 lb bags" is not this shape (number + " lbs"), so it stays.
+    if re.match(r"^\s*[/\-]\s*[0-9]", post):
+        return ParsedQuantity(value, None, None, basis)
     unit, category = _scan_unit(_WORD_RE.findall(lowered[number_match.end() :]))
     return ParsedQuantity(value, unit, category, basis)
