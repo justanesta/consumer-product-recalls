@@ -200,7 +200,19 @@ Cross-source firm entity resolution — collapsing the name variants exact-match
 
 **Where it sits in the flow.** It is a post-staging, pre-silver-firm step. The user runs `recalls resolve-firms` (Typer CLI), which reads the same `stg_*` views the silver `firm` model reads, clusters the distinct names, and writes `firm_crosswalk` — a Postgres table created by Alembic (migrations 0024/0025) and registered as the dbt source `enrichment.firm_crosswalk`. The silver `firm.sql` and `recall_event_firm.sql` then LEFT JOIN it for an **additive** `canonical_firm_id = coalesce(crosswalk.canonical_firm_id, md5(normalized_name))`. `firm_id` stays `md5(normalized_name)`; fuzzy merges express only through the additive canonical.
 
-`recalls parse-quantities` (Phase 7 C13) runs in the same enrichment stage: it reads distinct FDA + USDA raw quantity strings, parses them via `quantity.py`, and truncate-reloads `quantity_crosswalk` (migration 0032, `enrichment.quantity_crosswalk`). Silver `recall_product.sql` LEFT JOINs it for the four `quantity_*` columns. The full run-order is therefore **`dbt build` (staging) → `recalls resolve-firms` → `recalls parse-quantities` → `dbt build` (silver + gold)**.
+`recalls parse-quantities` (Phase 7 C13) runs in the same enrichment stage: it reads distinct FDA + USDA raw quantity strings, parses them via `quantity.py`, and truncate-reloads `quantity_crosswalk` (migration 0032, `enrichment.quantity_crosswalk`). Silver `recall_product.sql` LEFT JOINs it for the four `quantity_*` columns. The full run-order is therefore **`dbt build` (staging + silver) → `recalls resolve-firms` → `recalls parse-quantities` → `dbt build` (silver + gold) → `dbt snapshot` → `dbt test`** — diagrammed below.
+
+```mermaid
+flowchart LR
+    B1["dbt build --exclude-resource-type test<br/>staging + silver · pre-resolve"]
+    EN["recalls resolve-firms<br/>recalls parse-quantities<br/>rebuild firm_crosswalk + quantity_crosswalk"]
+    B2["dbt build --exclude-resource-type test<br/>silver + gold · post-resolve"]
+    SN["dbt snapshot<br/>bank SCD-2 over resolved firms"]
+    TS["dbt test<br/>final assertions over silver + gold"]
+    B1 --> EN --> B2 --> SN --> TS
+```
+
+*Transform run-order — mirrors [`transform.yml`](../.github/workflows/transform.yml) (~03:00 UTC daily; dbt runs as the Neon owner, `resolve-firms`/`parse-quantities` as `recalls_app` per [operations.md](operations.md)). Firm/quantity resolution is a Python stage **between** two dbt builds, so each build uses `--exclude-resource-type test` — build models + seeds + snapshots, skip data tests — and the firm-resolution assertions run once in the final `dbt test` against the fully-resolved tree, never against the pre-resolve intermediate state. The four `strategy='check'` snapshots are keyed on source-native ids and read `stg_*` views (not `firm_crosswalk`), so they are resolution-invariant: the in-build snapshot runs bank at most one version per cycle and the explicit `dbt snapshot` is an idempotent confirmation — no duplicate SCD-2 rows. (`dbt build --exclude-resource-type test snapshot` would leave snapshotting solely to that explicit step.)*
 
 **Why the seam is safe** (the load-bearing property): the stage is *additive* by construction. Because silver coalesces to `md5(normalized_name)`, a missing, stale, or empty crosswalk degrades to "every firm is its own canonical" (no fuzzy merges) — never broken correctness — so the external stage is never load-bearing. And the JOIN keys match by construction: `firm_id = md5(upper(trim(name)))` is computed in Python over the *same* string Postgres computes, reading the *same* staging views `firm.sql` reads. The pure cluster logic is pytest-covered (`tests/enrichment/`); the landed table carries dbt source-tests (`firm_id` not_null+unique, `canonical_firm_id` not_null) — the two-framework testing split ADR 0037 calls for.
 
