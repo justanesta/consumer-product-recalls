@@ -31,7 +31,7 @@ corpus-level gate that can exit before `BronzeLoader.load()`.
   `content_hash`). This is the dominant share of the 21 min. **Measured 2026-06-02 (W6 acceptance,
   PR #54): the DB-compare is essentially the *entire* cost** — a full deep-rescan logged `load_bronze`
   ≈ 21.5 min vs ~13s for download+parse+validate combined (download 4.9s, parse 1.8s, validate 6.7s over
-  322,672 rows). Converts the inference above into a measurement.
+  322,672 rows). Converts the inference above into a measurement. **Resolved 2026-06-12 (W10, → ADR 0041):** the ~59-chunk fan-out (O(corpus × chunks)) collapses to one `pg_temp` staging-table JOIN (`_fetch_existing_hashes_staged`, O(corpus) one pass) — fetch ≈ 17 min → ≈ 6 s, full daily run → 61 s, dedup decision byte-identical. The residual O(corpus) one-pass (still not O(delta)) is the deferred generated-column escalation documented in ADR 0041.
 - **`response_inner_content_sha256` is write-only.** It is INSERTed after the load
   (`_augment_response_row`) and **never SELECTed back to gate a run.** NHTSA has no short-circuit on the
   deep-rescan path; the USCG `_should_short_circuit` two-gate pattern is explicitly disabled on the

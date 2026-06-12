@@ -60,6 +60,10 @@ dbt/.user.yml
 # Local-only project notes
 CLAUDE.local.md
 
+# Local-only operator/security scripts — kept on disk, never shipped (e.g. the
+# credential-leak audit of Claude Code transcripts: scripts/local/verify_no_credential_leak.sh)
+scripts/local/
+
 # Locally downloaded NHTSA and USCG data for testing
 data/exploratory/
 

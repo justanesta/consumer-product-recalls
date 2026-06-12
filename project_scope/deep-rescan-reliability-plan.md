@@ -2,8 +2,8 @@
 
 - **Status:** Active (Tier-4 residual only) — Tiers 1–3 merged (graduation PR #50, Tier 1 PR #51, Tier 2
   W5 PR #52, Tier 3 W7+W8 PR #53). W6 (NHTSA inner-SHA short-circuit + migration 0021 + backfill) **merged
-  as PR #54** (commit 734c48b). Only Tier 4 (W9 USCG-detail subprocess chunking, W10 NHTSA staging anti-join)
-  remains, both deferred-pending-measurement — this plan stays open to own them.
+  as PR #54** (commit 734c48b). **W10** (NHTSA staging-table lookup) is BUILT + verified on prod 2026-06-12 (→ ADR 0041); only **W9**
+  (USCG-detail subprocess chunking) remains, deferred-pending-measurement — this plan stays open to own it.
 - **Owns:** the fix ladder for deep-rescan reliability + workload ahead of Phase-7 scheduled GitHub
   Actions, and the PRE_2010 `response_inner_content_sha256` mitigation (#1–#3).
 - **Points at:** `documentation/audit/deep_rescan_reliability_audit.md` for *what we found* (this doc
@@ -44,7 +44,7 @@ reshaped half of them, and those corrections are baked into the workstream descr
 | W7 | **R6** — make `deep-rescan-fda.yml` cron-runnable: a "Resolve start date" step (mirror the existing end-date step) computing a rolling window; never pass the raw `""` input; validate the window vs ADR 0023 back-dating | 3 | ✅ PR #53 |
 | W8 | **R8** — amend **ADR 0010** with per-source deep-rescan cadence: NHTSA/FDA weekly (cheap once W6 lands), CPSC weekly, USDA n/a (full snapshot), **USCG detail quarterly** (matches `archive/phase-5d-uscg-manufacturers-detail.md`, not monthly); record the 1/12 rotation as a *future option* needing a range param + offset cursor (neither exists). Reorder secret-validation before `uv sync` (YAML) | 3 | ✅ PR #53 |
 | W9 | **R5** — port the chunked-process pattern into the USCG-detail **deep-rescan** workflow (the incremental cron path already fits and needs nothing); benchmark real GHA page-rate first; `timeout-minutes` guard | 4 (defer) | ⏳ |
-| W10 | **R9** — server-side staging-table lookup for NHTSA (replace the ~45-59-chunk loop). **BUILT 2026-06-11 (`feature/pre-go-live-validation`)** — *promoted* off "defer": the 2026-06-10 daily inner-SHA short-circuit covers no-change days, but NHTSA changes content on most active days so the ~17-min change-day lookup is the *common* case (the TODO falsified the deferral). Delivered as a **fetch-only** restructure (NOT the anti-join-INSERT framing): `BronzeLoader._fetch_existing_hashes_staged` (`src/bronze/loader.py`) bulk-loads identities into a `pg_temp` TEMP table + `ANALYZE` and JOINs bronze to it — a pure `IN → JOIN` of the chunk query, so `_identity_text_expr` canonicalization (guardrail B) and the `filter_new_records` decision are byte-identical (correct by construction). SQLAlchemy chunked multi-row INSERTs (no psycopg2 COPY); single-txn per ADR 0020 (the "split read/write" note applied to recovery, not this path). Differential equivalence vs the old chunked loop **passed on a prod-clone branch** (`tests/bronze/test_loader_fetch_equivalence.py`). The typed-temp and full-anti-join variants were evaluated and rejected (no net single-oracle gain / larger dedup-decision blast radius). | 4→done | ✅ |
+| W10 | **R9** — server-side staging-table lookup for NHTSA (replace the ~45-59-chunk loop). **BUILT 2026-06-11, verified on prod 2026-06-12** as a fetch-only restructure (`BronzeLoader._fetch_existing_hashes_staged`, `src/bronze/loader.py`): ~17 min → ~1 min, dedup decision byte-identical. Decision + mechanism + rejected alternatives (typed / anti-join / generated-column) + evidence → **ADR 0041** (`documentation/decisions/0041-nhtsa-bronze-dedup-lookup-staging-join.md`) — single home, not restated here. | 4→done | ✅ |
 
 ## PRE_2010 `response_inner_content_sha256` mitigation (#1–#3)
 

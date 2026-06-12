@@ -6,6 +6,7 @@
 - **Superseded by:** —
 - **Clarifies:** ADR 0007 (extends `hash_exclude_fields` use beyond FDA's RID position counter); ADR 0012 (concrete `identity_fields` choice for NHTSA); ADR 0014 (RECORD_ID is not a per-row natural key despite RCL.txt's "uniquely identifies the record" wording).
 - **Extended by:** ADR 0031 (silver-row fragmentation strategy) — uses this ADR's 11-tuple as the basis for NHTSA's silver `recall_product_id = md5(11-tuple)` recipe; documents the cross-run drift class observed against this identity choice and the v1 reconciliation policy.
+- **Refined by:** ADR 0041 (set-based staging-table dedup lookup) — the chunked existing-hash lookup in this ADR's "Implementation-side: text-canonical IN + chunked existing-hash lookup" subsection becomes the **small-batch path only**; NHTSA-scale batches route to a `pg_temp` staging-table JOIN. The 11-tuple identity, `hash_exclude_fields`, within-batch dedup, `allow_null_identity`, and the `_identity_text_expr` text-canonical comparison are unchanged.
 
 ## Amendment summary (2026-05-08)
 

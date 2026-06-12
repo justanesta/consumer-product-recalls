@@ -138,7 +138,7 @@ R2 is the immutable substrate. Every extraction's raw payload lands here before 
 
 | File | Role |
 |---|---|
-| `loader.py` | `BronzeLoader` — content-hash conditional insert + quarantine routing |
+| `loader.py` | `BronzeLoader` — content-hash conditional insert + quarantine routing; the existing-hash dedup lookup routes large batches (NHTSA's full dump) through a `pg_temp` staging-table JOIN ([ADR 0041](decisions/0041-nhtsa-bronze-dedup-lookup-staging-join.md)) |
 | `manifest.py` | Pure builder for the per-run presence manifest (`extraction_run_identities`, ADR 0026) — turns a run's passing records into recall-grain presence rows; the write happens in `Extractor._record_run` |
 | `hashing.py` | Canonical-serialization + SHA-256 helpers (per ADR 0007 — changes here are treated as schema migrations) |
 | `retry.py` | `tenacity`-decorated retry policies, applied to lifecycle methods that contact external services |

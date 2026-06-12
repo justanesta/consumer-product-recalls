@@ -37,6 +37,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0035 — Cross-source SCD-2 for silver dimensions](0035-cross-source-scd2-silver-dimensions.md) — cross-source policy = Policy C (latest-wins current view + first-class snapshot history) via dbt snapshot `strategy='check'` on a stable anchor; only the USCG `firm_uscg_attributes` instance (the measured Type-2 NEED, 221/718 OOB-recycled / 365 prior) is built in 6b.5, FDA/CPSC/USDA deferred *(Accepted — ratified at the #59 merge)*
 - [0036 — Cross-source canonical silver column naming](0036-cross-source-canonical-silver-naming.md) *(Accepted — ratified at the #58 merge)*
 - [0038 — Gold-layer modeling and indexing strategy](0038-gold-layer-modeling-and-indexing-strategy.md) — `mart_`/`fct_` shapes (Kimball star deferred), serving=table+indexed / aggregate=view, Postgres FTS search, dbt `config(indexes=)` mechanism, Phase-7 profiling follow-up *(Accepted — ratified at the #62 merge)*
+- [0041 — NHTSA bronze dedup-lookup: set-based staging-table JOIN](0041-nhtsa-bronze-dedup-lookup-staging-join.md) — replaces the ~45-chunk `IN`-loop with one `pg_temp` staging JOIN for large batches (fetch-only restructure; dedup decision byte-identical), ~17 min → ~1 min; clarifies ADR 0030
 
 ### Pipeline, extraction, and transformation
 
@@ -111,6 +112,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 38. [Gold-layer modeling and indexing strategy](0038-gold-layer-modeling-and-indexing-strategy.md)
 39. [Frontend framework](0039-frontend-framework.md)
 40. [Dedicated data-quality framework: Soda Core](0040-data-quality-framework-soda-core.md)
+41. [NHTSA bronze dedup-lookup: set-based staging-table JOIN](0041-nhtsa-bronze-dedup-lookup-staging-join.md)
 
 ---
 
@@ -118,7 +120,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 When adding a new ADR:
 
-1. Pick the next sequential number. Current state: **0001–0040 all filed and Accepted.** 0024 (serving-layer API design), 0025 (API deployment target), 0039 (frontend framework), and 0040 (data-quality framework — Soda Core) were filed 2026-06-09 on the phase-7 branch; 0034/0035/0036/0038 were ratified Accepted at their merges (#60 / #59 / #58 / #62). The serving/presentation ADRs (0024/0025/0039) govern the **separate** API + website repos built after go-live (there is no in-repo Phase 8/9). **The next free number is 0041.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
+1. Pick the next sequential number. Current state: **0001–0041 all filed and Accepted.** 0024 (serving-layer API design), 0025 (API deployment target), 0039 (frontend framework), and 0040 (data-quality framework — Soda Core) were filed 2026-06-09 on the phase-7 branch; 0034/0035/0036/0038 were ratified Accepted at their merges (#60 / #59 / #58 / #62); 0041 (NHTSA bronze dedup-lookup staging JOIN) was filed 2026-06-12 on `feature/pre-go-live-validation`. The serving/presentation ADRs (0024/0025/0039) govern the **separate** API + website repos built after go-live (there is no in-repo Phase 8/9). **The next free number is 0042.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
 2. File name: `NNNN-kebab-case-title.md`.
 3. Use the standard template (see any existing ADR as a model).
 4. Add an entry under the appropriate topic above **and** in the numeric index.
