@@ -12,15 +12,47 @@
 -- (Sections 1–2 use catalog introspection and are correct regardless of the connected role; only
 -- Section 3 needs the live recalls_app session.) See operations.md -> "Local validation pass".
 --
--- PASS = every row in Sections 1–2 reads `PASS`, and Section 3's DELETE fails with
+-- PASS = every row in Sections 0.5–2 reads `PASS`, and Section 3's DELETE fails with
 -- `permission denied`. If `recalls_app` does not exist yet, has_*_privilege() raises
--- "role recalls_app does not exist" — create the role + run grant_recalls_app.sql + apply
--- migration 0031 first (operations.md -> "Restricted app role").
+-- "role recalls_app does not exist" — apply migration 0033 (creates the role + grants), then
+-- activate it (set password + enable LOGIN) first (operations.md -> "Restricted app role").
 
 \echo '=== Section 0: connected role (must be recalls_app for the Section 3 live check) ==='
 SELECT current_user AS connected_as,
        current_database() AS db,
        (current_user = 'recalls_app') AS section3_live_check_meaningful;
+
+\echo ''
+\echo '=== Section 0.5: role posture — restricted attributes + NOT a member of neon_superuser ==='
+\echo '    expect every attribute f and member_of_neon_superuser f. A t here means the role is'
+\echo '    admin-equivalent (Neon auto-grants console/API/CLI roles neon_superuser, whose'
+\echo '    pg_write_all_data silently confers DELETE) and Sections 1-2 are moot — recreate the role'
+\echo '    from SQL via migration 0033 (operations.md -> "Restricted app role").'
+SELECT
+    rolsuper        AS superuser,
+    rolcreatedb     AS createdb,
+    rolcreaterole   AS createrole,
+    rolreplication  AS replication,
+    rolbypassrls    AS bypass_rls,
+    EXISTS (
+        SELECT 1 FROM pg_auth_members am
+        JOIN pg_roles g ON g.oid = am.roleid
+        JOIN pg_roles m ON m.oid = am.member
+        WHERE m.rolname = 'recalls_app' AND g.rolname = 'neon_superuser'
+    ) AS member_of_neon_superuser,
+    CASE
+        WHEN NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+             AND NOT EXISTS (
+                 SELECT 1 FROM pg_auth_members am
+                 JOIN pg_roles g ON g.oid = am.roleid
+                 JOIN pg_roles m ON m.oid = am.member
+                 WHERE m.rolname = 'recalls_app' AND g.rolname = 'neon_superuser'
+             )
+        THEN 'PASS (restricted)'
+        ELSE 'FAIL  <<<<'
+    END AS verdict
+FROM pg_roles
+WHERE rolname = 'recalls_app';
 
 \echo ''
 \echo '=== Section 1: schema, bronze, run-bookkeeping & crosswalk grants (expected vs actual) ==='

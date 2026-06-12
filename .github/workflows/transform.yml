@@ -36,22 +36,18 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Validate required secrets
+        # No R2 here: the transform job never lands raw bytes. dbt connects via the NEON_* split
+        # vars (owner); resolve-firms / parse-quantities use DbSettings (DB-only) and read just
+        # NEON_DATABASE_URL. R2 used to be demanded only because those commands built the full
+        # Settings — that coupling is gone (src/config/settings.py:DbSettings).
         run: |
           [[ -n "$NEON_DATABASE_URL" ]] || (echo "::error::NEON_DATABASE_URL secret is missing" && exit 1)
-          [[ -n "$R2_BUCKET_NAME" ]] || (echo "::error::R2_BUCKET_NAME secret is missing" && exit 1)
-          [[ -n "$R2_ACCOUNT_ID" ]] || (echo "::error::R2_ACCOUNT_ID secret is missing" && exit 1)
-          [[ -n "$R2_ACCESS_KEY_ID" ]] || (echo "::error::R2_ACCESS_KEY_ID secret is missing" && exit 1)
-          [[ -n "$R2_SECRET_ACCESS_KEY" ]] || (echo "::error::R2_SECRET_ACCESS_KEY secret is missing" && exit 1)
           [[ -n "$NEON_HOST" ]] || (echo "::error::NEON_HOST secret is missing" && exit 1)
           [[ -n "$NEON_USER" ]] || (echo "::error::NEON_USER secret is missing" && exit 1)
           [[ -n "$NEON_PASSWORD" ]] || (echo "::error::NEON_PASSWORD secret is missing" && exit 1)
           [[ -n "$NEON_DBNAME" ]] || (echo "::error::NEON_DBNAME secret is missing" && exit 1)
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           NEON_HOST: ${{ secrets.NEON_HOST }}
           NEON_USER: ${{ secrets.NEON_USER }}
           NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from src.config.settings import Settings
+from src.config.settings import DbSettings, Settings
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -120,3 +120,33 @@ def test_settings_fda_fields_populated_when_env_vars_set(
     assert settings.fda_authorization_user.get_secret_value() == "fda-user"
     assert settings.fda_authorization_key is not None
     assert settings.fda_authorization_key.get_secret_value() == "fda-key"
+
+
+# ---------------------------------------------------------------------------
+# DbSettings — DB-only commands (resolve-firms / parse-quantities / audit-firm-rollups)
+# ---------------------------------------------------------------------------
+
+
+def test_db_settings_instantiates_with_only_neon_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The regression: a step that passes ONLY NEON_DATABASE_URL (no R2_*) must construct cleanly.
+    monkeypatch.setenv("NEON_DATABASE_URL", "postgresql://user:pass@host/db")
+    for key in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"):
+        monkeypatch.delenv(key, raising=False)
+    settings = DbSettings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.neon_database_url.get_secret_value() == "postgresql://user:pass@host/db"
+
+
+def test_db_settings_ignores_extra_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The shared .env also holds R2_* / FDA_* — extra="ignore" must load it without choking,
+    # and must NOT expose the R2 fields on the DB-only object.
+    _set_required(monkeypatch)  # NEON_DATABASE_URL + all four R2_*
+    monkeypatch.setenv("FDA_AUTHORIZATION_USER", "fda-user")
+    settings = DbSettings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.neon_database_url.get_secret_value() == "postgresql://user:pass@host/db"
+    assert not hasattr(settings, "r2_account_id")
+
+
+def test_db_settings_raises_when_neon_url_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NEON_DATABASE_URL", raising=False)
+    with pytest.raises(ValidationError):
+        DbSettings(_env_file=None)  # type: ignore[call-arg]

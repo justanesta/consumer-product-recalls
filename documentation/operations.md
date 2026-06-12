@@ -197,8 +197,8 @@ If a credential is suspected compromised, rotate immediately — do not wait for
 
 [ADR 0013](decisions/0013-error-handling-retries-idempotency-and-quarantine.md) (2026-06-09
 amendment) enforces the `*_rejected` audit tables as **append-only** in production via two
-Neon roles. This is a **one-time setup** before cron go-live and the prerequisite for
-migration `0031`.
+Neon roles. The restricted role and its complete grant posture are defined by migration `0033`
+(it supersedes the old standalone grant script); this is a **one-time setup** before cron go-live.
 
 **The two roles:**
 
@@ -229,33 +229,51 @@ pointed at `recalls_app`.
 
 **Setup procedure (one-time, before go-live):**
 
-1. **Create the role** — Neon console → Roles → New Role (or `neon roles create --name
-   recalls_app`), with a generated password. Its DSN is the same host/db as the owner, role
-   `recalls_app`.
-2. **Grant runtime privileges** — connect as the **owner** and run the single-home script
-   [`scripts/sql/_pipeline/grant_recalls_app.sql`](../scripts/sql/_pipeline/grant_recalls_app.sql)
-   (SELECT/INSERT/UPDATE on all tables + sequences + default privileges for future tables; plus
-   TRUNCATE on the two rebuilt-each-run crosswalk tables — firm_crosswalk (granted in this script)
-   and quantity_crosswalk (granted in migration 0032), which `resolve-firms` / `parse-quantities`
-   truncate-reload; no DELETE, and no TRUNCATE elsewhere — the runtime needs nothing more).
-3. **Apply the mutation guard** — run migration 0031 **as the owner**:
+> **Create the role via the migration, NOT the Neon console.** Neon auto-adds Console/API/CLI-created
+> roles to `neon_superuser`, whose `pg_write_all_data` membership silently grants `DELETE` on every
+> table — which defeats the `*_rejected` append-only guard (it can't be revoked away from the role,
+> only the membership). Migration `0033` creates `recalls_app` from **SQL**, and a SQL-created role
+> is *not* added to `neon_superuser` (restricted by default). If a `neon_superuser`-tainted role
+> already exists, delete it (Neon console → Roles) and let the migration recreate it clean.
+
+1. **Create the role + its full grant posture** — run migrations **as the owner**:
    ```bash
    NEON_DATABASE_URL="<privileged-owner-DSN>" alembic upgrade head
    ```
-   It revokes `TRUNCATE, DELETE, UPDATE` on every `public.*_rejected` from `recalls_app`
-   (raises if the role doesn't exist — do step 1 first).
-4. **Repoint the runtime** — set the `NEON_DATABASE_URL` **GitHub Actions secret** and your
-   local `.env` to the **restricted** DSN. From here every SQLAlchemy run — extract /
-   deep-rescan / `resolve-firms` / `parse-quantities` / API — connects as `recalls_app`. The
-   transform cron's **dbt** steps keep connecting as the owner via the
-   `NEON_HOST/USER/PASSWORD/DBNAME` secrets (dbt needs DDL `recalls_app` doesn't have).
-5. **Verify** — connect as `recalls_app`: `INSERT` into a `*_rejected` table succeeds, `SELECT`
-   succeeds, but `DELETE FROM cpsc_recalls_rejected WHERE false` returns **permission denied**
-   (the guard works).
+   Migration `0033` (the single source of truth for the role) creates `recalls_app` as a **NOLOGIN
+   permission shell** — no password, so nothing secret is committed — and grants exactly the runtime
+   set: SELECT/INSERT/UPDATE on all tables + sequences, default privileges for future tables,
+   TRUNCATE on the two rebuilt-each-run crosswalk tables (`firm_crosswalk` / `quantity_crosswalk`),
+   and the `*_rejected` append-only revoke (mirrors `0031`). It **refuses to run** against a
+   pre-existing role carrying `neon_superuser` or any admin attribute — delete that role first.
+2. **Activate the role (set password + enable LOGIN)** — the password lives only in your secret
+   store, never in the migration. Connect as the owner in `psql` and run:
+   ```sql
+   ALTER ROLE recalls_app LOGIN PASSWORD 'a-strong-password';
+   ```
+   Generate the password in your manager first (save it there), then paste it in. **Neon requires a
+   plaintext password here** — psql's `\password` sends a client-side SCRAM hash, which Neon's
+   control plane rejects with `Neon only supports being given plaintext passwords`. The plaintext is
+   TLS-protected in transit and managed server-side by Neon; the only local trace is
+   `~/.psql_history` (run `\set HISTFILE /dev/null` first, or clear that line after, if you care).
+3. **Repoint the runtime** — set the `NEON_DATABASE_URL` **GitHub Actions secret** and your local
+   `.env` to the **restricted** DSN (same host/db, role `recalls_app`, the step-2 password). From
+   here every SQLAlchemy run — extract / deep-rescan / `resolve-firms` / `parse-quantities` / API —
+   connects as `recalls_app`. The transform cron's **dbt** steps keep connecting as the owner via
+   the `NEON_HOST/USER/PASSWORD/DBNAME` secrets (dbt needs DDL `recalls_app` doesn't have).
+4. **Verify** — run the grant matrix *as `recalls_app`* (the URI carries the role):
+   ```bash
+   psql "$NEON_DATABASE_URL" -f scripts/sql/_pipeline/verify_recalls_app_grants.sql
+   ```
+   Section 0.5 must show every attribute `f` + `member_of_neon_superuser f`; Sections 1–2 every
+   `PASS`; Section 3's `DELETE … WHERE false` must fail with **permission denied** (that error *is*
+   the pass). If anything reads `FAIL`, `scripts/sql/_pipeline/diagnose_recalls_app_grant_sources.sql`
+   shows the per-grant source.
 
-**Dev branches keep full privileges** — truncating a `*_rejected` table while iterating on a
-buggy schema is fine; only run migration 0031 against the production environment using
-`recalls_app`. `downgrade()` re-grants if you need to undo. **Rotation:** the `recalls_app`
+**Dev branches keep full privileges** — `alembic upgrade head` creates `recalls_app` on every
+branch, but local dev connects as the **owner**, so truncating a `*_rejected` table while iterating
+on a buggy schema stays fine; the append-only restriction only bites in production, where the
+runtime connects as `recalls_app`. Migration `0033`'s `downgrade()` drops the role. **Rotation:** the `recalls_app`
 password rotates on the standard 90-day cadence (the "Rotating the Neon Postgres password"
 runbook above rotates whatever role `NEON_DATABASE_URL` points at — now `recalls_app`); the
 privileged owner password rotates separately, operator-held.
