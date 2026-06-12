@@ -9,15 +9,12 @@ This is a portfolio project demonstrating end-to-end data engineering: extractio
 ```mermaid
 flowchart LR
     subgraph sources[Sources]
-        CPSC[CPSC API]
+        CPSC[CPSC Recalls API]
         FDA[FDA iRES API]
-        FDAPR[FDA Press Releases]
-        USDA[USDA FSIS API]
-        USDAEST[USDA Establishments]
-        NHTSA[NHTSA flat file]
-        USCG[USCG recalls scrape]
-        USCGMFR[USCG MIC directory]
-        USCGDET[USCG MIC details]
+        USDA[USDA Recalls API]
+        USDAEST[USDA Establishments MPI API]
+        NHTSA[NHTSA recalls flat file]
+        USCG[USCG recalls website scrape]
     end
 
     subgraph pipeline[4-Layer Medallion Pipeline]
@@ -36,13 +33,10 @@ flowchart LR
 
     CPSC --> R2
     FDA --> R2
-    FDAPR --> R2
     USDA --> R2
     USDAEST --> R2
     NHTSA --> R2
     USCG --> R2
-    USCGMFR --> R2
-    USCGDET --> R2
 
     GD --> API
     GD --> UI
