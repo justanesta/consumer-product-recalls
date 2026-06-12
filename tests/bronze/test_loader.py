@@ -720,36 +720,53 @@ def test_fetch_existing_hashes_keys_dict_on_composite_identity() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_existing_hashes_chunks_large_input_losslessly() -> None:
-    """The wrapper splits a multi-chunk input across ``_fetch_existing_hashes_chunk``
-    calls and merges the per-chunk dicts losslessly — equal to a single-query result.
+def test_fetch_existing_hashes_routes_large_batch_to_staging() -> None:
+    """Above the per-query bind-param ceiling, the lookup uses the set-based staging
+    join (one bronze pass) instead of N chunked IN seq-scans — the O(corpus × chunks)
+    → O(corpus) fix. The dedup decision/return is unchanged; only the read path differs.
 
-    A tiny ``_PG_PARAM_SAFETY_LIMIT`` forces multiple chunks from a small input, so the
-    test needs no 60k-key fixture. The DB layer is mocked at the chunk method (the SQL
-    itself is exercised by the single-chunk tests above)."""
+    A tiny ``_PG_PARAM_SAFETY_LIMIT`` forces the over-ceiling branch without a 60k-key
+    fixture; both fetch sub-methods are mocked (their SQL is DB-tested in
+    ``test_loader_fetch_equivalence.py``)."""
     loader, _, _ = _make_loader()  # single-col identity → chunk_size == limit
     conn = _make_conn()
 
-    # 5 keys with chunk_size 2 → chunks of [0,1], [2,3], [4] (3 calls).
+    # chunk_size == 2 (patched); 5 keys > 2 → staged path.
     identity_keys: list[tuple[str, ...]] = [(f"CPSC-{i:03d}",) for i in range(5)]
     expected: dict[tuple[str, ...], str] = {key: f"hash_{i}" for i, key in enumerate(identity_keys)}
 
-    def fake_chunk(_conn: object, chunk: list[tuple[str, ...]]) -> dict[tuple[str, ...], str]:
-        # Each chunk returns only its own keys' hashes — proves the merge is union, not
-        # last-writer-wins, and that no key is dropped at a chunk boundary.
-        return {key: expected[key] for key in chunk}
-
     with (
         patch("src.bronze.loader._PG_PARAM_SAFETY_LIMIT", 2),
-        patch.object(loader, "_fetch_existing_hashes_chunk", side_effect=fake_chunk) as mock_chunk,
+        patch.object(loader, "_fetch_existing_hashes_staged", return_value=expected) as mock_staged,
+        patch.object(loader, "_fetch_existing_hashes_chunk") as mock_chunk,
     ):
         result = loader._fetch_existing_hashes(conn, identity_keys=identity_keys)
 
-    assert result == expected  # lossless union across all chunks
-    assert mock_chunk.call_count == 3  # ceil(5 / 2)
-    # No chunk exceeded the size cap.
-    for call in mock_chunk.call_args_list:
-        assert len(call.args[1]) <= 2
+    assert result == expected
+    mock_staged.assert_called_once()
+    mock_chunk.assert_not_called()
+
+
+def test_fetch_existing_hashes_routes_at_ceiling_to_single_query() -> None:
+    """A batch exactly at the ceiling stays on the single IN-query (chunk) path — the
+    staging temp-table + ANALYZE overhead only pays off above it."""
+    loader, _, _ = _make_loader()
+    conn = _make_conn()
+
+    # chunk_size == 2; 2 keys == ceiling → chunk path, not staged.
+    identity_keys: list[tuple[str, ...]] = [("CPSC-001",), ("CPSC-002",)]
+    with (
+        patch("src.bronze.loader._PG_PARAM_SAFETY_LIMIT", 2),
+        patch.object(
+            loader, "_fetch_existing_hashes_chunk", return_value={("CPSC-001",): "h"}
+        ) as mock_chunk,
+        patch.object(loader, "_fetch_existing_hashes_staged") as mock_staged,
+    ):
+        result = loader._fetch_existing_hashes(conn, identity_keys=identity_keys)
+
+    assert result == {("CPSC-001",): "h"}
+    mock_chunk.assert_called_once()
+    mock_staged.assert_not_called()
 
 
 def test_fetch_existing_hashes_single_chunk_for_small_input() -> None:

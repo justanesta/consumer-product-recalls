@@ -55,6 +55,19 @@ FROM pg_roles
 WHERE rolname = 'recalls_app';
 
 \echo ''
+\echo '=== Section 0.6: database TEMP privilege (the set-based dedup lookup creates TEMP tables) ==='
+\echo '    expect t — recalls_app needs database TEMPORARY (held via the PUBLIC default) for'
+\echo '    BronzeLoader._fetch_existing_hashes_staged. It does NOT need CREATE on schema public:'
+\echo '    TEMP tables live in pg_temp, governed by the database TEMPORARY privilege.'
+SELECT
+    has_database_privilege('recalls_app', current_database(), 'TEMP') AS can_create_temp,
+    CASE
+        WHEN has_database_privilege('recalls_app', current_database(), 'TEMP') THEN 'PASS'
+        ELSE 'FAIL  <<<<  (GRANT TEMPORARY ON DATABASE '
+             || current_database() || ' TO recalls_app)'
+    END AS verdict;
+
+\echo ''
 \echo '=== Section 1: schema, bronze, run-bookkeeping & crosswalk grants (expected vs actual) ==='
 WITH checks (kind, category, obj, priv, expected) AS (
     VALUES
