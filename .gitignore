@@ -20,6 +20,10 @@ env/
 .env.local
 .env.*.local
 .envrc.local
+# Proton Pass secret-reference file — `pass://` pointers only (no secret values), kept
+# local so the vault layout isn't published. Secrets are injected at call time via
+# `pass-cli run --env-file .env.pass -- <cmd>`, never exported into the ambient shell.
+.env.pass
 # Override global gitignore's .env.* pattern — .env.example is a committed template
 !.env.example
 
