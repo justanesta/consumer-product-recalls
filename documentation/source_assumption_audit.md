@@ -73,21 +73,21 @@ Three things prompted the audit:
 
 | | |
 |---|---|
-| **Why load-bearing** | Silver `recall_product_id` includes `product_ordinal` from `LATERAL jsonb_array_elements WITH ORDINALITY` (`dbt/models/silver/recall_product.sql:38-46`). ADR 0031:96 calls this an *implicit* assumption. |
-| **Evidence today** | **Currently untestable on observed data** — every CPSC recall has exactly 1 product (`first_extraction_findings.md` Section A), so the failure mode physically cannot occur. |
+| **Why load-bearing** | Since the 2026-06-13 migration (ADR 0031 amendment), `product_ordinal` is the **sole** identity carrier in the CPSC surrogate — `md5('CPSC'\|source_recall_id\|product_ordinal)` (`cpsc_products` CTE, `recall_product.sql`). The ordinal's stability *is* product identity. |
+| **Evidence today** | **Validated at scale 2026-06-13** — multi-product recalls now exist (8.3%, up to 57 products) and `assert_products_array_append_only` returns 0 across them: first time the failure mode is both physically possible and exercised on cross-version data. See `cpsc/array_stability_findings.md` → "First genuine C2/C3 test — 2026-06-13". |
 | **Falsification script** | `scripts/sql/cpsc/bronze/assert_products_array_append_only.sql` + dbt `assert_cpsc_products_array_append_only.sql` |
-| **ADR 0031 threshold** | >0.1% silver row count fragmented per quarter |
-| **Downstream impact** | Mid-array insertion in a recall with N products fragments N-1 silver rows. Phase 6 reconciliation triggers; likely fix: switch to content-based product surrogate (`md5(name‖description‖model‖number_of_units)`), unifying CPSC's recipe structurally with NHTSA's. Affects `dbt/models/silver/recall_product.sql:21-54`. |
+| **ADR 0031 threshold** | **Any non-zero** — an identity *invariant* since the ordinal-only key, not a fragmentation rate. A violation **conflates** (a later product inherits an earlier slot's id), not fragments. |
+| **Downstream impact** | A mid-array insert / reorder silently re-assigns `recall_product_id` across that recall's products (conflation). Remediate by re-keying / a deterministic tiebreaker + rebuilding silver from bronze (ADR 0007), and treat the assertion as a hard gate. **Supersedes** the prior "switch to a content-based surrogate" fix — the project deliberately moved content *out* of the key for id durability. Affects the `cpsc_products` CTE in `recall_product.sql`. |
 
 ### C3 — Product `name` and `model` strings are not character-normalized after publication
 
 | | |
 |---|---|
-| **Why load-bearing** | Same surrogate as C2 — raw `name`/`model` are inputs to the md5. Independent of array order. |
-| **Evidence today** | Untested (no script existed before this audit). |
+| **Why load-bearing** | **No longer load-bearing for identity since 2026-06-13** (ADR 0031 amendment): name/model were demoted out of the CPSC surrogate. C3 is now an *informational editorial monitor* (does CPSC edit product strings?), not a key input. |
+| **Evidence today** | **First real drift observed 2026-06-13** — 9 `name` cases (0 `model`), all at ordinal 1 on old low-numbered recalls, mostly empty→populated (likely a one-time early-capture/backfill, not organic churn). See `cpsc/array_stability_findings.md` → "First genuine C2/C3 test — 2026-06-13". |
 | **Falsification script** | `scripts/sql/cpsc/bronze/assert_name_model_normalization_stable.sql` + dbt `assert_cpsc_name_model_normalization_stable.sql` |
-| **ADR 0031 threshold** | Same as C2 (treated as same fragmentation class). |
-| **Downstream impact** | Same as C2 + product-level fuzzy resolution becomes a Phase 6 deliverable item alongside firm-level resolution at `implementation_plan.md:606-610`. |
+| **ADR 0031 threshold** | **N/A** — no longer a fragmentation class (name/model out of the key). Informational. |
+| **Downstream impact** | A name/model edit re-versions a Type-1 latest-wins attribute (the current view shows the latest); it does **not** fragment or re-key silver. The drift rows are the input to the deferred CPSC product-grain history (TODO "Move 2"). Product-level fuzzy resolution remains a separate Phase 6 firm-parallel item (`implementation_plan.md:606-610`). |
 
 ### C4 — `LastPublishDate` advances on edits
 

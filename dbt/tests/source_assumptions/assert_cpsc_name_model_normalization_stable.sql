@@ -1,9 +1,13 @@
--- Singular test: CPSC product name/model strings do not get character-
--- normalized across bronze snapshots. Returns rows for each
--- (source_recall_id, ordinal) where name OR model has taken >1 distinct
--- value across runs (NULL→non-NULL also counts). Severity=warn via
--- dbt_project.yml. Per-field breakdown and samples in
+-- Singular test: observes whether CPSC product name/model strings change across
+-- bronze snapshots. Returns rows for each (source_recall_id, ordinal) where name
+-- OR model has taken >1 distinct value across runs (NULL→non-NULL also counts).
+-- Severity=warn via dbt_project.yml. Per-field breakdown and samples in
 -- scripts/sql/cpsc/bronze/assert_name_model_normalization_stable.sql.
+--
+-- NOTE (2026-06-13, ADR 0031 amendment): name/model are no longer in the CPSC
+-- surrogate key (now md5('CPSC'|source_recall_id|product_ordinal)), so a returned
+-- row is an INFORMATIONAL editorial signal — it no longer fragments or re-keys
+-- silver. It is the input to the deferred CPSC product-grain history (TODO "Move 2").
 
 with exploded as (
     select

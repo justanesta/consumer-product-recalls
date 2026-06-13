@@ -36,7 +36,7 @@ Two sources need the extra event-level collapse because their bronze grain is *f
 
 Three shapes feed `recall_product`:
 
-- **Exploded array (CPSC)** — products live as a JSONB array on the event row; `recall_product.sql` uses `lateral jsonb_array_elements() with ordinality`, and the surrogate key includes the **ordinal** because product names are not unique within a recall.
+- **Exploded array (CPSC)** — products live as a JSONB array on the event row; `recall_product.sql` uses `lateral jsonb_array_elements() with ordinality`, and the surrogate key is the **stable `(event, ordinal)` anchor** — `md5('CPSC'|source_recall_id|ordinal)`. The ordinal alone carries product identity (name/model aren't unique within a recall *and* are mutable); name/model ride as Type-1 latest-wins attributes via `stg_cpsc_recalls`' latest-per-recall collapse, so a CPSC post-publication name edit re-versions the *attribute* without churning the *id* (ADR 0031 amendment 2026-06-13 — the CPSC analog of NHTSA's v1.5 demotion, minus the snapshot). Load-bearing dependency: the `products[]` append-only invariant (`assert_cpsc_products_array_append_only`), now an identity invariant since a reorder would conflate ordinals.
 - **Already flat (FDA, NHTSA)** — each bronze row *is* a product instance, so the branch reads staging directly. FDA keys on `PRODUCTID` (a globally unique API sequence); NHTSA keys on the `md5` of its **7-tuple** silver key (§12; since the 6c.7 cutover — formerly the 11-tuple, where `bgman`/`endman` were the batch-level disambiguator, now demoted to SCD-2 attributes).
 - **One-product-per-recall (USDA, USCG)** — these sources name a single product blob / boat model per recall, so `recall_product_id = recall_event_id`. This preserves referential integrity (every event has ≥1 product) without inventing structure the source doesn't provide; USDA's `product_items` free-text stays unparsed (ADR 0002 defers structured parsing — the raw lives in `source_specific_attrs.product_items_raw`).
 
@@ -61,7 +61,7 @@ Role model per source:
 All silver surrogate keys are deterministic `md5`, source-prefixed for global uniqueness — except `firm_id`, which is deliberately source-agnostic to enable cross-source dedup:
 
 - `recall_event_id` → `md5('<SOURCE>' || '|' || <event business key>)`
-- `recall_product_id` → `md5('<SOURCE>' || '|' || <product business key>)` (CPSC adds the ordinal; NHTSA is the **7-tuple** from the v1.5 snapshot current view since the 6c.7 cutover — §12, ADR 0033·0034 — formerly the 11-tuple)
+- `recall_product_id` → `md5('<SOURCE>' || '|' || <product business key>)` (CPSC's product business key is the array **ordinal** alone — `source_recall_id|ordinal`, name/model demoted out of the key 2026-06-13 (ADR 0031 amendment), formerly `|name|model|ordinal`; NHTSA is the **7-tuple** from the v1.5 snapshot current view since the 6c.7 cutover — §12, ADR 0033·0034 — formerly the 11-tuple)
 - `firm_id` → `md5(upper(trim(<name>)))` — **no source prefix**, so same-named firms across sources collapse to one row
 
 Composite-grain uniqueness is enforced explicitly via `dbt_utils.unique_combination_of_columns` on `recall_event (source, source_recall_id)` and `recall_event_firm (recall_event_id, firm_id, role)`.

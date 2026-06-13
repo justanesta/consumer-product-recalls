@@ -34,6 +34,7 @@ models:
 # escalation (warn → error) is deferred until the Soda Core / Great Expectations
 # migration in Phase 7 (implementation_plan.md:643), at which point threshold-
 # aware assertions become natural.
+#
 tests:
   consumer_product_recalls:
     source_assumptions:

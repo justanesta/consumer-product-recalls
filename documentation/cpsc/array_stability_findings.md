@@ -5,15 +5,28 @@ JSONB array is append-only (assumption C2 in `documentation/source_assumption_au
 and that product `name`/`model` strings are not character-normalized after
 publication (assumption C3).
 
-Both assumptions back the silver `recall_product_id` derivation at
-`dbt/models/silver/recall_product.sql:38-46`:
+As of the 2026-06-13 key migration (ADR 0031 amendment), the silver
+`recall_product_id` derivation (`cpsc_products` CTE, `recall_product.sql`) is the
+stable (event, ordinal) anchor:
 
 ```
-md5(recall_event_id || '|' || name || '|' || model || '|' || product_ordinal)
+md5('CPSC' || '|' || source_recall_id || '|' || product_ordinal)
 ```
 
-If either assumption fails, every product after the affected ordinal in the
-affected recall fragments downstream — see ADR 0031's CPSC row.
+This splits the two assumptions' stakes:
+
+- **C2 (append-only) is now an identity *invariant*.** With name/model out of the
+  key, the ordinal alone carries product identity, so a reorder / mid-array insert
+  no longer *fragments* (loud) — it *conflates* (silent): a later product inherits an
+  earlier slot's id. `assert_products_array_append_only` is the guard.
+- **C3 (name/model normalization) no longer touches the key.** A post-publication
+  name/model edit re-versions a Type-1 latest-wins *attribute* (the current view
+  shows the latest via `stg_cpsc_recalls`); it does **not** change the surrogate or
+  fragment. C3 is now an informational editorial monitor (input to the deferred
+  CPSC product-grain history — TODO "Move 2").
+
+(Pre-migration, both fed `md5(event_id|name|model|ordinal)` and a C3 edit churned the
+id; the dated sections below predate the migration and are kept as provenance.)
 
 ## Detection scripts
 
@@ -177,6 +190,38 @@ the append-only / normalization-stability guarantees on that key remain
 **unproven and now non-vacuously untested**. Keep both assert scripts running at
 `severity=warn`; the first multi-version multi-product recall is the real test.
 
+## First genuine C2/C3 test — 2026-06-13
+
+The "first multi-version × multi-product recall" trigger (below) has **fired**:
+daily incrementals + deep-rescans since the 2026-06-02 reseed have accumulated
+cross-version recalls, so both assertions now run on real comparison data.
+
+### C2 — append-only: validated at scale (0 violations)
+
+`assert_cpsc_products_array_append_only` (dbt) **PASS**; the psql script's
+`drift_group_count = 0`, with Q3 showing multi-product recalls present in quantity
+(520 × 2-product, 124 × 3, … up to one 57-product recall). For the first time the
+failure mode is *both physically possible and exercised on cross-version data* — and
+it holds. This is what de-risked the 2026-06-13 migration of CPSC product identity
+onto the `(event, ordinal)` anchor (ADR 0031 amendment): the invariant the new key
+depends on is now empirically validated, not merely trusted.
+
+### C3 — name/model: first real drift observed (9 name cases)
+
+`assert_cpsc_name_model_normalization_stable` returns **9** (`name` 9, `model` 0).
+All 9 sit at `product_ordinal = 1` on a contiguous block of low-numbered (old)
+recalls (`00079`–`00083` in the sampled five), and 3 of the 5 sampled are
+empty-string → populated transitions — the signature of a **one-time
+early-capture/backfill** (an early seed banked sparse/empty product names for a block
+of old recalls; a later run populated them), not scattered organic CPSC editorial
+churn. *(Inference — confirm by comparing the two `raw_landing_path` /
+`extraction_timestamp` per case; if the empty one is the earliest seed, that's it.)*
+
+Post-migration this is **informational, not a fragmentation event**: the current
+`recall_product` already shows the populated (latest) name via latest-wins, and the
+surrogate is unaffected. The 9 are the natural input to the deferred Move-2 history
+surface.
+
 ## ADR 0031 threshold reconciliation
 
 ADR 0031's CPSC row currently reads:
@@ -190,6 +235,6 @@ After running the scripts, update the ADR row with:
 
 ## Follow-up triggers
 
-- If Q1 (C2) ever returns >0: trigger Phase 6 reconciliation per ADR 0031. Likely fix is switching CPSC's silver surrogate from ordinal-based to content-based, mirroring NHTSA's 11-tuple recipe structurally.
-- If Q1 (C3, either field) ever returns >0: same trigger; product-level fuzzy resolution becomes a Phase 6 deliverable item alongside firm-level resolution at `implementation_plan.md:606-610`.
-- ~~If Q3 shows the corpus is starting to accumulate multi-product recalls (max > 1): the assumption is no longer vacuous — flag in next monthly review.~~ **FIRED 2026-06-02** — the full-corpus seed surfaced 8.3% multi-product recalls (max 57); the assumption is no longer vacuous (see the corpus-scale update section). Next trigger: the first recall observed with **both** >1 product **and** >1 content-hash version — that is the first genuine C2/C3 test.
+- If Q1 (C2 append-only) ever returns >0: **identity conflation, not fragmentation** (since the 2026-06-13 ordinal-only key). Treat as a correctness incident — a later product has inherited an earlier slot's `recall_product_id`. Remediate with a deterministic in-slot tiebreaker or a re-key, rebuilding silver from bronze (the immutable all-versions source of truth, ADR 0007), and escalate the `assert_products_array_append_only` wrapper to a hard gate. This **supersedes** the old "switch to a content-based surrogate" fix — the project deliberately moved the *other* way (content out of the key) for id durability.
+- If Q1 (C3, either field) ever returns >0: **informational** since the 2026-06-13 migration — name/model are out of the key, so drift re-versions a latest-wins attribute, not the surrogate. No Phase 6 reconciliation trigger. These rows are the input to the deferred CPSC product-grain history (TODO "Move 2"); product-level fuzzy resolution remains a separate Phase 6 firm-parallel item (`implementation_plan.md:606-610`).
+- ~~If Q3 shows the corpus is starting to accumulate multi-product recalls (max > 1)~~ **FIRED 2026-06-02** (8.3% multi-product, max 57). ~~Next trigger: the first recall with **both** >1 product **and** >1 content-hash version~~ **FIRED 2026-06-13** — both assertions now run on real cross-version data: C2 holds at 0 across the multi-product corpus (validating the new key), C3 surfaced its first 9 name-drift cases (see the "First genuine C2/C3 test — 2026-06-13" section).
