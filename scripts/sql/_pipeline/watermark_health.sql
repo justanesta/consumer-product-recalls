@@ -52,9 +52,14 @@ order by source;
 --    latest successful run? If updated_at < latest run's started_at, the
 --    watermark is stuck — either the source returned no new records (benign)
 --    or the watermark code path broke (worth investigating).
+--    EXCEPTION: deep-rescan / rebaseline runs (change_type <> 'routine') insert
+--    WITHOUT advancing the watermark by design (NhtsaDeepRescanLoader etc. never
+--    call _touch_freshness). Those are labeled "expected", not STUCK — otherwise
+--    the monthly deep-rescan cron false-alarms every run and a real routine STUCK
+--    is lost to alert fatigue.
 with latest_successful_run as (
     select distinct on (source) source, run_id, started_at, finished_at,
-                                records_extracted, records_inserted
+                                change_type, records_extracted, records_inserted
     from extraction_runs
     where status = 'success'
     order by source, started_at desc
@@ -62,6 +67,7 @@ with latest_successful_run as (
 select
     sw.source,
     lr.run_id                                                    as latest_run_id,
+    lr.change_type                                               as latest_run_change_type,
     lr.started_at                                                as latest_run_started,
     lr.records_inserted                                          as latest_run_inserted,
     sw.updated_at                                                as watermark_updated,
@@ -74,9 +80,11 @@ select
             then 'no watermark by design (full-dump source)'
         when sw.updated_at >= lr.started_at
             then 'advanced this run'
+        when lr.change_type <> 'routine'
+            then 'deep-rescan/rebaseline — watermark intentionally not advanced (expected)'
         when lr.records_inserted = 0
             then 'stuck (no new records — likely benign)'
-        else 'STUCK — investigate (records inserted but watermark did not move)'
+        else 'STUCK — investigate (ROUTINE run inserted but watermark did not move)'
     end                                                          as watermark_status
 from source_watermarks sw
 left join latest_successful_run lr using (source)

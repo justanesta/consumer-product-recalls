@@ -3,7 +3,12 @@
 -- presence value means a source's manifest was wired without enabling track_presence (or the
 -- model's source-scoped join guard regressed). Returns offending rows; expected empty. (NHTSA
 -- presence itself is NULL until the first full-corpus deep-rescan banks a complete manifest — only
--- NhtsaDeepRescanLoader writes it, keyed on campno — so this stays green pre- and post-H-b.)
+-- NhtsaDeepRescanLoader writes it, keyed on campno — so this stays green pre- and post-H-b. It is
+-- therefore NOT a check that NHTSA presence IS populated; that gate is
+-- scripts/sql/_pipeline/verify_nhtsa_presence_closed.sql.)
+--
+-- Renamed 2026-06-13 from assert_recall_lifecycle_presence_usda_only: C16 relaxed the assertion
+-- from USDA-only to the {USDA, NHTSA} tracked-source set, so the old name was misleading.
 
 select recall_event_id, source, is_currently_active, was_ever_retracted
 from {{ ref('recall_lifecycle') }}

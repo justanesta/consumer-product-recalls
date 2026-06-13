@@ -532,17 +532,11 @@ Originally surfaced during Phase 5b USDA extraction when an `etag_enabled: false
 
 **Acceptance criteria met (2026-05-10):** editing `config/sources/usda.yaml` to set `etag_enabled: false` takes effect on the next `recalls extract usda` run with no code change. The CLI dispatch in both `extract` and `deep-rescan` commands now resolves a source name to an extractor class via the static dicts `src.config.source_registry.EXTRACTOR_BY_SOURCE_NAME` and `DEEP_RESCAN_BY_SOURCE_NAME`, then materializes constructor kwargs from `config/sources/<source>.yaml` via `src.config.source_loader.load_source_config`. The `usda.yaml` and `usda_establishments.yaml` "this file is NOT loaded by any code path" header comments are gone — the YAML files are now the live kill switch (and `usda_establishment.yaml` was renamed to `usda_establishments.yaml` so the filename matches the canonical source name in `extraction_runs.source`). As a side effect, the `config/sources/fda.yaml`'s `timeout_seconds: 60.0` declaration now takes effect at runtime (prior runtime used the parent-class default of 30s). See ADR 0012's "Implementation notes — source-config loader and registry (Wave 2, landed 2026-05-10)" section for the full implementation summary.
 
-#### Per-environment YAML overlays — Phase 7 prerequisite (deferred from Wave 2)
+#### Per-environment YAML overlays — shipped (Phase-7 C21); unused by design
 
-ADR 0012 mentions per-env overlays (dev vs. prod) as a possible benefit. Wave 2's MVP is single-file-per-source: the loader reads exactly one `config/sources/<source>.yaml`. Layered overlays — `<source>.<env>.yaml` merging or replacing into the base — were deferred deliberately to keep Wave 2 scoped to the loader/registry refactor.
+ADR 0012 mentioned per-env overlays (dev vs. prod) as a possible benefit, deferred from Wave 2. **The mechanism shipped in C21** (`source_loader.py`: `deep_merge` + a `RECALLS_ENV` selector + `extra='forbid'` fail-loud), which also resolved the three deferred design questions: precedence = **deep-merge field-by-field**; env source = **`RECALLS_ENV` env var**; schema-mismatch = **strict fail (ValidationError)**. Operator how-to is single-homed in `documentation/development.md` → "`RECALLS_ENV` — per-environment source-config overlays."
 
-The current `Settings()` env-var indirection covers the legitimate per-env knobs today (DB URL, R2 keys, FDA creds); URL/timeout/etag values don't differ across dev and prod yet. When the first real env divergence appears (or before production cron turns on, whichever comes first), the overlay layer needs to land. Open design questions to resolve at that point:
-
-- **Overlay precedence** — does `<source>.<env>.yaml` replace the entire block, or merge field-by-field?
-- **Env-name source** — env var (e.g., `RECALLS_ENV=dev`)? hostname? CI flag?
-- **Schema-mismatch behavior** — strict failure if overlay declares an unknown field, or warn-and-fall-back?
-
-**Hard deadline: Phase 7 cron turn-on.** Cron-driven runs in production with the same code path as dev increases the silent-drift risk; before that, divergence is operator-visible.
+**Disposition at go-live: built but not activated — and possibly never.** No `<source>.<env>.yaml` ships and `RECALLS_ENV` stays unset, because the per-env knobs that genuinely differ (DB URL, R2 keys, FDA creds) are carried by `Settings()` env-vars/secrets, and the source-config fields that *could* differ (`base_url`/`timeout`/`etag`) are identical across dev and prod. The original "hard deadline: cron turn-on" no longer applies — there is no divergence to land. Revisit only if a non-secret source-config field ever has to differ between environments.
 
 ### ADR 0026 implementation: per-run snapshot-presence manifest
 
