@@ -7,8 +7,14 @@
       {'columns': ['model']},
       {'columns': ['upc']},
       {'columns': ['search_vector'], 'type': 'gin'},
-    ]
+      {'columns': ['recall_product_upcs'], 'type': 'gin'},
+    ],
+    post_hook="analyze {{ this }}"
 ) }}
+
+-- R3: the `recall_product_upcs` GIN above serves recall-level UPC containment (`@> :upc`) — the real
+-- UPC search path (the per-product `upc` column is NULL for every row today). O2: the all-NULL `upc`
+-- btree is kept as a forward-looking placeholder (operator's call; drop it if build/storage cost matters).
 
 -- mart_product_search — one row per recall_product, denormalized for "is my product recalled?"
 -- (Phase 6e, ADR 0038). Feeds GET /products/search and the app's keyword search. Two access

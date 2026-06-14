@@ -24,6 +24,10 @@ models:
       +materialized: table
     gold:
       +materialized: view
+      # Re-grant SELECT to the public read-only API role (recalls_readonly) after every gold model
+      # build, so it survives the nightly drop+recreate. Gold-only by folder scope; tolerant of the
+      # role being absent (dev/CI). Role provisioned by migration 0034 (serving-layer R1).
+      +post-hook: "{{ grant_gold_readonly() }}"
 
 # Singular tests under tests/source_assumptions/ check load-bearing source-API
 # assumptions (CPSC products[] append-only, FDA PRODUCTID stable, USDA bilingual

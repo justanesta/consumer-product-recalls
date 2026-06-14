@@ -56,6 +56,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 - [0024 — Serving-layer API design](0024-serving-layer-api-design.md) — FastAPI + SQLAlchemy-Core-async over the gold marts; four endpoints; keyset pagination; no star (`fct_*` is the dashboard layer)
 - [0025 — API deployment target](0025-api-deployment-target.md) — Fly.io (Render fallback; Cloudflare Workers rejected — Pyodide/WASM can't run asyncpg)
 - [0039 — Frontend framework](0039-frontend-framework.md) — Astro (islands) on a free static host
+- [0042 — Gold serving marts are a published read contract](0042-gold-serving-marts-published-read-contract.md) — names the load-bearing invariants of `mart_recall_summary`/`mart_product_search`/`mart_firm_profile`/`gold_meta` that the `recalls-api` depends on; breaking changes require API coordination + a `gold_meta.schema_version` bump
 
 ### Tooling and development
 
@@ -113,6 +114,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 39. [Frontend framework](0039-frontend-framework.md)
 40. [Dedicated data-quality framework: Soda Core](0040-data-quality-framework-soda-core.md)
 41. [NHTSA bronze dedup-lookup: set-based staging-table JOIN](0041-nhtsa-bronze-dedup-lookup-staging-join.md)
+42. [Gold serving marts are a published read contract](0042-gold-serving-marts-published-read-contract.md)
 
 ---
 
@@ -120,7 +122,7 @@ A new ADR is written when someone reading the code six months later would ask "w
 
 When adding a new ADR:
 
-1. Pick the next sequential number. Current state: **0001–0041 all filed and Accepted.** 0024 (serving-layer API design), 0025 (API deployment target), 0039 (frontend framework), and 0040 (data-quality framework — Soda Core) were filed 2026-06-09 on the phase-7 branch; 0034/0035/0036/0038 were ratified Accepted at their merges (#60 / #59 / #58 / #62); 0041 (NHTSA bronze dedup-lookup staging JOIN) was filed 2026-06-12 on `feature/pre-go-live-validation`. The serving/presentation ADRs (0024/0025/0039) govern the **separate** API + website repos built after go-live (there is no in-repo Phase 8/9). **The next free number is 0042.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
+1. Pick the next sequential number. Current state: **0001–0042 all filed and Accepted.** 0024 (serving-layer API design), 0025 (API deployment target), 0039 (frontend framework), and 0040 (data-quality framework — Soda Core) were filed 2026-06-09 on the phase-7 branch; 0034/0035/0036/0038 were ratified Accepted at their merges (#60 / #59 / #58 / #62); 0041 (NHTSA bronze dedup-lookup staging JOIN) was filed 2026-06-12 and 0042 (gold serving marts are a published read contract) on 2026-06-13, both on `feature/pre-go-live-validation`. The serving/presentation ADRs (0024/0025/0039/0042) govern the **separate** API + website repos built after go-live (there is no in-repo Phase 8/9). **The next free number is 0043.** (This line is the single source of truth for the next number — plan docs must not reserve numbers independently.)
 2. File name: `NNNN-kebab-case-title.md`.
 3. Use the standard template (see any existing ADR as a model).
 4. Add an entry under the appropriate topic above **and** in the numeric index.

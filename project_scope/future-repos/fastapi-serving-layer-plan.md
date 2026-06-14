@@ -216,15 +216,18 @@ Two access paths, both backed by that mart's indexes:
 ### Deferred — dashboard endpoints over `fct_*`
 
 The `fct_recalls_by_{week,month,year}`, `_monthly_trend`, `_by_firm`, `_by_classification`,
-`_recall_status`, `_by_geography`, `_units_recalled` marts back **optional** read-only aggregate
-endpoints (e.g. `GET /stats/recalls-by-month?source=`). **Not in the v1 endpoint contract (plan 854–859
-lists only the four).** The website plan's §5.5 dashboard inventory is the concrete trigger that
+`_recall_status`, `_by_geography`, `_by_country`, `_units_recalled` marts back **optional** read-only
+aggregate endpoints (e.g. `GET /stats/recalls-by-month?source=`). **Not in the v1 endpoint contract (plan
+854–859 lists only the four).** The website plan's §5.5 dashboard inventory is the concrete trigger that
 un-defers the `/stats/*` family; ADR 0024 resolves whether they ship in API-v1. If the website is in
 scope for the portfolio milestone, `/stats/*` is effectively v1. Scope them only if/when the frontend
 (Phase 9) needs them — and note the
 geography lens trap: `fct_recalls_by_geography` has two non-interchangeable bases (`distribution` vs
 `firm_location`); any endpoint MUST expose `geography_basis` and carry the "never read as consumer
-impact" caveat from `gold_design_notes.md`. Don't quietly pick one.
+impact" caveat from `gold_design_notes.md`. Don't quietly pick one. `fct_recalls_by_country` (FDA+USDA
+only) is the country analogue of the `distribution` lens: its `'US'` cell is **derived** from
+distribution scope, and a US+abroad recall counts once per country, so per-country counts sum to more
+than the distinct-recall total — surface that inflation caveat rather than presenting it as a clean total.
 
 ---
 

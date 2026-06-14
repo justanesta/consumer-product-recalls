@@ -838,6 +838,7 @@ Phase 6f.1's schema walk surfaced three different naming schemes across the per-
 
 - **ADR 0024 — Serving-layer API design** filed and accepted. Covers endpoint shapes, response schemas, pagination, rate-limit posture, auth posture (public read-only per the project vision), OpenAPI generation strategy, and the relationship between API endpoints and dbt gold views.
 - **ADR 0025 — API deployment target** filed and accepted. Evaluates Fly.io vs. Render vs. Cloudflare Workers free tiers against cold-start behavior, Python runtime compatibility, read-only Neon connection patterns (from `main` per ADR 0005), and GitHub Actions CI/CD integration.
+- **Gold-readiness for the serving layer** — the bounded set of **this-repo** gold/pipeline changes that make the `recalls-api` build and run smoothly (the `recalls_readonly` role, the serving-mart indexes/stats, `gold_meta`, the sidecar rename, and the gold-as-contract ADR 0042) is owned by `project_scope/serving-layer-gold-readiness-plan.md`. Only its **R1** read-only role is a hard API-*deploy* gate; the rest ride the normal nightly `dbt build`. Independent of the pipeline's own go-live.
 
 Rationale for two ADRs rather than one: API design and deployment target are separable concerns, and deployment constraints sometimes drive design choices (e.g., Cloudflare Workers' Python limitations would reshape endpoint design). Keeping them separate also matches this project's pattern of narrow, single-decision ADRs.
 
