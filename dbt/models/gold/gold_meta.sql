@@ -5,9 +5,15 @@
 -- Read by the serving API (recalls-api) to compute a layer-wide ETag / Last-Modified for conditional
 -- GET / 304 (gold exposes no other "when was gold last rebuilt" signal — `last_seen_at` is per-recall
 -- observation time, not a layer-wide build stamp). Covered by the gold-folder grant post_hook
--- (recalls_readonly SELECT). `run_started_at` is a tz-aware datetime identical across every model in one
--- `dbt build`; `gold_schema_version` is a manual bump via `--vars '{gold_schema_version: "2"}'`.
+-- (recalls_readonly SELECT). `run_started_at` is a tz-aware UTC datetime (dbt tracking.py:
+-- `datetime.now(tz=pytz.utc)`), identical across every model in one `dbt build`, so we render it
+-- straight into a timestamptz literal: its str() carries the +00:00 offset, so `::timestamptz` parses it
+-- as UTC regardless of the session TimeZone — no conversion needed. We deliberately do NOT call
+-- `astimezone(modules.pytz.UTC)`: dbt exposes `modules.pytz` as a curated dict of `pytz.__all__`, which
+-- contains lowercase `utc` but not `UTC`, so `modules.pytz.UTC` is Undefined (the original snippet's bug)
+-- — and the conversion would be redundant anyway. `gold_schema_version` is a manual bump via
+-- `--vars '{gold_schema_version: "2"}'`.
 
 select
-    '{{ run_started_at.astimezone(modules.pytz.UTC).isoformat() }}'::timestamptz as rebuilt_at,
-    '{{ var("gold_schema_version", "1") }}'::text                               as schema_version
+    '{{ run_started_at }}'::timestamptz            as rebuilt_at,
+    '{{ var("gold_schema_version", "1") }}'::text as schema_version

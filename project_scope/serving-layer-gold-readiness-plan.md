@@ -283,8 +283,14 @@ select
 ```
 
 `run_started_at` is identical across all models in one `dbt build`, so every mart in a run shares one
-`rebuilt_at`. Confirm `run_started_at`/`modules.pytz` are available in the project's dbt version
-(dbt-core ≥1.x); fallback: `'{{ run_started_at }}'::timestamptz` or a `post_hook` `insert` of `now()`.
+`rebuilt_at`. **Resolved during build (2026-06-13):** the snippet's `astimezone(modules.pytz.UTC)` failed
+compilation (*"tzinfo argument must be … not 'Undefined'"*) — **not** a pytz/version availability issue
+but a casing bug: dbt-core 1.11 exposes `modules.pytz` as a curated dict of `pytz.__all__`, which has
+lowercase `utc` but not `UTC`, so `modules.pytz.UTC` is Undefined (`modules.pytz.utc` would resolve).
+Since `run_started_at` is already a tz-aware **UTC** datetime (`dbt/tracking.py`: `datetime.now(tz=pytz.utc)`),
+the conversion is redundant, so the model renders it directly: `'{{ run_started_at }}'::timestamptz` (its
+`str()` carries the `+00:00` offset → parsed as UTC independent of session TimeZone). No dbt-core change
+needed; the fallback the plan named is the as-built.
 **Add `gold_meta` to R1's grant set** (covered by broad `GRANT SELECT ON ALL TABLES`; include it
 explicitly if R1 is scoped gold-only).
 
@@ -472,8 +478,9 @@ rule). Branch-granular sub-tasks belong in the draft-PR body, not here.
    for many short-lived connections. (Affects whether `statement_timeout`/server settings persist.)
 3. **Env-var name** the API reads: **`NEON_DATABASE_URL_RO`** proposed (parallels the pipeline's
    `NEON_DATABASE_URL`, `SecretStr`, fail-loud at boot).
-4. **R4:** confirm dbt `run_started_at` / `modules.pytz` availability in the project's dbt version
-   (fallbacks noted in R4).
+4. **R4:** ~~confirm dbt `run_started_at` / `modules.pytz` availability~~ — **resolved 2026-06-13:**
+   both available (dbt-core 1.11); the snippet's bug was casing — `modules.pytz` exposes `utc` not `UTC`.
+   `run_started_at` is tz-aware UTC, so the model renders it directly (see R4). No dbt-core change.
 5. **R5 timing:** confirm the API's `openapi.json` is **not yet frozen** before renaming.
 6. **O3:** per-mart row counts to replace the unverified "130k" sizing assumption.
 
