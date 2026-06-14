@@ -9,8 +9,10 @@
 ) }}
 
 -- Line-level recall products (ADR 0002). One row per affected product instance.
--- CPSC: explodes the Products[] JSONB array — one row per array element with
---   ordinal-based surrogate key to distinguish identical product names.
+-- CPSC: explodes the Products[] JSONB array — one row per array element keyed on the
+--   STABLE (event, ordinal) anchor (name/model demoted out of the key 2026-06-13, ADR 0031
+--   amendment — durable recall_product_id across CPSC post-publication name edits; the
+--   CPSC analog of NHTSA's v1.5 demotion below, minus the snapshot).
 -- FDA: each bronze row IS a product (PRODUCTID = source_recall_id), so no array
 --   explosion needed — staging feeds directly into the product table.
 -- USDA: product_items is a free-text blob; ADR 0002 defers structured parsing.
@@ -52,8 +54,16 @@ with cpsc_exploded as (
 
 cpsc_products as (
     select
-        md5(recall_event_id || '|' || coalesce(product_name, '') || '|'
-            || coalesce(model, '') || '|' || product_ordinal::text) as recall_product_id,
+        -- Stable (event, ordinal) anchor — name/model are NOT in the key (ADR 0031
+        -- amendment 2026-06-13). They are mutable (CPSC copy-edits product names
+        -- post-publication, e.g. recall 00079) and stg_cpsc_recalls already collapses
+        -- to the latest snapshot, so they ride as Type-1 latest-wins attributes;
+        -- keeping them in the surrogate only churned recall_product_id on every edit.
+        -- Load-bearing dependency: the products[] append-only invariant
+        -- (assert_cpsc_products_array_append_only, green on the multi-product corpus)
+        -- — under an ordinal-only key a reorder would CONFLATE identity, so that
+        -- assertion is now an identity invariant, not a soft fragmentation monitor.
+        md5('CPSC' || '|' || source_recall_id || '|' || product_ordinal::text) as recall_product_id,
         recall_event_id,
         'CPSC'                 as source,
         source_recall_id,

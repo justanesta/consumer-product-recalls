@@ -1,6 +1,6 @@
 # Consumer Product Recalls
 
-A data engineering pipeline that ingests consumer product recall data from five U.S. federal agencies, harmonizes it into a unified queryable database, and serves it via an API and consumer-facing dashboard.
+A data engineering pipeline that ingests consumer product recall data from five U.S. federal agencies, harmonizes it into a unified queryable database, and publishes it as a read-ready gold layer for a future API and consumer-facing dashboard (separate repos, post-go-live).
 
 This is a portfolio project demonstrating end-to-end data engineering: extraction from heterogeneous sources (REST APIs, flat files, HTML scraping), schema validation and drift handling, medallion-architecture transformations, lineage tracking, and production-grade error handling. The full reasoning behind every major design choice lives in [Architecture Decision Records](documentation/decisions/README.md).
 
@@ -9,15 +9,12 @@ This is a portfolio project demonstrating end-to-end data engineering: extractio
 ```mermaid
 flowchart LR
     subgraph sources[Sources]
-        CPSC[CPSC API]
+        CPSC[CPSC Recalls API]
         FDA[FDA iRES API]
-        FDAPR[FDA Press Releases]
-        USDA[USDA FSIS API]
-        USDAEST[USDA Establishments]
-        NHTSA[NHTSA flat file]
-        USCG[USCG recalls scrape]
-        USCGMFR[USCG MIC directory]
-        USCGDET[USCG MIC details]
+        USDA[USDA Recalls API]
+        USDAEST[USDA Establishments MPI API]
+        NHTSA[NHTSA recalls flat file]
+        USCG[USCG recalls website scrape]
     end
 
     subgraph pipeline[4-Layer Medallion Pipeline]
@@ -25,30 +22,23 @@ flowchart LR
         R2[(R2 Landing<br/>raw)]
         BR[(Postgres Bronze<br/>typed per source)]
         SV[(Postgres Silver<br/>unified model)]
-        GD[(Postgres Gold<br/>serving views)]
+        GD[(Postgres Gold<br/>marts + agg views)]
         R2 --> BR --> SV --> GD
     end
 
-    subgraph consumers[Consumers]
-        API[FastAPI]
-        UI[Dashboard]
-    end
+    FUTURE["Phase 8: FastAPI + Dashboard<br/>(separate repos, post-go-live)"]
 
     CPSC --> R2
     FDA --> R2
-    FDAPR --> R2
     USDA --> R2
     USDAEST --> R2
     NHTSA --> R2
     USCG --> R2
-    USCGMFR --> R2
-    USCGDET --> R2
 
-    GD --> API
-    GD --> UI
+    GD -.->|planned| FUTURE
 ```
 
-The four-layer medallion shape is formalized in [ADR 0004](documentation/decisions/0004-four-layer-medallion-pipeline.md); the header/line/firm data model that lives in silver is [ADR 0002](documentation/decisions/0002-unit-of-analysis-header-line-firm.md). Design decisions 0001–0040 are indexed in [`documentation/decisions/README.md`](documentation/decisions/README.md).
+The four-layer medallion shape is formalized in [ADR 0004](documentation/decisions/0004-four-layer-medallion-pipeline.md); the header/line/firm data model that lives in silver is [ADR 0002](documentation/decisions/0002-unit-of-analysis-header-line-firm.md). Design decisions 0001–0042 are indexed in [`documentation/decisions/README.md`](documentation/decisions/README.md).
 
 ## Scope
 
@@ -81,7 +71,9 @@ Full local setup, including optional direnv integration and Proton Pass CLI for 
 
 ## Documentation
 
+- [Architecture guide](documentation/architecture.md) — system shape, data flow, component reference, and load-bearing invariants
 - [Architecture Decision Records](documentation/decisions/README.md) — every major design choice and the reasoning behind it
+- [CLI reference](documentation/cli.md) — full flag semantics and per-source behavior for all recalls subcommands
 - [Documentation model](documentation/documentation_model.md) — how the project organizes ADRs, plans, findings, and TODOs (the doc-process meta-doc)
 - [Development guide](documentation/development.md) — local setup, direnv, Proton Pass, running tests
 - [Operations guide](documentation/operations.md) — secret rotation runbooks, re-ingestion procedure, cassette re-recording
@@ -101,7 +93,7 @@ Full local setup, including optional direnv integration and Proton Pass CLI for 
 
 ## Status
 
-Phase 6 complete: 9 bronze extractors on Neon production, 15 silver models + 4 SCD-2 snapshots, and 9 aggregate gold `fct_` models. Phase 7 (production CI/cron orchestration) is the current frontier — see [`project_scope/implementation_plan.md`](project_scope/implementation_plan.md) for the full roadmap and [`project_scope/phase-7-production-plus-todos-plan.md`](project_scope/phase-7-production-plus-todos-plan.md) for the active execution plan. Architecture decisions 0001–0040 are filed in [`documentation/decisions/README.md`](documentation/decisions/README.md).
+Phase 6 complete; Phase 7 active: 9 bronze extractors on Neon production, 15 silver models + 4 SCD-2 snapshots, 3 serving mart tables + 10 aggregate gold `fct_` models + `gold_meta` + `dim_date`. Phase 7 (production CI/cron orchestration) is the current frontier — see [`project_scope/implementation_plan.md`](project_scope/implementation_plan.md) for the full roadmap and [`project_scope/phase-7-production-plus-todos-plan.md`](project_scope/phase-7-production-plus-todos-plan.md) for the active execution plan. Architecture decisions 0001–0042 are filed in [`documentation/decisions/README.md`](documentation/decisions/README.md).
 
 ## License
 

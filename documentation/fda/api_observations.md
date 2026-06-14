@@ -617,7 +617,7 @@ cassette-trim reasoning is unaffected (its windows still terminate in one page).
 
 ### K0.4. Press-release URLs are lookup-endpoint-only — no bulk presence signal, no alternate bulk source
 
-The press-release columns (`recalleventid, pressreleasetype, pressreleaseissuedt, pressreleaseurl`) are obtainable **only** via the per-event `GET /search/pressreleaseurls/{eventid}` — there is no way to learn which events *have* a press release without one GET per event. Established 2026-06-07 (decision-grade; verified against the primary docs + live probes; see `project_scope/fda-press-release-seed-plan.md`):
+The press-release columns (`recalleventid, pressreleasetype, pressreleaseissuedt, pressreleaseurl`) are obtainable **only** via the per-event `GET /search/pressreleaseurls/{eventid}` — there is no way to learn which events *have* a press release without one GET per event. Established 2026-06-07 (decision-grade; verified against the primary docs + live probes; see `project_scope/archive/fda-press-release-seed-plan.md`):
 
 - **No bulk presence flag.** The 33-column bulk-POST datagroup carries no `pressrelease*` field and no `pressreleaseindicator` (the `*indicator` fields are UI truncation toggles, K0.3); the four PR columns 406 on the bulk POST (Finding K0).
 - **No list-all / windowed PR endpoint.** `/search/pressreleaseurls/` requires a numeric `{eventid}` path param (STATUSCODE 421 otherwise) — there is no no-eventid or date-range form.

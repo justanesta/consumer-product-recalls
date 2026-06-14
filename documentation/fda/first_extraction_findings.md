@@ -172,9 +172,7 @@ their `Q<n>` number.
 Run with:
 
 ```bash
-set -a && . .env && set +a
-PGPASSWORD="$NEON_PASSWORD" psql -h "$NEON_HOST" -U "$NEON_USER" -d "$NEON_DBNAME" \
-  -f scripts/sql/fda/bronze/explore_bronze_shape.sql
+psql "$NEON_DATABASE_URL" -f scripts/sql/fda/bronze/explore_bronze_shape.sql
 ```
 
 See `scripts/sql/README.md` for the broader query-organization convention.

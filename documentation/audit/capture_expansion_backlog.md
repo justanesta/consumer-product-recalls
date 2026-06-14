@@ -1,6 +1,9 @@
 # Capture-expansion backlog — the (b) PR
 
 - **Status:** Open 2026-05-28
+
+> **Update 2026-06-07:** Primary FDA scope (Tier-1 firm address lift + Tier-3 press releases) executed and merged via Phases 6b–6e (PRs #59–#62). Original tracking branch superseded and deletable. CPSC/NHTSA/USCG capture-expansion sections below remain open stubs pending their respective audits.
+
 - **Scope:** Single cross-source parking lot for fields documented in API docs but not currently captured at bronze. Accumulates source-by-source as Phase 6a audits run. Drives one consolidated capture-expansion PR once all five sources are audited.
 - **Methodology:** `documentation/audit/methodology.md`
 - **Driver doc references:** `documentation/<source>/field_audit_<period>.md` per source

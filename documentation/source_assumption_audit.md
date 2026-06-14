@@ -20,7 +20,9 @@ Companion artifacts:
   empirical baselines from running the falsification scripts.
 - **Detection scripts** — `scripts/sql/<source>/bronze/assert_*.sql`
   (rich diagnostic, operator-facing) + `dbt/tests/source_assumptions/assert_*.sql`
-  (thin pass/fail, CI-facing at `severity=warn`).
+  (thin pass/fail, CI-facing; group default `severity=warn` except
+  `assert_cpsc_products_array_append_only.sql`, which is escalated to
+  `severity=error` — ADR 0031 amendment 2026-06-13).
 
 ## Why this exists
 
@@ -73,21 +75,21 @@ Three things prompted the audit:
 
 | | |
 |---|---|
-| **Why load-bearing** | Silver `recall_product_id` includes `product_ordinal` from `LATERAL jsonb_array_elements WITH ORDINALITY` (`dbt/models/silver/recall_product.sql:38-46`). ADR 0031:96 calls this an *implicit* assumption. |
-| **Evidence today** | **Currently untestable on observed data** — every CPSC recall has exactly 1 product (`first_extraction_findings.md` Section A), so the failure mode physically cannot occur. |
+| **Why load-bearing** | Since the 2026-06-13 migration (ADR 0031 amendment), `product_ordinal` is the **sole** identity carrier in the CPSC surrogate — `md5('CPSC'\|source_recall_id\|product_ordinal)` (`cpsc_products` CTE, `recall_product.sql`). The ordinal's stability *is* product identity. |
+| **Evidence today** | **Validated at scale 2026-06-13** — multi-product recalls now exist (8.3%, up to 57 products) and `assert_products_array_append_only` returns 0 across them: first time the failure mode is both physically possible and exercised on cross-version data. See `cpsc/array_stability_findings.md` → "First genuine C2/C3 test — 2026-06-13". |
 | **Falsification script** | `scripts/sql/cpsc/bronze/assert_products_array_append_only.sql` + dbt `assert_cpsc_products_array_append_only.sql` |
-| **ADR 0031 threshold** | >0.1% silver row count fragmented per quarter |
-| **Downstream impact** | Mid-array insertion in a recall with N products fragments N-1 silver rows. Phase 6 reconciliation triggers; likely fix: switch to content-based product surrogate (`md5(name‖description‖model‖number_of_units)`), unifying CPSC's recipe structurally with NHTSA's. Affects `dbt/models/silver/recall_product.sql:21-54`. |
+| **ADR 0031 threshold** | **Any non-zero** — an identity *invariant* since the ordinal-only key, not a fragmentation rate. A violation **conflates** (a later product inherits an earlier slot's id), not fragments. |
+| **Downstream impact** | A mid-array insert / reorder silently re-assigns `recall_product_id` across that recall's products (conflation). Remediate by re-keying / a deterministic tiebreaker + rebuilding silver from bronze (ADR 0007), and treat the assertion as a hard gate. **Supersedes** the prior "switch to a content-based surrogate" fix — the project deliberately moved content *out* of the key for id durability. Affects the `cpsc_products` CTE in `recall_product.sql`. |
 
 ### C3 — Product `name` and `model` strings are not character-normalized after publication
 
 | | |
 |---|---|
-| **Why load-bearing** | Same surrogate as C2 — raw `name`/`model` are inputs to the md5. Independent of array order. |
-| **Evidence today** | Untested (no script existed before this audit). |
+| **Why load-bearing** | **No longer load-bearing for identity since 2026-06-13** (ADR 0031 amendment): name/model were demoted out of the CPSC surrogate. C3 is now an *informational editorial monitor* (does CPSC edit product strings?), not a key input. |
+| **Evidence today** | **First real drift observed 2026-06-13** — 9 `name` cases (0 `model`), all at ordinal 1 on old low-numbered recalls, mostly empty→populated (likely a one-time early-capture/backfill, not organic churn). See `cpsc/array_stability_findings.md` → "First genuine C2/C3 test — 2026-06-13". |
 | **Falsification script** | `scripts/sql/cpsc/bronze/assert_name_model_normalization_stable.sql` + dbt `assert_cpsc_name_model_normalization_stable.sql` |
-| **ADR 0031 threshold** | Same as C2 (treated as same fragmentation class). |
-| **Downstream impact** | Same as C2 + product-level fuzzy resolution becomes a Phase 6 deliverable item alongside firm-level resolution at `implementation_plan.md:606-610`. |
+| **ADR 0031 threshold** | **N/A** — no longer a fragmentation class (name/model out of the key). Informational. |
+| **Downstream impact** | A name/model edit re-versions a Type-1 latest-wins attribute (the current view shows the latest); it does **not** fragment or re-key silver. The drift rows are the input to the deferred CPSC product-grain history (TODO "Move 2"). Product-level fuzzy resolution remains a separate Phase 6 firm-parallel item (`implementation_plan.md:606-610`). |
 
 ### C4 — `LastPublishDate` advances on edits
 
@@ -216,7 +218,7 @@ Three things prompted the audit:
 
 | | |
 |---|---|
-| **Why load-bearing** | ADR 0030 bronze identity. Silver `recall_product_id` is the md5 of the same 11 fields per `recall_product.sql:99-131`. |
+| **Why load-bearing** | ADR 0030 bronze identity. Silver `recall_product_id` is the 7-tuple md5 (single-homed in `stg_nhtsa_recalls_current`; `recall_product.sql` NHTSA CTE at lines 146-183) since the 6c.7 cutover (ADR 0034); the 11-tuple remains the bronze audit grain. |
 | **Evidence today** | Verified end-to-end via `documentation/nhtsa/incremental_delta_findings.md` Section G. Empirical drift baseline: ~0.0005%/day (1 case in 240k — the AC DELCO `maketxt` normalization documented 2026-05-08 in ADR 0031:84). |
 | **Falsification script** | Existing: `scripts/sql/nhtsa/bronze/assert_eleven_tuple_identity_stable.sql`, `assert_nine_tuple_identity_stable.sql`. dbt wrapper: `assert_nhtsa_eleven_tuple_identity_stable.sql`. |
 | **ADR 0031 threshold** | >0.01% silver row count fragmented per month, OR systematic drift on a previously-stable field. |
@@ -293,8 +295,8 @@ summary table below.
 | # | Source | Status | Empirical baseline | Notes |
 |---|---|---|---|---|
 | C1 | CPSC | **Verified** | 1,357 distinct recalls, no duplicates | Natural key works as designed |
-| C2 | CPSC | **Untestable on observed data** | All 1,357 recalls have exactly 1 product | Failure mode physically can't fire on 1-element arrays; first observed CPSC edit (recall `00015`, 2026-05-07/08, retailers text typo) didn't touch products[] |
-| C3 | CPSC | **One positive signal** | 0/1 cross-run cases violated | Only 1 cross-run case in corpus (recall `00015`); name/model byte-stable across the edit |
+| C2 | CPSC | **Validated at scale — 0 violations** | 0 violations across multi-product corpus (8.3% multi-product, max 57; first genuine cross-version + multi-product test 2026-06-13) | Failure mode now both physically possible and exercised on cross-version data — and it holds. De-risked the 2026-06-13 key migration (ADR 0031 amendment). dbt test escalated to `severity=error`. |
+| C3 | CPSC | **First real drift observed — informational** | 9 name cases (0 model), 2026-06-13 | All at ordinal 1 on low-numbered recalls; likely a one-time early-capture backfill. No longer load-bearing for identity (name/model out of the key since ADR 0031 amendment 2026-06-13) — these feed the deferred Move-2 history surface. |
 | C4 | CPSC | Already false → mitigated | Re-confirmed by recall `00015` | CPSC fixed a typo on 2026-05-08 without advancing `last_publish_date`; deep-rescan policy correct |
 | F1 | FDA | **Verified** | 0 PRODUCTID renumbers across 5,529 bronze rows / 2,924 distinct PRODUCTIDs / 7 runs | "Any non-zero rate" threshold not at risk |
 | F2 | FDA | **Verified within routine path** | 41 real edits, 0 silent edits, 0 archive-migration noise (all post rebaseline-filter) | Pre-filter showed 2,535 false silent edits; all attributable to 2026-05-01 architecture realignment (ADR 0027). Cell B = 0 contradicts ADR 0023's archive-migration narrative — worth periodic re-check |

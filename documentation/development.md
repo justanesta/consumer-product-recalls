@@ -113,7 +113,7 @@ A few variables steer behavior without being credentials, so they are read direc
 
 The merged dict is validated through the same Pydantic discriminated union as the base, so an overlay key the schema doesn't declare **fails loud** under `extra='forbid'` (the error names the offending key and the contributing file). When `RECALLS_ENV` is unset/empty, or no `<source>.<env>.yaml` exists, the base file is loaded unchanged — the default behavior.
 
-This is a Phase-7 mechanism; at go-live no source ships an overlay file, so leaving `RECALLS_ENV` unset is correct for normal local and CI runs. Set it only when an environment genuinely needs to override a field (e.g. a staging `base_url`), and create the matching `<source>.<env>.yaml` carrying just the overridden keys.
+**Status (go-live): built and validated, but no overlay ships and `RECALLS_ENV` is unset — and may stay that way indefinitely.** The per-environment knobs that genuinely differ (DB URL, R2 keys, FDA creds) are carried by `Settings()` env-vars / repo secrets, *not* these YAMLs; and the source-config fields that *could* differ (`base_url`, `timeout_seconds`, `etag_enabled`, …) are identical across dev and prod today. So the overlay is a latent capability: activate it only if a non-secret source-config field ever has to diverge between environments — create the matching `config/sources/<source>.<env>.yaml` carrying just the overridden keys and set `RECALLS_ENV` then. Until that day, leaving it unset is correct everywhere — local, CI, and production.
 
 #### `test_db_url` — ephemeral Neon branch for integration/e2e tests (ADR 0015)
 
@@ -138,6 +138,7 @@ R2_ACCESS_KEY_ID=your_dev_r2_access_key
 R2_SECRET_ACCESS_KEY=your_dev_r2_secret_access_key
 R2_BUCKET_NAME=consumer-product-recalls-dev
 
+# FDA credentials are OPTIONAL — only the FDA extractor reads them. Leave these out if you are not running FDA extractions.
 FDA_AUTHORIZATION_USER=your_oii_user
 FDA_AUTHORIZATION_KEY=your_oii_key
 ```

@@ -2,19 +2,19 @@
 
 - **Status:** Active (Tier-4 residual only) — Tiers 1–3 merged (graduation PR #50, Tier 1 PR #51, Tier 2
   W5 PR #52, Tier 3 W7+W8 PR #53). W6 (NHTSA inner-SHA short-circuit + migration 0021 + backfill) **merged
-  as PR #54** (commit 734c48b). Only Tier 4 (W9 USCG-detail subprocess chunking, W10 NHTSA staging anti-join)
-  remains, both deferred-pending-measurement — this plan stays open to own them.
+  as PR #54** (commit 734c48b). **W10** (NHTSA staging-table lookup) is BUILT + verified on prod 2026-06-12 (→ ADR 0041) — built on feature/pre-go-live-validation (not yet merged to main); only **W9**
+  (USCG-detail subprocess chunking) remains, deferred-pending-measurement — this plan stays open to own it.
 - **Owns:** the fix ladder for deep-rescan reliability + workload ahead of Phase-7 scheduled GitHub
   Actions, and the PRE_2010 `response_inner_content_sha256` mitigation (#1–#3).
 - **Points at:** `documentation/audit/deep_rescan_reliability_audit.md` for *what we found* (this doc
   does not restate it — single-home rule). ADR 0010 for the cadence decision this plan amends; ADR 0030
-  for the dedup-contract identity the anti-join workstream must not break.
+  for the dedup-contract identity the W10 staging-table lookup (ADR 0041) must not break.
 
 ## Context
 
 The audit (see findings doc) found two structurally distinct problems under TODO #55: **workload** — a
 NHTSA no-op deep-rescan costs ~21 min because cost scales with corpus, not delta (full
-`model_dump`+hash + ~59 IN-query round-trips, one transaction); and **reliability** — Neon drops long
+`model_dump`+hash + ~59 IN-query round-trips, one transaction) (Resolved — W10/ADR 0041 eliminated the ~59 IN-query round-trips; W6/PR #54 eliminated no-op cost); and **reliability** — Neon drops long
 single-connection runs (`server closed the connection unexpectedly`), every engine is
 `pool_pre_ping`-only, `OperationalError` is in no retry filter, and the USCG-detail full sweep exceeds
 the GHA 6h cap. Each recommendation below was adversarially verified; the verification killed or
@@ -44,7 +44,7 @@ reshaped half of them, and those corrections are baked into the workstream descr
 | W7 | **R6** — make `deep-rescan-fda.yml` cron-runnable: a "Resolve start date" step (mirror the existing end-date step) computing a rolling window; never pass the raw `""` input; validate the window vs ADR 0023 back-dating | 3 | ✅ PR #53 |
 | W8 | **R8** — amend **ADR 0010** with per-source deep-rescan cadence: NHTSA/FDA weekly (cheap once W6 lands), CPSC weekly, USDA n/a (full snapshot), **USCG detail quarterly** (matches `archive/phase-5d-uscg-manufacturers-detail.md`, not monthly); record the 1/12 rotation as a *future option* needing a range param + offset cursor (neither exists). Reorder secret-validation before `uv sync` (YAML) | 3 | ✅ PR #53 |
 | W9 | **R5** — port the chunked-process pattern into the USCG-detail **deep-rescan** workflow (the incremental cron path already fits and needs nothing); benchmark real GHA page-rate first; `timeout-minutes` guard | 4 (defer) | ⏳ |
-| W10 | **R9** — server-side staging-table anti-join for NHTSA (replace the ~59-chunk loop). **Defer (likely won't-do post-W6):** PR #54's short-circuit already eliminates the ~21-min DB-compare on the common no-change run (measured ~21.5 min → ~5s), so this would only speed the *rare* real-change run — revisit only if those become frequent. If pursued: must replicate `_identity_text_expr` text-canonical normalization (guardrail B); use SQLAlchemy bulk insert, not a new `psycopg2` COPY dependency; split read/write transactions; regression test vs the IN-query path | 4 (defer) | ⏳ |
+| W10 | **R9** — server-side staging-table lookup for NHTSA (replace the ~45-59-chunk loop). **BUILT 2026-06-11, verified on prod 2026-06-12** as a fetch-only restructure (`BronzeLoader._fetch_existing_hashes_staged`, `src/bronze/loader.py`): ~17 min → ~1 min, dedup decision byte-identical. Decision + mechanism + rejected alternatives (typed / anti-join / generated-column) + evidence → **ADR 0041** (`documentation/decisions/0041-nhtsa-bronze-dedup-lookup-staging-join.md`) — single home, not restated here. | 4→done | ✅ |
 
 ## PRE_2010 `response_inner_content_sha256` mitigation (#1–#3)
 
@@ -69,7 +69,7 @@ The mitigations:
 
 W0–W1 (PR #50) → **Tier 1** (W2 + W3 + W4 as one reliability/hygiene PR — no dedup/commit-semantics
 risk) → **Tier 2** (W5) → **Tier 3** (W6 + W7 as the NHTSA short-circuit PR incl. W6's migration; W8's
-ADR amendment can ride with any) → **Tier 4** (W9, W10) only if Phase-7 measurements justify them.
+ADR amendment can ride with any) → Tier 4: W10 DONE (ADR 0041, 2026-06-12); W9 (USCG-detail subprocess chunking) deferred-pending-GHA-measurement.
 Cross-branch ordering, if it grows, belongs in `branch_sequencing_strategy.md`, not here.
 
 ## Open questions / benchmarks needed

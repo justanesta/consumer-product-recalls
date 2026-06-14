@@ -253,13 +253,13 @@ Static, build-time. The data-viz showcase — the "look at the trends" page. **E
 | Active vs inactive | stacked bar / donut | `fct_recall_status` |
 | Most-recalled firms | horizontal bar (leaderboard) | `fct_recalls_by_firm` |
 | Geography — **distribution lens** | US choropleth | `GET /stats/by-geography?basis=distribution` ← `fct_recalls_by_geography` |
-| Geography — **firm-registration lens** | US choropleth (separate, captioned) | `…?basis=firm_location` ← `fct_recalls_by_geography` |
+| Geography — **firm-registration lens** | US choropleth (separate, captioned) | `…?basis=firm_registration` ← `fct_recalls_by_geography` |
 | Units recalled (NHTSA/USCG only) | line, captioned "not cross-source comparable" | `fct_units_recalled` |
 
 > **Panel↔model count note:** the 8 panels span **fewer than 8 distinct `fct_*`** — the by-week/month/year
 > row is one toggle over **three** models (`fct_recalls_by_week`/`_by_month`/`_by_year`), and the two
 > geography rows **share** `fct_recalls_by_geography` (one model, two `basis` values). "One chart ← one
-> `fct_*`" still holds (no chart joins models), but a reader reconciling that against the **9 `fct_*` on
+> `fct_*`" still holds (no chart joins models), but a reader reconciling that against the **10 `fct_*` on
 > disk** shouldn't expect a 1:1 panel↔model map — some panels share a model via a basis/grain switch.
 
 > **Cross-plan `/stats/*` pointer:** these dashboards depend on a `/stats/*` endpoint family (and possibly
@@ -273,9 +273,10 @@ Static, build-time. The data-viz showcase — the "look at the trends" page. **E
 > are **different questions** and **not interchangeable** (`gold_design_notes.md` §"Geography has two
 > lenses"). They must be **two separate, captioned charts**, never one toggle that implies equivalence.
 > The firm-registration chart caption must say *registration ≠ where the product went or harmed*; the
-> units chart caption must say *recall-magnitude, not unique vehicles, NHTSA/USCG only*. (If the backend
-> adopts the `firm_location → firm_registration` rename — `gold_design_notes.md` lines 64–67, a
-> confirmed-todo on the pipeline side — the API field and this caption should use `firm_registration`.)
+> units chart caption must say *recall-magnitude, not unique vehicles, NHTSA/USCG only*. (The
+> `firm_location → firm_registration` rename is **done** on the pipeline side — C17, 2026-06-09;
+> `fct_recalls_by_geography` emits `firm_registration` — so the API field and this caption should use
+> `firm_registration` unconditionally.)
 
 ### 5.6 "Is my product recalled?" search (`/search`)
 

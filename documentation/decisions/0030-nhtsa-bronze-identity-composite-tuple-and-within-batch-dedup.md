@@ -6,6 +6,7 @@
 - **Superseded by:** —
 - **Clarifies:** ADR 0007 (extends `hash_exclude_fields` use beyond FDA's RID position counter); ADR 0012 (concrete `identity_fields` choice for NHTSA); ADR 0014 (RECORD_ID is not a per-row natural key despite RCL.txt's "uniquely identifies the record" wording).
 - **Extended by:** ADR 0031 (silver-row fragmentation strategy) — uses this ADR's 11-tuple as the basis for NHTSA's silver `recall_product_id = md5(11-tuple)` recipe; documents the cross-run drift class observed against this identity choice and the v1 reconciliation policy.
+- **Refined by:** ADR 0041 (set-based staging-table dedup lookup) — the chunked existing-hash lookup in this ADR's "Implementation-side: text-canonical IN + chunked existing-hash lookup" subsection becomes the **small-batch path only**; NHTSA-scale batches route to a `pg_temp` staging-table JOIN. The 11-tuple identity, `hash_exclude_fields`, within-batch dedup, `allow_null_identity`, and the `_identity_text_expr` text-canonical comparison are unchanged.
 
 ## Amendment summary (2026-05-08)
 
@@ -194,7 +195,7 @@ Phase 5c Step 2's "Post-bronze identity-and-dedup revision" subsection in `proje
 1. `BronzeLoader.__init__` accepts `within_batch_dedup: bool = False` and `allow_null_identity: bool = False` (defaults preserve CPSC/FDA/USDA behavior).
 2. `_dedup_within_batch()` method collapses `(identity, hash)` duplicates within a batch; raises `WithinBatchIdentityCollisionError` on same-identity-different-hash (defensive).
 3. `_identity_text_expr()` method returns text-canonical SQL expressions for identity columns — `to_char` with ISO-Z format for datetime types, `cast → text` with NULL coalesce for others. Used by `_fetch_existing_hashes` so the IN comparison is uniformly text-vs-text and empty-string binding works for `TIMESTAMPTZ` columns.
-4. `_fetch_existing_hashes()` chunks `identity_keys` at `_PG_PARAM_SAFETY_LIMIT // n_cols` per query (60_000 // 11 = ~5_454 per chunk for NHTSA), running the existing query per chunk via `_fetch_existing_hashes_chunk()` and merging dicts.
+4. `_fetch_existing_hashes()` chunks `identity_keys` at `_PG_PARAM_SAFETY_LIMIT // n_cols` per query (60_000 // 11 = ~5_454 per chunk for NHTSA), running the existing query per chunk via `_fetch_existing_hashes_chunk()` and merging dicts. For large batches (NHTSA's full dump: `len(identity_keys) > chunk_size`), `_fetch_existing_hashes` routes to `_fetch_existing_hashes_staged()` (one `pg_temp` staging-table JOIN) instead of the chunk loop — see ADR 0041. `_fetch_existing_hashes_chunk()` now serves only small batches (CPSC/FDA/USDA daily deltas).
 
 **`src/extractors/nhtsa.py`**:
 1. `load_bronze()` instantiates `BronzeLoader` with the 11-tuple `identity_fields`, `hash_exclude_fields=frozenset({"source_recall_id"})`, `within_batch_dedup=True`, `allow_null_identity=True`. Updated docstring spells out each piece.

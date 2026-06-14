@@ -18,7 +18,7 @@ monitors + the 4 added in 6e.5: date-sanity, units-sanity, and two gold reconcil
 source freshness** configs. The suite **meets and exceeds** the target; the deferred items (statistical /
 baseline-distribution tests) still need production traffic (Phase 7).
 
-## 1. Source-assumption monitors (14) — `dbt/tests/source_assumptions/`, all `warn` via `dbt_project.yml`
+## 1. Source-assumption monitors (13 warn + 1 error) — `dbt/tests/source_assumptions/`, 13 `warn` via `dbt_project.yml`; 1 escalated to `error`
 
 Single-home detail: `documentation/source_assumption_audit.md` (+ per-source findings docs). All **KEEP** —
 these exist to surface source-API drift with known non-zero baselines (ADR 0031).
@@ -28,7 +28,7 @@ these exist to surface source-API drift with known non-zero baselines (ADR 0031)
 | `assert_classification_stable` | recall classification/severity amendments (SCD signal) | KEEP — measure-forward monitor |
 | `assert_lifecycle_stable` | lifecycle-status transitions | KEEP |
 | `assert_mic_holder_stable` | USCG MIC holder change (Type-2 NEED) | KEEP |
-| `assert_cpsc_products_array_append_only` | CPSC `products[]` append-only | KEEP |
+| `assert_cpsc_products_array_append_only` | CPSC `products[]` append-only | **ESCALATED TO ERROR** 2026-06-13 (ADR 0031 amendment) — no longer in the warn register; a violation now fails the build (correctness invariant, baseline 0). Since CPSC product identity keys on (event, ordinal) alone, an ordinal collision is a silent identity conflation — a correctness incident that must not pass. |
 | `assert_cpsc_name_model_normalization_stable` | CPSC product name/model don't renormalize | KEEP |
 | `assert_fda_productid_stable` | FDA PRODUCTID doesn't renumber | KEEP |
 | `assert_fda_eventlmd_correlates_with_content_change` | FDA no silent edits | KEEP |

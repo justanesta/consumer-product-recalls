@@ -24,6 +24,10 @@ models:
       +materialized: table
     gold:
       +materialized: view
+      # Re-grant SELECT to the public read-only API role (recalls_readonly) after every gold model
+      # build, so it survives the nightly drop+recreate. Gold-only by folder scope; tolerant of the
+      # role being absent (dev/CI). Role provisioned by migration 0034 (serving-layer R1).
+      +post-hook: "{{ grant_gold_readonly() }}"
 
 # Singular tests under tests/source_assumptions/ check load-bearing source-API
 # assumptions (CPSC products[] append-only, FDA PRODUCTID stable, USDA bilingual
@@ -34,6 +38,7 @@ models:
 # escalation (warn → error) is deferred until the Soda Core / Great Expectations
 # migration in Phase 7 (implementation_plan.md:643), at which point threshold-
 # aware assertions become natural.
+#
 tests:
   consumer_product_recalls:
     source_assumptions:

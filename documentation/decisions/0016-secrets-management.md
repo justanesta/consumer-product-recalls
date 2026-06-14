@@ -5,13 +5,14 @@
 
 ## Context
 
-The pipeline requires three credential sets:
+The pipeline requires four credential sets:
 
 | Secret | Used by | Sensitivity |
 |---|---|---|
 | **FDA Authorization-User + Authorization-Key** | FDA extractor (ADR 0012) | Medium — revocable via OII Unified Logon |
-| **Neon Postgres connection string** | Bronze loader, dbt, migrations | High — full DB access |
+| **Neon Postgres connection string** (`NEON_DATABASE_URL`) | Bronze loader, dbt, migrations | High — full DB access |
 | **Cloudflare R2 credentials** (access key ID + secret access key) | Raw landing writes (ADR 0004) | High — full bucket access |
+| **Neon read-only connection string** (`NEON_DATABASE_URL_RO`) | recalls-api serving layer (migration 0034) | High — gold SELECT access |
 
 Two environments need secrets: production (GitHub Actions runners per ADR 0010) and local development. The management approach must:
 
@@ -58,11 +59,17 @@ class Settings(BaseSettings):
     r2_access_key_id: SecretStr
     r2_secret_access_key: SecretStr
     r2_bucket_name: str                 # not secret
-    fda_authorization_user: SecretStr
-    fda_authorization_key: SecretStr
+    fda_authorization_user: SecretStr | None = None  # optional; only the FDA extractor reads them
+    fda_authorization_key: SecretStr | None = None
+    dbt_project_dir: str = "dbt"
+    dbt_profiles_dir: str = "dbt"
 
-settings = Settings()  # singleton; raises ValidationError on missing fields at import time
+# No module-level instance: each CLI command constructs Settings() at call time,
+# so env vars are read lazily — raises ValidationError at CLI-command invocation
+# time (not at module import).
 ```
+
+`DbSettings` — a DB-only subclass (`extra="ignore"`) used by CLI commands that touch Postgres but never R2 (resolve-firms, parse-quantities, audit-firm-rollups, re-ingest). Its `extra="ignore"` lets the shared `.env` load cleanly when only `NEON_DATABASE_URL` is wanted. See `src/config/settings.py`.
 
 Extractor YAML configs (ADR 0012) reference secrets by Settings field name, never by value:
 
@@ -75,7 +82,7 @@ auth:
 
 ### Rotation policy
 
-90-day cadence for all three credential sets. Runbooks in `documentation/operations.md`. Quarterly reminder via a scheduled GitHub Actions workflow that auto-opens an issue titled "Rotate secrets" on the first of every third month.
+90-day cadence for all four credential sets. Runbooks in `documentation/operations.md`. Quarterly reminder via a scheduled GitHub Actions workflow that auto-opens an issue titled "Rotate secrets" on the first of every third month.
 
 ### Pre-commit hooks (two-layer defense)
 
@@ -86,7 +93,7 @@ Two hooks rather than one: `gitleaks` is generic and catches credentials from an
 
 ### Missing secrets at runtime
 
-Fail loud at process boot. `Settings()` raises `ValidationError` when required fields are missing, with a clear error naming the missing field. Consistent with ADR 0014's `extra='forbid'` posture.
+Fail loud at invocation time. `Settings()` is constructed per CLI command call (not at module import), so `ValidationError` is raised when required fields are missing as soon as the command is invoked, with a clear error naming the missing field. Consistent with ADR 0014's `extra='forbid'` posture.
 
 For secrets that become invalid mid-run (e.g., FDA key expires while a workflow is executing), the extractor's 401/403 handler from ADR 0013 kicks in — fail fast, alert, workflow exits non-zero.
 

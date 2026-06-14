@@ -490,6 +490,147 @@ class TestLandRaw:
 
 
 # ---------------------------------------------------------------------------
+# NhtsaExtractor — incremental inner-SHA short-circuit (single-archive W6 analog)
+# ---------------------------------------------------------------------------
+
+
+class TestIncrementalShortCircuit:
+    def test_should_short_circuit_true_when_inner_unchanged(
+        self, extractor: NhtsaExtractor
+    ) -> None:
+        extractor._captured_response_inner_content_sha256 = "POST"
+        extractor._change_type = "routine"
+        with patch.object(extractor, "_prior_inner_sha", return_value="POST"):
+            assert extractor._should_short_circuit_incremental() is True
+
+    def test_should_short_circuit_false_when_inner_changed(self, extractor: NhtsaExtractor) -> None:
+        extractor._captured_response_inner_content_sha256 = "POST-NEW"
+        extractor._change_type = "routine"
+        with patch.object(extractor, "_prior_inner_sha", return_value="POST-OLD"):
+            assert extractor._should_short_circuit_incremental() is False
+
+    def test_should_short_circuit_false_when_no_prior_baseline(
+        self, extractor: NhtsaExtractor
+    ) -> None:
+        extractor._captured_response_inner_content_sha256 = "POST"
+        extractor._change_type = "routine"
+        with patch.object(extractor, "_prior_inner_sha", return_value=None):
+            assert extractor._should_short_circuit_incremental() is False
+
+    def test_should_short_circuit_false_when_no_captured_sha(
+        self, extractor: NhtsaExtractor
+    ) -> None:
+        # Defensive: capture somehow failed → full walk, and no DB read is attempted.
+        extractor._captured_response_inner_content_sha256 = None
+        extractor._change_type = "routine"
+        with patch.object(extractor, "_prior_inner_sha") as mock_prior:
+            assert extractor._should_short_circuit_incremental() is False
+        mock_prior.assert_not_called()
+
+    @pytest.mark.parametrize("change_type", ["schema_rebaseline", "hash_helper_rebaseline"])
+    def test_should_short_circuit_false_on_rebaseline_bypass(
+        self, extractor: NhtsaExtractor, change_type: str
+    ) -> None:
+        # Even a perfect match must do the full walk on a rebaseline run — and the bypass
+        # returns before the DB read.
+        extractor._captured_response_inner_content_sha256 = "POST"
+        extractor._change_type = change_type
+        with patch.object(extractor, "_prior_inner_sha", return_value="POST") as mock_prior:
+            assert extractor._should_short_circuit_incremental() is False
+        mock_prior.assert_not_called()
+
+    def test_should_short_circuit_false_when_since_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Dev-mode --since slice: inner-SHA equivalence is insufficient (a looser cutoff
+        # over the same file must still load more rows), so the gate must not fire — and
+        # the since guard returns before the DB read.
+        from datetime import date as _date
+
+        ext = _make_extractor(monkeypatch, since=_date(2023, 1, 1))
+        ext._captured_response_inner_content_sha256 = "POST"
+        ext._change_type = "routine"
+        with patch.object(ext, "_prior_inner_sha", return_value="POST") as mock_prior:
+            assert ext._should_short_circuit_incremental() is False
+        mock_prior.assert_not_called()
+
+    def test_extract_short_circuits_when_unchanged(self, extractor: NhtsaExtractor) -> None:
+        inner = b"POST-BODY"
+        response = _make_zip_response(b"unused")
+        with (
+            patch("httpx.Client") as mock_client,
+            patch.object(extractor, "_decompress_zip", return_value=(inner, "f.txt")),
+            patch.object(
+                extractor, "_prior_inner_sha", return_value=hashlib.sha256(inner).hexdigest()
+            ),
+        ):
+            mock_client.return_value.__enter__.return_value.get.return_value = response
+            records = extractor.extract()
+
+        assert records == []
+        assert extractor._was_short_circuited is True
+        # The POST response is captured BEFORE the gate, so the baseline still advances.
+        assert (
+            extractor._captured_response_inner_content_sha256 == hashlib.sha256(inner).hexdigest()
+        )
+
+    def test_extract_full_walk_when_changed(self, extractor: NhtsaExtractor) -> None:
+        body = ("\t".join(["x"] * _EXPECTED_FIELDS) + "\r\n").encode("utf-8")
+        response = _make_zip_response(b"unused")
+        with (
+            patch("httpx.Client") as mock_client,
+            patch.object(extractor, "_decompress_zip", return_value=(body, "f.txt")),
+            patch.object(extractor, "_prior_inner_sha", return_value=None),
+        ):
+            mock_client.return_value.__enter__.return_value.get.return_value = response
+            records = extractor.extract()
+
+        assert len(records) == 1
+        assert extractor._was_short_circuited is False
+
+    def test_land_raw_skips_upload_when_short_circuited(self, extractor: NhtsaExtractor) -> None:
+        extractor._was_short_circuited = True
+        extractor._wrapper_bytes = b"unchanged wrapper"
+        path = extractor.land_raw([])
+        assert path == ""
+        extractor._r2_client.land.assert_not_called()  # type: ignore[attr-defined]
+
+    def test_augment_run_row_writes_was_short_circuited(self, extractor: NhtsaExtractor) -> None:
+        extractor._was_short_circuited = True
+        row: dict[str, Any] = {}
+        extractor._augment_run_row(row)
+        assert row["was_short_circuited"] is True
+
+    def test_run_stashes_change_type_for_the_gate(self, extractor: NhtsaExtractor) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_super_run(self_: Any, change_type: str = "routine") -> str:
+            captured["change_type"] = change_type
+            return "ok"
+
+        with patch("src.extractors._base.Extractor.run", fake_super_run):
+            result = extractor.run(change_type="schema_rebaseline")
+
+        assert result == "ok"
+        assert captured["change_type"] == "schema_rebaseline"
+        assert extractor._change_type == "schema_rebaseline"
+
+    def test_prior_inner_sha_returns_latest_value(self, extractor: NhtsaExtractor) -> None:
+        # The helper reads the most-recent successful run's POST_2010 inner SHA; mock the
+        # connection so the SELECT yields a single row.
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchone.return_value = ("prior-sha",)
+        extractor._engine.connect.return_value.__enter__.return_value = mock_conn  # type: ignore[attr-defined]
+        assert extractor._prior_inner_sha() == "prior-sha"
+
+    def test_prior_inner_sha_returns_none_when_no_rows(self, extractor: NhtsaExtractor) -> None:
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchone.return_value = None
+        extractor._engine.connect.return_value.__enter__.return_value = mock_conn  # type: ignore[attr-defined]
+        assert extractor._prior_inner_sha() is None
+
+
+# ---------------------------------------------------------------------------
 # NhtsaDeepRescanLoader — pulls both archives, no count guard, no watermark
 # ---------------------------------------------------------------------------
 

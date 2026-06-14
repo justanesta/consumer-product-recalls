@@ -3,7 +3,8 @@
     indexes=[
       {'columns': ['firm_id'], 'unique': True},
       {'columns': ['normalized_name']},
-    ]
+    ],
+    post_hook="analyze {{ this }}"
 ) }}
 
 -- mart_firm_profile — one row per canonical firm (Phase 6e, ADR 0038). Because firm.firm_id
@@ -46,9 +47,9 @@ firm_attr_rows as (
 firm_attrs as (
     select
         firm_id,
-        jsonb_agg(est_json order by establishment_id) filter (where establishment_id is not null) as establishment_attributes,
-        jsonb_agg(mfr_json order by mic)              filter (where mic is not null)              as manufacturer_attributes,
-        jsonb_agg(fda_json order by firm_fei_num)     filter (where firm_fei_num is not null)     as fda_attributes
+        jsonb_agg(est_json order by establishment_id) filter (where establishment_id is not null) as firm_usda_attributes,
+        jsonb_agg(mfr_json order by mic)              filter (where mic is not null)              as firm_uscg_attributes,
+        jsonb_agg(fda_json order by firm_fei_num)     filter (where firm_fei_num is not null)     as firm_fda_attributes
     from firm_attr_rows
     group by firm_id
 ),
@@ -122,9 +123,9 @@ select
     fes.roles,
     fsa.recalls_by_source,
     coalesce(fpc.distinct_products, 0) as distinct_products,
-    fa.establishment_attributes,
-    fa.manufacturer_attributes,
-    fa.fda_attributes
+    fa.firm_usda_attributes,
+    fa.firm_uscg_attributes,
+    fa.firm_fda_attributes
 from {{ ref('firm') }} f
 left join firm_event_stats fes    on fes.firm_id = f.firm_id
 left join firm_source_agg fsa     on fsa.firm_id = f.firm_id

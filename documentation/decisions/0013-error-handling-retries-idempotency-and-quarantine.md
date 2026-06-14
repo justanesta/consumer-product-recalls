@@ -1,6 +1,6 @@
 # 0013 — Error handling: retries, idempotency, and quarantine
 
-- **Status:** Accepted; amended 2026-05-01 (FDA HTML-redirect throttling exception) + 2026-06-09 (restricted-role mutation guard on `*_rejected` tables — both in "Implementation notes" at end)
+- **Status:** Accepted; amended 2026-05-01 (FDA HTML-redirect throttling exception) + 2026-06-09 (restricted-role mutation guard on `*_rejected` tables) + 2026-06-13 (three-role topology — `recalls_readonly` serving role, migration 0034) — all amendments in "Implementation notes" at end
 - **Date:** 2026-04-16
 
 ## Context
@@ -127,13 +127,19 @@ temptation surfaced during the Phase-5b.2 first extraction, when 7,945 records w
 on a missed `city` field and truncating-before-fix-and-retry was tempting). Phase 7 enforces
 append-only as a **Postgres invariant** for production.
 
-**Two-role topology.** Production now uses two Neon roles:
+**Three-role topology.** Production now uses three Neon roles:
 
-- a **privileged** role (table owner) used **only** by `alembic` migrations — full DDL/DML;
-- a **restricted application role** (`recalls_app`) used by the pipeline runtime (extractors,
-  the transform cron, the future read-only API). `NEON_DATABASE_URL` for those runs points at
-  the restricted role. It holds `SELECT`/`INSERT` on `*_rejected` and is **revoked**
-  `TRUNCATE`/`DELETE`/`UPDATE` on them.
+- a **privileged** role (table owner) — full DDL/DML — used by `alembic` migrations **and** by
+  dbt (`build`/`snapshot`/`test`), which needs DDL to create the silver/gold relations;
+- a **restricted application role** (`recalls_app`) used by the SQLAlchemy runtime: extractors
+  and the transform cron's `resolve-firms`/`parse-quantities` steps.
+  `NEON_DATABASE_URL` for those runs points at the restricted role. It holds `SELECT`/`INSERT`
+  on `*_rejected` and is **revoked** `TRUNCATE`/`DELETE`/`UPDATE` on them;
+- a **read-only serving role** (`recalls_readonly`, migration 0034) — used by the public
+  recalls-api: `SELECT` on gold tables only, `default_transaction_read_only=on` session belt,
+  per-build gold grants via `grant_gold_readonly` dbt post-hook. `NEON_DATABASE_URL_RO` carries
+  the connection string. See `documentation/operations.md` → "Restricted app role" for operator
+  setup.
 
 **Mechanism.** Alembic migration `0031_revoke_mutation_on_rejected_tables.py` dynamically
 enumerates every `public.*_rejected` table and revokes `TRUNCATE, DELETE, UPDATE` from

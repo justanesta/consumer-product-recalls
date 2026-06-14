@@ -5,7 +5,10 @@ Architecture per ``documentation/nhtsa/flat_file_observations.md``
 
 - **Incremental path** (``NhtsaExtractor``): downloads
   ``FLAT_RCL_POST_2010.zip`` (~14 MB compressed, ~240,126 records).
-  Daily-cron-friendly; ADR 0007 content-hash dedup absorbs no-op days.
+  Daily-cron-friendly; ADR 0007 content-hash dedup absorbs no-op days,
+  and a post-download inner-SHA short-circuit skips the parse + dedup
+  lookup entirely when POST_2010 is byte-identical to the prior run
+  (the single-archive analog of the deep-rescan W6 gate).
 - **Historical / deep-rescan path** (``NhtsaDeepRescanLoader``):
   downloads BOTH ``FLAT_RCL_PRE_2010.zip`` and ``FLAT_RCL_POST_2010.zip``
   (~322k total rows, dating back to 1966-01-19 by RCDATE). No count
@@ -216,12 +219,21 @@ _DRIFT_RAW_LINE_KEY = "_drift_raw_line"
 class NhtsaExtractor(FlatFileExtractor[NhtsaRecord]):
     """Extractor for the NHTSA flat-file recall corpus — incremental path.
 
-    Strategy: full-dump every run from
-    ``FLAT_RCL_POST_2010.zip``. Watermark surfaces are disqualified
-    per Findings B and C; bronze content-hash dedup (ADR 0007)
-    handles idempotency. Inner-content SHA-256 captured to
-    ``extraction_runs.response_inner_content_sha256`` per Finding J
-    drives the "did the data change?" oracle.
+    Strategy: full-dump from ``FLAT_RCL_POST_2010.zip`` whenever the file
+    changes. Watermark surfaces are disqualified per Findings B and C;
+    bronze content-hash dedup (ADR 0007) handles idempotency. Inner-content
+    SHA-256 captured to ``extraction_runs.response_inner_content_sha256`` per
+    Finding J drives the "did the data change?" oracle.
+
+    Inner-SHA short-circuit (the incremental analog of the deep-rescan W6
+    gate): the download + decompress is unavoidable (it is how the inner SHA
+    is computed), but if POST_2010 is byte-identical to the last successful
+    run, ``extract`` returns ``[]`` after the gate — skipping the ~240k-row
+    parse AND the O(corpus) bronze dedup lookup that dominates a full run's
+    wall-clock. Misses nothing: a matching inner SHA means the decompressed
+    TSV is byte-identical, so there is provably no new content. Bypassed when
+    ``since`` is set (dev mode) or on rebaseline ``change_type``s. See
+    ``_should_short_circuit_incremental``.
 
     For historical loads / forced re-ingestion use
     ``NhtsaDeepRescanLoader``, which pulls both PRE_2010 and POST_2010
@@ -250,12 +262,27 @@ class NhtsaExtractor(FlatFileExtractor[NhtsaRecord]):
     # ZIP — not the decompressed TSV. Phase 6 re-ingest decompresses
     # on demand.
     _wrapper_bytes: bytes = PrivateAttr(default=b"")
+    # Inner-SHA short-circuit state (the incremental analog of the deep-rescan W6 gate,
+    # single-archive). ``_was_short_circuited`` is persisted to
+    # ``extraction_runs.was_short_circuited`` via ``_augment_run_row``; ``_change_type`` is
+    # stashed by ``run()`` so the gate can bypass on rebaseline change_types. Both are
+    # inherited by ``NhtsaDeepRescanLoader``, which reuses them for its two-archive gate.
+    _was_short_circuited: bool = PrivateAttr(default=False)
+    _change_type: str = PrivateAttr(default="routine")
 
     def model_post_init(self, __context: Any) -> None:
         self._engine = make_engine(self.settings.neon_database_url.get_secret_value())
         self._r2_client = R2LandingClient(self.settings)
 
     # --- Lifecycle methods ---
+
+    def run(self, change_type: str = "routine") -> ExtractionResult:
+        # ``change_type`` reaches run() but not extract(); stash it so the inner-SHA
+        # short-circuit gate in extract() can bypass on rebaseline runs. Hoisted here
+        # (from the deep-rescan loader) so the daily incremental path short-circuits too;
+        # ``NhtsaDeepRescanLoader`` inherits this verbatim.
+        self._change_type = change_type
+        return super().run(change_type=change_type)
 
     def extract(self) -> list[dict[str, Any]]:
         """Download, decompress, and parse the POST_2010 TSV.
@@ -274,6 +301,24 @@ class NhtsaExtractor(FlatFileExtractor[NhtsaRecord]):
 
         self._capture_flatfile_response(response, wrapper_bytes, inner_bytes)
         self._wrapper_bytes = wrapper_bytes
+
+        # --- Inner-SHA short-circuit (incremental analog of the deep-rescan W6 gate) ---
+        # The decompressed inner-content SHA is NHTSA's only reliable change oracle — the
+        # ZIP wrapper / ETag re-stamps daily even when content is identical (Finding J) —
+        # so the gate is post-download: once the inner SHA is computed, if POST_2010 is
+        # byte-identical to the last successful run we skip the parse of ~240k rows AND the
+        # O(corpus) bronze dedup lookup (load_bronze no-ops on []). The lifecycle still runs
+        # over the empty list, so _touch_freshness bumps the watermark and _record_run
+        # persists the short-circuit flag + the (unchanged) inner SHA — advancing the
+        # baseline across consecutive no-change runs.
+        if self._should_short_circuit_incremental():
+            self._was_short_circuited = True
+            logger.info(
+                "nhtsa.incremental.short_circuit",
+                reason="inner_content_unchanged",
+                change_type=self._change_type,
+            )
+            return []
 
         # YYYYMMDD strings sort identically to their parsed-date order,
         # so we can apply the `since` filter via a cheap string compare
@@ -322,7 +367,14 @@ class NhtsaExtractor(FlatFileExtractor[NhtsaRecord]):
         ``raw_records`` is unused (the wrapper bytes are stashed in
         ``_wrapper_bytes`` during ``extract()`` to avoid re-downloading
         on retry of this step).
+
+        On an inner-SHA short-circuit the content is unchanged since the last run, so the
+        wrapper ZIP is byte-equivalent to one already in R2 — nothing new worth landing.
+        Return "" (raw_landing_path is not load-bearing with zero records). Mirrors the
+        deep-rescan loader.
         """
+        if self._was_short_circuited:
+            return ""
         path = self._r2_client.land(
             source=_NHTSA_SOURCE,
             content=self._wrapper_bytes,
@@ -470,6 +522,62 @@ class NhtsaExtractor(FlatFileExtractor[NhtsaRecord]):
             )
         )
 
+    def _should_short_circuit_incremental(self) -> bool:
+        """True iff POST_2010's inner content matches the last successful run.
+
+        The incremental analog of ``NhtsaDeepRescanLoader._should_short_circuit`` (W6):
+        the incremental path pulls only POST_2010, so a single-archive inner-SHA match is
+        a complete "nothing changed" signal (the deep-rescan needs BOTH archives). Returns
+        ``False`` — i.e. do the full walk — in these cases:
+
+        - ``self.since`` is set (dev-mode RCDATE slice). Two runs over the same file but
+          different ``since`` cutoffs are NOT equivalent: the inner SHA matches yet the
+          looser run must still load additional rows, so inner-SHA equivalence is
+          insufficient and the gate must not fire. Production never sets ``since``.
+        - rebaseline ``change_type`` (a forced re-version must never be skipped).
+        - no captured inner SHA, no prior baseline (first run), or the content differs.
+        """
+        if self.since is not None:
+            return False
+        if self._change_type in _REBASELINE_CHANGE_TYPES:
+            return False
+        current = self._captured_response_inner_content_sha256
+        if not current:
+            return False
+        return self._prior_inner_sha() == current
+
+    def _prior_inner_sha(self) -> str | None:
+        """The most-recent successful NHTSA run's POST_2010 inner-content SHA, or None.
+
+        Reads ``extraction_runs.response_inner_content_sha256`` (migration 0011). BOTH the
+        incremental and the deep-rescan paths populate that column with the POST_2010 inner
+        SHA (the deep-rescan additionally records the by-archive map), so the baseline is
+        valid regardless of which path ran last. A prior short-circuited run still captures
+        and records the POST response before its gate, so the baseline advances across
+        consecutive no-change runs.
+        """
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                sa.select(_extraction_runs.c.response_inner_content_sha256)
+                .where(
+                    _extraction_runs.c.source == _NHTSA_SOURCE,
+                    _extraction_runs.c.status == "success",
+                    _extraction_runs.c.response_inner_content_sha256.isnot(None),
+                )
+                .order_by(_extraction_runs.c.started_at.desc())
+                .limit(1)
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def _augment_run_row(self, row: dict[str, Any]) -> None:
+        """Persist the short-circuit flag to ``extraction_runs.was_short_circuited``.
+
+        ``True`` on an inner-SHA short-circuit, ``False`` on a full walk. Inherited by
+        ``NhtsaDeepRescanLoader`` (same flag, two-archive gate). Other sources leave the
+        column NULL; USCG writes it via its own hook.
+        """
+        row["was_short_circuited"] = self._was_short_circuited
+
     def _augment_response_row(self, row: dict[str, Any]) -> None:
         """Add NHTSA's inner-content hash (migration 0011) to the extraction_runs row.
 
@@ -535,15 +643,9 @@ class NhtsaDeepRescanLoader(NhtsaExtractor):
     # Hashes for both inner files — needed for the manifest landed in land_raw.
     _post_2010_inner_sha256: str = PrivateAttr(default="")
     _pre_2010_inner_sha256: str = PrivateAttr(default="")
-    # W6 short-circuit state.
-    _was_short_circuited: bool = PrivateAttr(default=False)
-    _change_type: str = PrivateAttr(default="routine")
-
-    def run(self, change_type: str = "routine") -> ExtractionResult:
-        # ``change_type`` reaches run() but not extract(); stash it so the W6
-        # short-circuit gate can bypass on rebaseline runs.
-        self._change_type = change_type
-        return super().run(change_type=change_type)
+    # W6 short-circuit state (``_was_short_circuited`` + ``_change_type``) and the
+    # ``run()`` change-type stash are inherited from ``NhtsaExtractor`` — the incremental
+    # path now short-circuits on the same machinery, single-archive.
 
     def extract(self) -> list[dict[str, Any]]:
         """Download both archives; short-circuit if unchanged, else return concatenated rows.
@@ -627,7 +729,7 @@ class NhtsaDeepRescanLoader(NhtsaExtractor):
         return records
 
     def _should_short_circuit(self) -> bool:
-        """True iff BOTH archives' inner content match the last successful run.
+        """True if BOTH archives' inner content match the last successful run.
 
         Mirrors USCG's ``_should_short_circuit`` gate, but the signal is the decompressed
         inner-content SHA (NHTSA's only reliable change oracle — Finding J). Rebaseline
@@ -758,10 +860,5 @@ class NhtsaDeepRescanLoader(NhtsaExtractor):
             self.file_url: self._post_2010_inner_sha256,
         }
 
-    def _augment_run_row(self, row: dict[str, Any]) -> None:
-        """Record whether this deep-rescan run short-circuited (W6).
-
-        TRUE when both archives' inner content matched the prior run; FALSE on a full
-        walk. The incremental ``NhtsaExtractor`` never short-circuits (leaves NULL).
-        """
-        row["was_short_circuited"] = self._was_short_circuited
+    # ``_augment_run_row`` (writes ``was_short_circuited``) is inherited from
+    # ``NhtsaExtractor`` — identical for both paths.

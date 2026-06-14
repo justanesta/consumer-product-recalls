@@ -20,9 +20,11 @@
 --     across the event's child rows — a proxy for event activity.
 --   * is_currently_active / was_ever_retracted — need the presence manifest
 --     (extraction_run_identities). USDA + NHTSA (the track_presence sources, C16); NULL for
---     CPSC/FDA/USCG. NHTSA presence is GATED to full-enumerating runs (change_type='historical_seed')
---     — routine runs' manifests are partial (bronze dedup hides unchanged campnos), so NHTSA
---     presence stays NULL until a deep-rescan/seed banks a complete manifest (WS-H). It is OBSERVED
+--     CPSC/FDA/USCG. NHTSA presence is GATED to the full-corpus deep-rescan runs — those written by
+--     NhtsaDeepRescanLoader (writes_presence_manifest=True, both archives), NOT a change_type filter,
+--     so the monthly scheduled deep-rescan refreshes presence even as change_type='routine'; the daily
+--     incremental extract pulls POST_2010 only and writes no manifest. NHTSA presence stays NULL until
+--     a deep-rescan/seed banks a complete manifest (WS-H). It is OBSERVED
 --     feed presence, not an authoritative agency retraction (v2). See ADR 0026.
 --
 -- Presence dims key on the LATEST ENUMERATING run (a 304 succeeds but enumerates nothing, so

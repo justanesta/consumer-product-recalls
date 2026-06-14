@@ -122,7 +122,7 @@ Three things happen per extraction run that the diagram above abbreviates:
 | `_html_scraping.py` | `HtmlScrapingExtractor` — operation-type subclass for paginated HTML scrapes (BeautifulSoup). **In production for the three USCG sources** (was "reserved for future use" before the 2026-05-15 USCG reactivation) |
 | `_fsis_headers.py` | Shared browser-fingerprint header helper for USDA FSIS endpoints (per ADR 0016 amendment — bot-manager fingerprinting) |
 | `cpsc.py` / `fda.py` / `usda.py` / `usda_establishment.py` / `nhtsa.py` / `uscg.py` / `uscg_manufacturer.py` / `uscg_manufacturer_detail.py` | Per-source concrete subclasses |
-| `fda_press_release.py` | FDA Tier-3 per-event press-release extractor (incremental + deep-rescan). `FdaPressReleaseCheckpointedSeedLoader` is the resumable **recent-first** historical seed: each batch is a normal `run()` that lands+loads+checkpoints into `deep_rescan_checkpoints` (cursor co-committed with the batch's bronze rows), looping to completion and resuming from the DB cursor — see [`fda-press-release-seed-plan.md`](../project_scope/fda-press-release-seed-plan.md) |
+| `fda_press_release.py` | FDA Tier-3 per-event press-release extractor (incremental + deep-rescan). `FdaPressReleaseCheckpointedSeedLoader` is the resumable **recent-first** historical seed: each batch is a normal `run()` that lands+loads+checkpoints into `deep_rescan_checkpoints` (cursor co-committed with the batch's bronze rows), looping to completion and resuming from the DB cursor — see [`fda-press-release-seed-plan.md`](../project_scope/archive/fda-press-release-seed-plan.md) |
 
 The hierarchy is **two layers deep**: `Extractor` (ABC) → operation-type subclass (`RestApiExtractor`, etc.) → per-source concrete subclass. This was deliberate per [ADR 0012](decisions/0012-extractor-pattern-custom-abc-and-per-source-subclasses.md): `Extractor` defines the lifecycle contract, the operation-type subclasses encode shape-specific concerns (pagination loops for REST, ZIP unpacking for flat files, BeautifulSoup parsing for scraping), and concrete subclasses encode source-specific quirks (auth headers, watermark column names, response-shape multiplexing).
 
@@ -138,11 +138,12 @@ R2 is the immutable substrate. Every extraction's raw payload lands here before 
 
 | File | Role |
 |---|---|
-| `loader.py` | `BronzeLoader` — content-hash conditional insert + quarantine routing |
+| `loader.py` | `BronzeLoader` — content-hash conditional insert + quarantine routing; the existing-hash dedup lookup routes large batches (NHTSA's full dump) through a `pg_temp` staging-table JOIN ([ADR 0041](decisions/0041-nhtsa-bronze-dedup-lookup-staging-join.md)) |
 | `manifest.py` | Pure builder for the per-run presence manifest (`extraction_run_identities`, ADR 0026) — turns a run's passing records into recall-grain presence rows; the write happens in `Extractor._record_run` |
 | `hashing.py` | Canonical-serialization + SHA-256 helpers (per ADR 0007 — changes here are treated as schema migrations) |
 | `retry.py` | `tenacity`-decorated retry policies, applied to lifecycle methods that contact external services |
 | `invariants.py` | Cross-record / business-logic checks (e.g., USDA bilingual orphan, date sanity, null-ID guard) |
+| `dedup_contracts.py` | Per-source `DedupContract` — the dedup-oracle SSOT (`identity_fields` + `hash_exclude_fields` + operational-flag defaults); all loader construction uses `BronzeLoader.from_contract(...)` so incremental, deep-rescan, and recovery paths physically cannot disagree on the oracle (ADR 0030 amendment; ADR 0041 depends on this) |
 
 The bronze layer's job is "what arrived, what we kept, what we rejected, why" — it is the audit boundary between "bytes from the source" and "data we've taken responsibility for."
 
@@ -200,7 +201,19 @@ Cross-source firm entity resolution — collapsing the name variants exact-match
 
 **Where it sits in the flow.** It is a post-staging, pre-silver-firm step. The user runs `recalls resolve-firms` (Typer CLI), which reads the same `stg_*` views the silver `firm` model reads, clusters the distinct names, and writes `firm_crosswalk` — a Postgres table created by Alembic (migrations 0024/0025) and registered as the dbt source `enrichment.firm_crosswalk`. The silver `firm.sql` and `recall_event_firm.sql` then LEFT JOIN it for an **additive** `canonical_firm_id = coalesce(crosswalk.canonical_firm_id, md5(normalized_name))`. `firm_id` stays `md5(normalized_name)`; fuzzy merges express only through the additive canonical.
 
-`recalls parse-quantities` (Phase 7 C13) runs in the same enrichment stage: it reads distinct FDA + USDA raw quantity strings, parses them via `quantity.py`, and truncate-reloads `quantity_crosswalk` (migration 0032, `enrichment.quantity_crosswalk`). Silver `recall_product.sql` LEFT JOINs it for the four `quantity_*` columns. The full run-order is therefore **`dbt build` (staging) → `recalls resolve-firms` → `recalls parse-quantities` → `dbt build` (silver + gold)**.
+`recalls parse-quantities` (Phase 7 C13) runs in the same enrichment stage: it reads distinct FDA + USDA raw quantity strings, parses them via `quantity.py`, and truncate-reloads `quantity_crosswalk` (migration 0032, `enrichment.quantity_crosswalk`). Silver `recall_product.sql` LEFT JOINs it for the four `quantity_*` columns. The full run-order is therefore **`dbt build` (staging + silver) → `recalls resolve-firms` → `recalls parse-quantities` → `dbt build` (silver + gold) → `dbt snapshot` → `dbt test`** — diagrammed below.
+
+```mermaid
+flowchart LR
+    B1["dbt build --exclude-resource-type test<br/>staging + silver · pre-resolve"]
+    EN["recalls resolve-firms<br/>recalls parse-quantities<br/>rebuild firm_crosswalk + quantity_crosswalk"]
+    B2["dbt build --exclude-resource-type test<br/>silver + gold · post-resolve"]
+    SN["dbt snapshot<br/>bank SCD-2 over resolved firms"]
+    TS["dbt test<br/>final assertions over silver + gold"]
+    B1 --> EN --> B2 --> SN --> TS
+```
+
+*Transform run-order — mirrors [`transform.yml`](../.github/workflows/transform.yml) (~03:00 UTC daily; dbt runs as the Neon owner, `resolve-firms`/`parse-quantities` as `recalls_app` per [operations.md](operations.md)). Firm/quantity resolution is a Python stage **between** two dbt builds, so each build uses `--exclude-resource-type test` — build models + seeds + snapshots, skip data tests — and the firm-resolution assertions run once in the final `dbt test` against the fully-resolved tree, never against the pre-resolve intermediate state. The four `strategy='check'` snapshots are keyed on source-native ids and read `stg_*` views (not `firm_crosswalk`), so they are resolution-invariant: the in-build snapshot runs bank at most one version per cycle and the explicit `dbt snapshot` is an idempotent confirmation — no duplicate SCD-2 rows. (`dbt build --exclude-resource-type test snapshot` would leave snapshotting solely to that explicit step.)*
 
 **Why the seam is safe** (the load-bearing property): the stage is *additive* by construction. Because silver coalesces to `md5(normalized_name)`, a missing, stale, or empty crosswalk degrades to "every firm is its own canonical" (no fuzzy merges) — never broken correctness — so the external stage is never load-bearing. And the JOIN keys match by construction: `firm_id = md5(upper(trim(name)))` is computed in Python over the *same* string Postgres computes, reading the *same* staging views `firm.sql` reads. The pure cluster logic is pytest-covered (`tests/enrichment/`); the landed table carries dbt source-tests (`firm_id` not_null+unique, `canonical_firm_id` not_null) — the two-framework testing split ADR 0037 calls for.
 

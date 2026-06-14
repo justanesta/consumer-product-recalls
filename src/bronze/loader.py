@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import sqlalchemy as sa
 import structlog
@@ -256,12 +257,17 @@ class BronzeLoader:
         text-canonical, matching the format the caller's ``identity_keys``
         use, so dict-key equality works in ``filter_new_records``.
 
-        Chunks the lookup over ``identity_keys`` to stay under
-        ``_PG_PARAM_SAFETY_LIMIT`` total bind parameters per query. Per-chunk
-        queries run identical SQL with smaller IN clauses; results merge
-        losslessly into a single dict. For small batches (e.g. CPSC's typical
-        ~10-row daily delta) this runs as one chunk; for NHTSA's ~321k-row
-        deep-rescan path, it runs ~59 chunks of ~5,400 keys each.
+        Routes by batch size against ``_PG_PARAM_SAFETY_LIMIT``:
+
+        - **Batches that fit one IN-query** (``len <= chunk_size`` — e.g. CPSC's
+          ~10-row daily delta) run as a single ``_fetch_existing_hashes_chunk``:
+          one seq-scan, no temp-table overhead.
+        - **Batches that would otherwise fan out into many chunked IN-queries**
+          (NHTSA's ~241k full dump → ~45 chunks, each a full bronze seq-scan
+          recomputing the text-canonical identity per row) take one set-based
+          ``_fetch_existing_hashes_staged`` join instead: O(corpus) one pass vs
+          O(corpus × chunks). The result dict is identical either way — the
+          staged path is a pure ``IN → JOIN`` restructure of the chunk query.
         """
         if not identity_keys:
             return {}
@@ -269,11 +275,9 @@ class BronzeLoader:
         n_cols = len(self._identity_fields)
         chunk_size = max(1, _PG_PARAM_SAFETY_LIMIT // n_cols)
 
-        result: dict[tuple[str, ...], str] = {}
-        for start in range(0, len(identity_keys), chunk_size):
-            chunk = identity_keys[start : start + chunk_size]
-            result.update(self._fetch_existing_hashes_chunk(conn, chunk))
-        return result
+        if len(identity_keys) <= chunk_size:
+            return self._fetch_existing_hashes_chunk(conn, identity_keys)
+        return self._fetch_existing_hashes_staged(conn, identity_keys)
 
     def _fetch_existing_hashes_chunk(
         self,
@@ -332,6 +336,88 @@ class BronzeLoader:
         # content_hash). The text-canonical tuple matches the caller's
         # identity_keys format, so the returned dict's keys can be looked
         # up directly via ``existing.get(item[0])`` in ``filter_new_records``.
+        return {tuple(row[:n]): row[n] for row in rows}
+
+    def _fetch_existing_hashes_staged(
+        self,
+        conn: Connection,
+        identity_keys: list[tuple[str, ...]],
+    ) -> dict[tuple[str, ...], str]:
+        """Set-based existing-hash lookup via a session TEMP table.
+
+        One bronze pass instead of the ~45-59 chunked IN seq-scans the chunk
+        loop did for a full-corpus batch (NHTSA daily/deep-rescan). Returns the
+        identical ``{identity_tuple: latest_content_hash}`` dict: this is a pure
+        ``IN → JOIN`` restructure of ``_fetch_existing_hashes_chunk`` — same
+        ``_identity_text_expr`` text-canonical comparison, same two-stage
+        latest-per-identity recovery — so the dedup semantics ``filter_new_records``
+        sees are unchanged (correct by construction, not just by test).
+
+        Mechanics: bulk-load the (already text-canonical) ``identity_keys`` into a
+        TEMP table as chunked multi-row INSERTs (no ``psycopg2`` COPY dependency),
+        ``ANALYZE`` it so the planner hash-joins (a zero-stats temp table risks a
+        nested loop → per-row bronze seq-scans), then JOIN bronze to it on
+        ``_identity_text_expr`` in place of the chunked ``tuple_(...).in_(...)``.
+        The TEMP table lives in ``pg_temp`` — it needs only the database
+        ``TEMPORARY`` privilege (held by ``recalls_app`` via the PUBLIC default),
+        not ``CREATE`` on ``public`` — and ``ON COMMIT DROP`` reaps it when the
+        caller's transaction commits (no leak, nothing survives a rollback).
+        """
+        bt = self._bronze
+        n = len(self._identity_fields)
+        chunk_size = max(1, _PG_PARAM_SAFETY_LIMIT // n)
+        staging_name = f"_dedup_ids_{uuid4().hex}"
+        staging_cols = [f"c{i}" for i in range(n)]
+
+        # 1. Session TEMP table of N text identity columns; self-reaping at commit.
+        col_ddl = ", ".join(f"{c} text" for c in staging_cols)
+        conn.exec_driver_sql(f"CREATE TEMP TABLE {staging_name} ({col_ddl}) ON COMMIT DROP")
+        staging = sa.table(staging_name, *[sa.column(c, sa.Text) for c in staging_cols])
+
+        # 2. Load the text identity tuples as chunked multi-row INSERTs — each a
+        #    single VALUES statement under the bind-param ceiling.
+        for start in range(0, len(identity_keys), chunk_size):
+            batch = identity_keys[start : start + chunk_size]
+            conn.execute(
+                staging.insert().values(
+                    [dict(zip(staging_cols, key, strict=True)) for key in batch]
+                )
+            )
+
+        # 3. Stats so the planner hash-joins instead of nested-looping per bronze row.
+        conn.exec_driver_sql(f"ANALYZE {staging_name}")
+
+        # 4. Latest extraction_timestamp per text-canonical identity, restricted to
+        #    the staged identities by JOIN (the chunk path's IN clause, set-based).
+        sub_text_exprs = [self._identity_text_expr(col) for col in self._identity_columns()]
+        sub_join = and_(*[sub_text_exprs[i] == staging.c[staging_cols[i]] for i in range(n)])
+        latest_ts = (
+            select(
+                *[
+                    expr.label(f)
+                    for expr, f in zip(sub_text_exprs, self._identity_fields, strict=True)
+                ],
+                func.max(bt.c.extraction_timestamp).label("max_ts"),
+            )
+            .select_from(bt.join(staging, sub_join))
+            .group_by(*sub_text_exprs)
+            .subquery()
+        )
+
+        # 5. Join back to bronze for content_hash at that max_ts — identical to the
+        #    chunk path's outer query.
+        outer_text_exprs = [self._identity_text_expr(col) for col in self._identity_columns()]
+        join_conditions = [
+            outer_text_exprs[i] == getattr(latest_ts.c, f)
+            for i, f in enumerate(self._identity_fields)
+        ]
+        join_conditions.append(bt.c.extraction_timestamp == latest_ts.c.max_ts)
+        stmt = select(
+            *[getattr(latest_ts.c, f) for f in self._identity_fields],
+            bt.c.content_hash,
+        ).join(latest_ts, and_(*join_conditions))
+
+        rows = conn.execute(stmt).fetchall()
         return {tuple(row[:n]): row[n] for row in rows}
 
     def load(

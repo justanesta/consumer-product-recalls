@@ -31,9 +31,11 @@ Plus a transformation workflow scheduled to run after the latest extraction comp
 
 | Workflow | Schedule | Action |
 |---|---|---|
-| `transform.yml` | Daily, time-shifted ~30 min after the latest daily extractor | `dbt build --project-dir dbt` + `dbt test --project-dir dbt`. |
+| `transform.yml` | Daily, 03:00 UTC (1 hr after the 02:xx extracts — ADR 0010 2026-06-08 grid) | `dbt build` (pre-resolve, staging+silver) → `recalls resolve-firms` → `recalls parse-quantities` → `dbt build` (post-resolve, silver+gold) → `dbt snapshot` → `dbt test`. Full sequence: [architecture.md § Transform run-order](architecture.md). |
 
-Pipeline state — per-source watermarks (last-seen publication timestamps, ETags, pagination cursors) and per-run metadata (status, counts, duration, `change_type`) — lives in Neon Postgres: `source_watermarks` and `extraction_runs`. For presence-tracked sources (USDA initially, [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md)) a third table, `extraction_run_identities` (migration 0027), records which recall identities each successful run returned — written automatically inside the run's `_record_run` transaction, **no operator action**. Retention: keep-forever for now (~2K rows per USDA run); revisit a TTL only if disk growth becomes material. Full rationale in [ADR 0020](decisions/0020-pipeline-state-tracking.md). The queries below are written against these tables.
+> **Cron guard:** `transform.yml`'s scheduled job is gated by the `CRON_ENABLED` repository variable (`if: github.event_name != 'schedule' || vars.CRON_ENABLED == 'true'`). The schedule is registered but does **NOT** fire until `CRON_ENABLED` is set to `true` (C40 go-live action). `workflow_dispatch` always fires regardless.
+
+Pipeline state — per-source watermarks (last-seen publication timestamps, ETags, pagination cursors) and per-run metadata (status, counts, duration, `change_type`) — lives in Neon Postgres: `source_watermarks` and `extraction_runs`. For presence-tracked sources (USDA + NHTSA per [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md) as amended by C16; NHTSA manifest written only on full-enumerating deep-rescan runs, keyed on `campno`) a third table, `extraction_run_identities` (migration 0027), records which recall identities each successful run returned — written automatically inside the run's `_record_run` transaction, **no operator action**. Retention: keep-forever for now (~2K rows per USDA run); revisit a TTL only if disk growth becomes material. Full rationale in [ADR 0020](decisions/0020-pipeline-state-tracking.md). The queries below are written against these tables.
 
 ### SCD-2 snapshots (dbt-managed history)
 
@@ -150,7 +152,7 @@ Follow the per-credential runbook below for each set. Rotate one credential at a
 
 ### Rotating the Neon Postgres password
 
-1. In the Neon console, open the project's connection settings and generate a new password for the role the pipeline uses.
+1. In the Neon console, open the project's connection settings and generate a new password for **`recalls_app`** (the pipeline runtime role — the role `NEON_DATABASE_URL` points at in GitHub Actions secrets and local `.env`). The owner and `recalls_readonly` roles rotate separately on the same 90-day cadence; follow this same runbook substituting the role name.
 2. Construct the new `NEON_DATABASE_URL` with the new password (keep the host, database name, and options unchanged).
 3. Update the local `.env` (or password-manager vault item) with the new URL.
 4. Update the `NEON_DATABASE_URL` GitHub Actions repository secret.
@@ -196,60 +198,147 @@ If a credential is suspected compromised, rotate immediately — do not wait for
 ## Restricted app role (production `*_rejected` mutation guard)
 
 [ADR 0013](decisions/0013-error-handling-retries-idempotency-and-quarantine.md) (2026-06-09
-amendment) enforces the `*_rejected` audit tables as **append-only** in production via two
-Neon roles. This is a **one-time setup** before cron go-live and the prerequisite for
-migration `0031`.
+amendment) enforces the `*_rejected` audit tables as **append-only** in production via a
+pipeline/serving role split. Together with migration 0034, production now has three Neon roles.
+The restricted pipeline role and its complete grant posture are defined by migration `0033`
+(it supersedes the old standalone grant script); this is a **one-time setup** before cron go-live.
 
-**The two roles:**
+**The three roles:**
 
-- **Privileged role** — the existing table-owner role. Used **only** to run Alembic
-  migrations. Full DDL/DML.
-- **Restricted role `recalls_app`** — used by the pipeline runtime (extractors, the transform
-  cron, the future read-only API). `SELECT`/`INSERT`/`UPDATE` on the working tables; migration
-  0031 **revokes** `TRUNCATE`/`DELETE`/`UPDATE` on every `*_rejected` table, so the runtime can
-  only append + read them.
+- **Privileged role** — the existing table-owner role. Full DDL/DML. Used by (a) Alembic
+  migrations (operator-run, never in CI) **and** (b) dbt (`build`/`snapshot`/`test`) in the
+  transform cron, which creates and drops the staging/silver/gold/snapshot relations — DDL that
+  `recalls_app` is deliberately not granted.
+- **Restricted role `recalls_app`** — used by the SQLAlchemy/CLI runtime: extractors,
+  deep-rescans, `resolve-firms` and `parse-quantities` (the last two run inside the transform
+  cron). `SELECT`/`INSERT`/`UPDATE` on the working tables; migration 0031 **revokes**
+  `TRUNCATE`/`DELETE`/`UPDATE` on every `*_rejected` table, so the runtime can only append +
+  read them. Does **NOT** serve the read-only API — that is `recalls_readonly` (migration 0034).
+- **Read-only serving role `recalls_readonly`** (migration 0034) — used by the public
+  recalls-api. `SELECT` on gold tables only (re-granted each dbt build by the
+  `grant_gold_readonly` post-hook, since gold tables are recreated each run); `GRANT USAGE ON
+  SCHEMA public`; `default_transaction_read_only = on` session belt. Expose its DSN to the API
+  as `NEON_DATABASE_URL_RO`. Activated out-of-band: `ALTER ROLE recalls_readonly LOGIN PASSWORD
+  <strong pw>`.
 
 **Where credentials live:**
 
-| DSN | Role | Stored in | Used by |
+| Credential | Role | Stored in | Used by |
 |---|---|---|---|
-| Restricted | `recalls_app` | `NEON_DATABASE_URL` GitHub Actions secret **+** local `.env` | every pipeline run (extract / transform cron / API) |
-| Privileged | owner | **operator-held only** (local `.env.migrations` or a password manager — **not** a GitHub secret) | `alembic upgrade head` only |
+| `NEON_DATABASE_URL` (DSN) | `recalls_app` | `NEON_DATABASE_URL` GitHub Actions secret **+** local `.env` | extract / deep-rescan / `resolve-firms` / `parse-quantities` — every SQLAlchemy run |
+| `NEON_DATABASE_URL_RO` (DSN) | `recalls_readonly` | API-repo GitHub Actions secret (not a pipeline secret) | recalls-api serving layer — gold `SELECT` only |
+| `NEON_HOST/USER/PASSWORD/DBNAME` (split fields) | owner | GitHub Actions secrets **+** local `.envrc` | dbt `build`/`snapshot`/`test` in the transform cron |
+| `NEON_DATABASE_URL` override (owner DSN) | owner | **operator-held only** (local `.env.migrations` or a password manager — **not** a GitHub secret) | `alembic upgrade head` only |
 
-Migrations are operator-run (never in CI), so the privileged DSN never needs to live in
-GitHub. `migrations/env.py` reads `NEON_DATABASE_URL`, so you override it just for the
-migration command (step 3).
+dbt needs owner-level DDL to build silver/gold, so under this posture the owner's **split-field**
+credentials do live in GitHub (they drive dbt only). What never becomes a GitHub secret is the
+owner **DSN** (`NEON_DATABASE_URL` form): `migrations/env.py` reads `NEON_DATABASE_URL`, and
+migrations are operator-run (never in CI), so you override that one var to the owner DSN locally
+just for the migration command (step 3). The `NEON_DATABASE_URL` **secret** in GitHub stays
+pointed at `recalls_app`.
 
 **Setup procedure (one-time, before go-live):**
 
-1. **Create the role** — Neon console → Roles → New Role (or `neon roles create --name
-   recalls_app`), with a generated password. Its DSN is the same host/db as the owner, role
-   `recalls_app`.
-2. **Grant runtime privileges** — connect as the **owner** and run the single-home script
-   [`scripts/sql/_pipeline/grant_recalls_app.sql`](../scripts/sql/_pipeline/grant_recalls_app.sql)
-   (SELECT/INSERT/UPDATE on all tables + sequences + default privileges for future tables; plus
-   TRUNCATE on the two rebuilt-each-run crosswalk tables — firm_crosswalk (granted in this script)
-   and quantity_crosswalk (granted in migration 0032), which `resolve-firms` / `parse-quantities`
-   truncate-reload; no DELETE, and no TRUNCATE elsewhere — the runtime needs nothing more).
-3. **Apply the mutation guard** — run migration 0031 **as the owner**:
+> **Create the role via the migration, NOT the Neon console.** Neon auto-adds Console/API/CLI-created
+> roles to `neon_superuser`, whose `pg_write_all_data` membership silently grants `DELETE` on every
+> table — which defeats the `*_rejected` append-only guard (it can't be revoked away from the role,
+> only the membership). Migration `0033` creates `recalls_app` from **SQL**, and a SQL-created role
+> is *not* added to `neon_superuser` (restricted by default). If a `neon_superuser`-tainted role
+> already exists, delete it (Neon console → Roles) and let the migration recreate it clean.
+
+1. **Create the role + its full grant posture** — run migrations **as the owner**:
    ```bash
    NEON_DATABASE_URL="<privileged-owner-DSN>" alembic upgrade head
    ```
-   It revokes `TRUNCATE, DELETE, UPDATE` on every `public.*_rejected` from `recalls_app`
-   (raises if the role doesn't exist — do step 1 first).
-4. **Repoint the runtime** — set the `NEON_DATABASE_URL` **GitHub Actions secret** and your
-   local `.env` to the **restricted** DSN. From here every extract/transform/API run connects
-   as `recalls_app`.
-5. **Verify** — connect as `recalls_app`: `INSERT` into a `*_rejected` table succeeds, `SELECT`
-   succeeds, but `DELETE FROM cpsc_recalls_rejected WHERE false` returns **permission denied**
-   (the guard works).
+   Migration `0033` (the single source of truth for the role) creates `recalls_app` as a **NOLOGIN
+   permission shell** — no password, so nothing secret is committed — and grants exactly the runtime
+   set: SELECT/INSERT/UPDATE on all tables + sequences, default privileges for future tables,
+   TRUNCATE on the two rebuilt-each-run crosswalk tables (`firm_crosswalk` / `quantity_crosswalk`),
+   and the `*_rejected` append-only revoke (mirrors `0031`). It **refuses to run** against a
+   pre-existing role carrying `neon_superuser` or any admin attribute — delete that role first.
+2. **Activate the role (set password + enable LOGIN)** — the password lives only in your secret
+   store, never in the migration. Connect as the owner in `psql` and run:
+   ```sql
+   ALTER ROLE recalls_app LOGIN PASSWORD 'a-strong-password';
+   ```
+   Generate the password in your manager first (save it there), then paste it in. **Neon requires a
+   plaintext password here** — psql's `\password` sends a client-side SCRAM hash, which Neon's
+   control plane rejects with `Neon only supports being given plaintext passwords`. The plaintext is
+   TLS-protected in transit and managed server-side by Neon; the only local trace is
+   `~/.psql_history` (run `\set HISTFILE /dev/null` first, or clear that line after, if you care).
+3. **Repoint the runtime** — set the `NEON_DATABASE_URL` **GitHub Actions secret** and your local
+   `.env` to the **restricted** DSN (same host/db, role `recalls_app`, the step-2 password). From
+   here every SQLAlchemy run — extract / deep-rescan / `resolve-firms` / `parse-quantities` / API —
+   connects as `recalls_app`. The transform cron's **dbt** steps keep connecting as the owner via
+   the `NEON_HOST/USER/PASSWORD/DBNAME` secrets (dbt needs DDL `recalls_app` doesn't have).
+4. **Verify** — run the grant matrix *as `recalls_app`* (the URI carries the role):
+   ```bash
+   psql "$NEON_DATABASE_URL" -f scripts/sql/_pipeline/verify_recalls_app_grants.sql
+   ```
+   Section 0.5 must show every attribute `f` + `member_of_neon_superuser f`; Sections 1–2 every
+   `PASS`; Section 3's `DELETE … WHERE false` must fail with **permission denied** (that error *is*
+   the pass). If anything reads `FAIL`, `scripts/sql/_pipeline/diagnose_recalls_app_grant_sources.sql`
+   shows the per-grant source.
 
-**Dev branches keep full privileges** — truncating a `*_rejected` table while iterating on a
-buggy schema is fine; only run migration 0031 against the production environment using
-`recalls_app`. `downgrade()` re-grants if you need to undo. **Rotation:** the `recalls_app`
+**Dev branches keep full privileges** — `alembic upgrade head` creates `recalls_app` on every
+branch, but local dev connects as the **owner**, so truncating a `*_rejected` table while iterating
+on a buggy schema stays fine; the append-only restriction only bites in production, where the
+runtime connects as `recalls_app`. Migration `0033`'s `downgrade()` drops the role. **Rotation:** the `recalls_app`
 password rotates on the standard 90-day cadence (the "Rotating the Neon Postgres password"
 runbook above rotates whatever role `NEON_DATABASE_URL` points at — now `recalls_app`); the
 privileged owner password rotates separately, operator-held.
+
+### Local validation pass (H-a) — point your shell at `recalls_app`, then back
+
+Before go-live the cron's `recalls_app` path (extracts + `resolve-firms`/`parse-quantities`)
+must be exercised against prod at least once — otherwise the first time the restricted role
+touches prod is the first live cron night, where a missing grant or the migration-0031 REVOKE
+surfaces as an outage. Do this once during H-a:
+
+1. **Point the runtime at `recalls_app` (temporary).** In your local `.env`, set
+   `NEON_DATABASE_URL` to the **`recalls_app`** connection string (Neon console → Roles →
+   `recalls_app` → connection string), then `direnv reload`. **Leave the split fields
+   (`NEON_HOST`/`NEON_USER`/`NEON_PASSWORD`/`NEON_DBNAME`) on `neondb_owner`** — dbt and bare
+   `psql` stay owner, exactly as in prod (Option A).
+2. **Run a simulation day.** `recalls extract …`, `resolve-firms`, `parse-quantities` now connect
+   as `recalls_app`; `dbt build`/`snapshot`/`test` connect as the owner. A clean pass proves the
+   grants are sufficient for the runtime.
+3. **Verify the grant matrix + append-only guard** — run the check *as `recalls_app`* (the
+   `NEON_DATABASE_URL` URI carries the role):
+   ```bash
+   psql "$NEON_DATABASE_URL" -f scripts/sql/_pipeline/verify_recalls_app_grants.sql
+   ```
+   Expect every row `PASS` and Section 3's `DELETE … WHERE false` to fail with
+   `permission denied` (that error **is** the pass).
+4. **Switch back when done.** After the pre-live validation window, restore `NEON_DATABASE_URL`
+   to the **`neondb_owner`** DSN and `direnv reload`, so local `alembic upgrade head` and ad-hoc
+   dev run as the owner again. This swap is **local-only** — in CI/prod the `NEON_DATABASE_URL`
+   *secret* stays pointed at `recalls_app` permanently.
+
+Per-day loaded counts for the H-a artifact (read-only, either role):
+`psql -f scripts/sql/_pipeline/simulation_daily_counts.sql`.
+
+### `recalls_readonly` setup (one-time, before go-live — serving API)
+
+1. **Create the role via migration 0034** (run as owner, same as 0033):
+   ```bash
+   NEON_DATABASE_URL="<privileged-owner-DSN>" alembic upgrade head
+   ```
+   Migration 0034 creates `recalls_readonly` as a `NOLOGIN` SQL shell — no password committed.
+   It grants `USAGE ON SCHEMA public` and sets `default_transaction_read_only = on`. **SELECT
+   grants on gold tables are NOT in the migration** — they are applied by the
+   `grant_gold_readonly` dbt post-hook on every `dbt build` (else wiped by the nightly gold
+   drop + recreate).
+2. **Activate the role** (out-of-band, same plaintext-password note as `recalls_app`):
+   ```sql
+   ALTER ROLE recalls_readonly LOGIN PASSWORD '<strong pw>';
+   ```
+   Generate the password in your manager first, then paste in `psql` as owner.
+3. **Expose the DSN** — add the `recalls_readonly` connection string as `NEON_DATABASE_URL_RO`
+   to the recalls-api repo's GitHub Actions secrets (not this pipeline's secrets).
+4. **Verify** — connect as `recalls_readonly` and confirm:
+   - `SELECT` on a gold table succeeds (after at least one `dbt build` has run the post-hook).
+   - `INSERT`/`UPDATE` on a gold table fails with `permission denied` (the session belt).
 
 ---
 
@@ -291,7 +380,7 @@ Per [ADR 0014](decisions/0014-schema-evolution-policy.md), when an agency change
 
 ### USDA presence-manifest backfill (one-shot)
 
-`scripts/backfill_manifest.py` ([ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md) Mechanism C) reconstructs the USDA presence manifest (`extraction_run_identities`) for runs that predate the table (6c migration 0027), so `recall_lifecycle.is_currently_active` / `was_ever_retracted` extend back to a `run_id` floor. **USDA-only** (the only `default_track_presence` source). **Census-first** — the default mode is read-only:
+`scripts/backfill_manifest.py` ([ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md) Mechanism C) reconstructs the USDA presence manifest (`extraction_run_identities`) for runs that predate the table (6c migration 0027), so `recall_lifecycle.is_currently_active` / `was_ever_retracted` extend back to a `run_id` floor. **USDA-only** (NHTSA is also a `default_track_presence` source per C16, but its pre-table history is not backfillable via this script — NHTSA manifests are only valid after a full-enumerating deep-rescan, which post-dates migration 0027). **Census-first** — the default mode is read-only:
 
 ```bash
 # (a Python script, not a `recalls` subcommand — run it directly)
@@ -331,6 +420,12 @@ recalls deep-rescan uscg_manufacturer_details \
 ```
 
 **Bulk `Date Modified` → mark it a re-baseline.** `date_modified` is **in** the bronze content hash (`src/extractors/uscg_manufacturer_detail.py`), so if USCG bulk-bumps it across the directory (a cosmetic, site-wide timestamp change with no real content edit) a Tier-2 sweep re-inserts the *entire* corpus. Run that sweep with **`--change-type=schema_rebaseline`** so the wave is recorded as a re-baseline, not real edits — keeping the audit trail honest and freshness untouched (the deep-rescan path already skips `_touch_freshness`). The SCD-2 sidecar is unaffected either way: `firm_uscg_attributes_snapshot` excludes `date_modified` from its `check_cols`, so no phantom version is banked.
+
+---
+
+### Go-live simulation + sign-off record (WS-H)
+
+The 2–3 day local simulation, deep-rescan validation, and sign-off checklist (H-a through C40) are recorded in [documentation/operations/go_live_simulation.md](operations/go_live_simulation.md). This is the operator artifact reviewed before flipping `CRON_ENABLED` to `true`.
 
 ---
 

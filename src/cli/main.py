@@ -22,7 +22,7 @@ from src.bronze.reingest import (
 )
 from src.config.db import make_engine
 from src.config.logging import configure_logging
-from src.config.settings import Settings
+from src.config.settings import DbSettings, Settings
 from src.config.source_loader import load_source_config
 from src.config.source_registry import (
     DEEP_RESCAN_BY_SOURCE_NAME,
@@ -651,7 +651,7 @@ def recover_rejected(
         else recoverable_past_date_sanity
     )
 
-    settings = Settings()  # type: ignore[call-arg]
+    settings = DbSettings()  # type: ignore[call-arg]  # DB-only; recovers from bronze, no R2 re-fetch
     engine = make_engine(settings.neon_database_url.get_secret_value())
 
     result = recover_quarantined(
@@ -865,7 +865,7 @@ def resolve_firms(
     ``dbt build --select staging`` (it reads the ``stg_*`` views).
     """
     configure_logging()
-    settings = Settings()  # type: ignore[call-arg]
+    settings = DbSettings()  # type: ignore[call-arg]  # DB-only; no R2 (lands no raw bytes)
     engine = make_engine(settings.neon_database_url.get_secret_value())
     summary = resolve_firm_crosswalk(
         engine,
@@ -901,7 +901,7 @@ def parse_quantities(
     AFTER ``dbt build --select staging`` (it reads the ``stg_*`` views), before the full dbt build.
     """
     configure_logging()
-    settings = Settings()  # type: ignore[call-arg]
+    settings = DbSettings()  # type: ignore[call-arg]  # DB-only; no R2 (lands no raw bytes)
     engine = make_engine(settings.neon_database_url.get_secret_value())
     summary = write_quantity_crosswalk(engine, dry_run=dry_run)
     dry = " [dry-run]" if summary.dry_run else ""
@@ -957,7 +957,7 @@ def audit_firm_rollups(
     monthly and opens an issue when the high-risk tally spikes.
     """
     configure_logging()
-    settings = Settings()  # type: ignore[call-arg]
+    settings = DbSettings()  # type: ignore[call-arg]  # DB-only; no R2 (lands no raw bytes)
     engine = make_engine(settings.neon_database_url.get_secret_value())
     ok = _load_reviewed_ok(reviewed_ok)
     reviews = audit_rollup_clusters(engine, reviewed_ok=ok)

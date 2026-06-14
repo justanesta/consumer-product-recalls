@@ -1,19 +1,22 @@
--- Phase 5c follow-up — assert that CPSC product `name` and `model`
--- strings are not character-normalized after publication.
+-- Phase 5c follow-up — observe whether CPSC `name`/`model` strings change across
+-- bronze snapshots (post-publication character-normalization or any edit).
 --
--- Context: silver `recall_product_id` for CPSC includes raw `name` and
--- `model` in its md5 hash (per `dbt/models/silver/recall_product.sql:40`).
--- If CPSC ever normalizes (e.g., 'AC DELCO' → 'ACDELCO',
--- '  Toaster Oven  ' → 'Toaster Oven', 'Type-A' → 'TypeA') for an
--- existing (source_recall_id, ordinal) slot, the hash changes → silver
--- row fragmentation. This is the same class of failure NHTSA exhibits
--- on `maketxt` per ADR 0031:84 ("AC DELCO maketxt normalization
--- observed 2026-05-08"); detecting it for CPSC is the parity assertion.
+-- *** MIGRATION NOTE (2026-06-13, ADR 0031 amendment) ***
+-- The CPSC silver surrogate no longer includes name/model — it is now the stable
+-- `md5('CPSC'|source_recall_id|product_ordinal)` anchor (name/model demoted to
+-- Type-1 latest-wins attributes). A name/model edit therefore NO LONGER changes
+-- the surrogate or fragments silver: `recall_product` already shows the latest
+-- value via `stg_cpsc_recalls`' latest-per-recall collapse. This assertion is now
+-- an INFORMATIONAL editorial monitor (does CPSC edit product strings?) and the
+-- natural input to the deferred CPSC product-grain history (TODO "Move 2"). The
+-- fragmentation framing below is retained as pre-migration provenance.
 --
--- Why it matters: this is independent of the array-reorder assumption
--- (`assert_products_array_append_only.sql`). Even if CPSC never reorders
--- products[], a character-normalization edit on name/model still
--- fragments the silver surrogate.
+-- (Pre-migration context: the surrogate keyed on raw name/model, so a normalize
+-- like 'AC DELCO' → 'ACDELCO' / '  Toaster Oven  ' → 'Toaster Oven' for an existing
+-- (source_recall_id, ordinal) slot changed the hash → silver row fragmentation —
+-- the CPSC parity to the NHTSA `maketxt` case, ADR 0031. Independent of the
+-- array-reorder assumption: even without a reorder, a name/model edit fragmented
+-- the surrogate. That coupling is exactly what the 2026-06-13 migration removed.)
 --
 -- Strategy: for each (source_recall_id, ordinal), compare the raw and
 -- normalized (UPPER+TRIM) name and model values across runs. If the
@@ -28,11 +31,12 @@
 -- field is also a violation (count(*) > count(field) AND count(field) > 0
 -- mirrors the NHTSA assert pattern).
 --
--- Expected outcome on a clean corpus: drift_group_count = 0 for both
--- name and model.
--- Non-zero results mean CPSC has performed a post-publication character
--- edit on a product name/model — Phase 6 reconciliation triggered per
--- ADR 0031.
+-- Expected outcome: drift_group_count counts (source_recall_id, ordinal) slots
+-- whose name or model changed across snapshots. Non-zero means CPSC performed a
+-- post-publication edit on a product name/model. Post-2026-06-13 this is an
+-- INFORMATIONAL signal — it no longer fragments or re-keys silver (see the
+-- migration note above) and feeds the deferred product-grain history (Move 2),
+-- NOT a Phase 6 fragmentation/reconciliation trigger.
 --
 -- Wire-up: also exercised via dbt singular test
 -- `dbt/tests/source_assumptions/assert_cpsc_name_model_normalization_stable.sql`

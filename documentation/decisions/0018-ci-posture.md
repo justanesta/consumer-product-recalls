@@ -22,14 +22,18 @@ Five sub-decisions to settle:
 | Trigger | What runs | Purpose |
 |---|---|---|
 | **PR to `main`** | `ruff check` + `ruff format --check`, `pyright`, `pytest tests/unit/`, `pytest tests/integration/` (VCR cassettes), `dbt parse` (no run), 1–2 e2e smoke tests on an ephemeral Neon branch | Quality gate before merge |
-| **Push to `main`** | Same as PR checks. *(dbt-docs → Cloudflare Pages **deferred 2026-06-09**; docs publishing moves to the website build — see plan C26.)* | Confirm `main` is healthy |
+| **Push to `main`** | Same as PR checks. *(dbt-docs → Cloudflare Pages **descoped 2026-06-09**; `docs-deploy.yml` deleted; docs publishing moves to the website build — see plan C26.)* | Confirm `main` is healthy |
 | **Cron per source** (per ADR 0010) | Per-source extractor workflows (one `.github/workflows/extract-<source>.yml` each) | Production ingestion |
 | **Cron for transforms** | `dbt build` + `dbt test` against production Postgres | Silver/gold refresh |
 | **`workflow_dispatch`** | Any of the above | Manual trigger for debugging, re-runs, schema-drift re-ingest per ADR 0014 |
 
+> **Note (Phase 7, 2026-06-13 — C32/C40):** Cron-triggered jobs ("Cron per source" and "Cron for transforms") carry a job-level guard: `if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}`. The `schedule:` blocks are committed (and validated by actionlint) but do not fire until the `CRON_ENABLED` repo variable is set to `'true'` at go-live (C40). `workflow_dispatch` always fires regardless of the variable.
+
 ### 2. dbt orchestration — time-shifted cron
 
 Extractors run per ADR 0010 schedules. A separate `transform` workflow runs **daily on cron at a time where extractors typically have completed** — e.g., extractors at 01:00–03:00 UTC, transforms at 05:00 UTC.
+
+> **Updated (Phase 7, 2026-06-13):** `transform.yml` runs at **03:00 UTC** — one hour after the 02:xx extract grid (ADR 0010 2026-06-08 revision). The sequence expanded to 6 steps: `dbt build` (staging + silver, pre-resolve) → `recalls resolve-firms` → `recalls parse-quantities` → `dbt build` (silver + gold, post-resolve) → `dbt snapshot` → `dbt test`. The workflow carries a `CRON_ENABLED` repo-variable gate (see §1 table note): fires on `workflow_dispatch` always, but the scheduled trigger only fires when `CRON_ENABLED == 'true'`. Full sequence rationale: `documentation/architecture.md` § Transform run-order.
 
 Alternative rejected: `workflow_run` chaining. More elegant on paper but has real quirks (doesn't trigger on private forks, only runs on the default branch, fan-in from multiple upstream workflows is awkward). The coupling it provides isn't worth its cost at this scale.
 
@@ -115,6 +119,9 @@ Not enforced at v1:
 - **`README.md`** at repo root — required for a public repo. Covers: what the project is, 5-line architecture summary with a Mermaid diagram of the 4-layer flow, quick start, links to `documentation/` and the ADR index.
 - **`documentation/decisions/README.md`** — topical index of all ADRs, updated as new decisions are filed.
 - **`architecture.md` is deliberately not written.** The 18 ADRs cover architecture with better rationale than a single overview doc would. A separate `architecture.md` would duplicate content and risk staleness as ADRs evolve. The Mermaid diagram in the main `README.md` provides the at-a-glance view; the ADR index provides the structured deep dive.
+
+  > **REVERSED (Phase 6f, 2026-06-08):** `documentation/architecture.md` was written as the reader's entry-point document, covering the four-layer medallion, end-to-end data flow, an extraction-mode table, component tables, load-bearing invariants, and a reading-order guide to the other docs. It supplements the ADRs (component-map view) rather than duplicating them. The Mermaid diagram in `README.md` remains the at-a-glance entry point.
+
 - **Diagrams = Mermaid** (silver/gold ERDs, the pipeline DAG, the ingestion-cadence diagram) — authored as fenced ` ```mermaid ` blocks **inline** in the markdown docs (GitHub renders them; git-diffable; no export step). *(Originally planned as draw.io `.drawio` XML + exported SVG under `documentation/diagrams/`; switched to Mermaid in Phase 6f, and that folder was removed.)*
 
 ## Consequences
@@ -125,11 +132,11 @@ Not enforced at v1:
 - Production ingestion is decoupled from CI — cron workflows run independently of PRs/pushes, so a broken PR doesn't block scheduled ingestion, and a failed cron doesn't block PRs.
 - Six pre-commit hooks cover lint, type, secrets, custom data-contract guards, and lockfile consistency — each earning its place by catching a specific bug class. Defense-in-depth via CI prevents bypass from undermining the policy.
 - Branch protection demonstrates disciplined git hygiene without adding solo-project friction.
-- `architecture.md` avoided; ADR index + Mermaid-in-README provides navigation without duplication.
+- `architecture.md` written (Phase 6f reversal — see §5 note); ADR index + Mermaid-in-README remain the at-a-glance and deep-dive entry points.
 
 ### Open for revision
 
 - **Workflow runtime budgets.** If any PR check consistently runs over a threshold (suggested: 10 minutes), split the workflow (e.g., e2e tests moved to a separate optional job, or parallelized).
-- **dbt transform cron timing.** The 05:00 UTC placeholder is a starting point; adjust once actual extractor completion times are observed.
+- ~~**dbt transform cron timing.** The 05:00 UTC placeholder is a starting point; adjust once actual extractor completion times are observed.~~ **Resolved (Phase 7, 2026-06-13):** 03:00 UTC adopted in `transform.yml` — one hour after the 02:xx extract grid (ADR 0010 2026-06-08 revision note).
 - **Branch protection tightness.** If a second contributor joins, add required reviewer approval and consider signed-commit enforcement.
 - **Separate `architecture.md`.** If the ADR-only approach proves hard to navigate in practice, revisit — but prefer adding structure to the ADR index over duplicating content in a standalone doc.

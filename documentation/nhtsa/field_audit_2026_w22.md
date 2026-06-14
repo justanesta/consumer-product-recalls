@@ -1,6 +1,6 @@
 # NHTSA field audit — 2026 W22
 
-- **Status:** In progress 2026-05-29
+- **Status:** Corpus re-validation complete 2026-06-02; C16 presence work tracked in ADR 0026 (not in scope of this audit)
 - **Scope:** NHTSA FLAT_RCL flat-file recall data (PRE_2010 + POST_2010 archives) — every documented field vs. what we capture, what silver does with it, and what's missing
 - **Methodology:** `documentation/audit/methodology.md`
 - **Companions:**
@@ -563,6 +563,7 @@ Closes most of the "Phase 6a.5 post-seed re-validation" checklist above (explore
 - `documentation/decisions/0030-nhtsa-bronze-identity-composite-tuple-and-within-batch-dedup.md` — 11-tuple bronze identity (load-bearing)
 - `documentation/decisions/0031-silver-row-fragmentation-strategy.md` — silver fragmentation framework + Tier 2 detection
 - `documentation/decisions/0033-silver-row-versioning-via-scd-on-stable-anchor.md` — silver v1.5 SCD migration (Layer 1 docs only as of 2026-05-15)
+- `documentation/decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md` (C16 amendment, 2026-06-09) — NHTSA presence manifest: `NhtsaDeepRescanLoader.writes_presence_manifest=True`, keyed on `campno`; verified PASS 2026-06-13 via `scripts/sql/_pipeline/verify_nhtsa_presence_closed.sql` (#71 closeable at H-f)
 - `documentation/nhtsa/RCL.txt` — canonical field reference
 - `documentation/nhtsa/flat_file_observations.md` — Findings A-L (Phase 5c first-extraction empirical record)
 - `documentation/nhtsa/incremental_delta_findings.md` — Sections A-M (Pierce + Nissan events, daily-delta samples)

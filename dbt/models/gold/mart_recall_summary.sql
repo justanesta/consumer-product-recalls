@@ -5,6 +5,11 @@
       {'columns': ['source', 'published_at']},
       {'columns': ['is_active']},
       {'columns': ['classification']},
+    ],
+    post_hook=[
+      "create index if not exists {{ this.name }}_published_at_desc_evt
+       on {{ this }} (published_at desc, recall_event_id)",
+      "analyze {{ this }}",
     ]
 ) }}
 
@@ -95,11 +100,11 @@ select
     fr.primary_firm_name,
     coalesce(fr.firm_count, 0)        as firm_count,
     coalesce(fr.firms, '[]'::jsonb)   as firms,
-    -- product rollup
+    -- product rollup (O1: coalesce the array rollups to '[]' for serving-layer consistency with `firms`)
     coalesce(pr.product_count, 0)     as product_count,
-    pr.product_names,
-    pr.models,
-    pr.hins,
+    coalesce(pr.product_names, '[]'::jsonb) as product_names,
+    coalesce(pr.models,        '[]'::jsonb) as models,
+    coalesce(pr.hins,          '[]'::jsonb) as hins,
     -- lifecycle (recall_lifecycle, 1:1 with recall_event)
     rl.first_seen_at,
     rl.last_seen_at,

@@ -158,9 +158,9 @@ encodes the grade; the table below names it explicitly.
 | `recall_product` | fact | one row per affected product/line |
 | `firm` | conformed dimension | one row per 6b cross-source canonical firm cluster |
 | `recall_event_firm` | **bridge** (M:N, role-bearing) | event ↔ firm, with `role` + `match_confidence` |
-| `firm_usda_attributes` † | SCD-2 dimension sidecar (USDA/FSIS) | current view over `…_snapshot`, anchor `establishment_number` |
-| `firm_uscg_attributes` † | SCD-2 dimension sidecar (USCG) | current view over `uscg_…_snapshot`, anchor `mic` |
-| `firm_fda_attributes` † | SCD-2 dimension sidecar (FDA) | current view over `…_snapshot`, anchor `firm_fei_num` |
+| `firm_usda_attributes` | SCD-2 dimension sidecar (USDA/FSIS) | current view over `…_snapshot`, anchor `establishment_number` |
+| `firm_uscg_attributes` | SCD-2 dimension sidecar (USCG) | current view over `firm_uscg_attributes_snapshot`, anchor `mic` |
+| `firm_fda_attributes` | SCD-2 dimension sidecar (FDA) | current view over `…_snapshot`, anchor `firm_fei_num` |
 | `recall_event_history` | accumulating history (field-level edits) | LAG-derived change rows |
 | `recall_product_history` | SCD-2 history (NHTSA products) | Policy-C peer of the current view |
 | `recall_lifecycle` | derived per-recall summary | 1:1 with `recall_event` |
@@ -170,10 +170,6 @@ encodes the grade; the table below names it explicitly.
 | `uscg_mic_reassignment_years` | reference helper (MIC temporal) | MIC → current-holder-since-year |
 | `firm_fei_edges` | resolution input (**dormant**) | built but not wired into the live firm build (ADR 0037) |
 
-> **† Pending rename.** The three SCD-2 sidecars are slated for a source-uniform rename to
-> `firm_{usda,uscg,fda}_attributes` (+ matching `_snapshot`s) — tracked in `implementation_plan.md`
-> (Architectural follow-ups, pre-Phase-7). Names here reflect **current** deployment; this table and
-> the figures below update when that branch lands.
 
 ### Recall-event core (Figure 2)
 
@@ -389,8 +385,7 @@ build lineage.
 `firm_id`s collapse into one `canonical_firm_id` (= `firm.firm_id`). The three sidecars soft-join
 `firm` on the anchor (`establishment_number` / `mic` / `firm_fei_num`) carried in
 `firm.observed_company_ids`; each is the **current view** (`dbt_valid_to IS NULL`) over its SCD-2
-snapshot. Note `firm_uscg_attributes` reads **`firm_uscg_attributes_snapshot`** — the
-lone snapshot whose name doesn't match its view (pending rename, role-grade footnote above).
+snapshot. Note `firm_uscg_attributes` reads **`firm_uscg_attributes_snapshot`** — names now match (C19 rename landed).
 
 **Cardinality + status.** A name-merged `firm` can carry **several** establishment_numbers / MICs /
 FEIs, so `firm → sidecar` is one-to-many (zero for CPSC/NHTSA firms — no registry).
@@ -401,9 +396,12 @@ bridge back to the recall side (Figure 2).
 ## Gold layer
 
 Gold is the consumer-shaped serving/analytics layer: **3 serving marts** (`mart_*`, denormalized
-one-big-table per API consumer, materialized `table`, indexed) + **9 aggregate facts** (`fct_*`,
-grain-reduced rollups, materialized `view`). The full rationale (two shapes, indexing, FTS) lives in
-[`gold_design_notes.md`](gold_design_notes.md) and ADR 0038 — not repeated here.
+one-big-table per API consumer, materialized `table`, indexed) + **10 aggregate facts** (`fct_*`,
+grain-reduced rollups, materialized `view`) + **`gold_meta`** (one-row rebuild stamp). The full
+rationale (two shapes, indexing, FTS) lives in [`gold_design_notes.md`](gold_design_notes.md) and
+ADR 0038 — not repeated here. The one-row `gold_meta` table ([ADR 0042](decisions/0042-gold-serving-marts-published-read-contract.md))
+carries `rebuilt_at` (`dbt run_started_at`) and `schema_version` — the API's ETag/Last-Modified
+signal and contract-version stamp.
 
 Forward-looking gold notes also live there: the **`dim_date`** calendar dimension is **decided**
 (built pre-Phase-8, no-regret), and a full **dimensional star schema** is deferred to a Phase-8 call
@@ -411,7 +409,7 @@ gated on the website's data feed — see `gold_design_notes.md` §"Deferred: a d
 
 ### Gold marts + lineage (Figure 4)
 
-The 3 `mart_*` + 9 `fct_*` with lineage edges back to their silver inputs — a `flowchart` (not an
+The 3 `mart_*` + 10 `fct_*` + `gold_meta` with lineage edges back to their silver inputs — a `flowchart` (not an
 `erDiagram`), since the marts denormalize *many* silver tables and the point here is "what feeds what."
 
 ```mermaid
@@ -438,6 +436,7 @@ flowchart LR
         mrs["mart_recall_summary"]
         mfp["mart_firm_profile"]
         mps["mart_product_search"]
+        gm["gold_meta"]
     end
 
     subgraph FCT["Gold · Aggregate facts (views)"]
@@ -491,14 +490,26 @@ notation in [How to read these diagrams](#how-to-read-these-diagrams).
 one wide row per consumer — `mart_recall_summary` per recall, `mart_firm_profile` per firm,
 `mart_product_search` per product. Aggregate `fct_*` (materialized `view`) pre-group `recall_event` to
 coarser grains for dashboards — **except `fct_recalls_by_geography`, a materialized `table`** (its
-`firm_location` lens runs the expensive `firm → SCD-2-sidecar → state` join, too slow to recompute
+`firm_registration` lens runs the expensive `firm → SCD-2-sidecar → state` join, too slow to recompute
 per query, so it is pre-computed + indexed). Gold reuses silver surrogate keys verbatim; full rationale
 in [`gold_design_notes.md`](gold_design_notes.md) + ADR 0038.
 
 **Two lineage notes.** (1) `fct_recalls_by_firm` is the only **gold-on-gold** read — it ranks over
 `mart_firm_profile`, not silver. (2) `fct_recalls_by_geography` carries two lenses: **distribution**
-(`recall_distribution_area`, thick) and **firm_location** (the SCD-2 sidecars, dotted — the same ones
+(`recall_distribution_area`, thick) and **firm_registration** (the SCD-2 sidecars, dotted — the same ones
 Figure 3 details).
+
+## Neon database roles
+
+Three roles govern runtime access. Full operator setup lives in `operations.md` → "Restricted app role."
+
+| Role | Migrations | Privileges | Used by |
+|---|---|---|---|
+| `owner` (baseline) | — | Full DDL/DML | dbt, Alembic migrations |
+| `recalls_app` | 0033 | SELECT/INSERT/UPDATE on all tables; TRUNCATE on `firm_crosswalk` + `quantity_crosswalk` only; no UPDATE/DELETE/TRUNCATE on `*_rejected` tables | Pipeline runtime |
+| `recalls_readonly` | 0034 | SELECT on gold tables only (via `grant_gold_readonly` post-hook — survives the nightly drop+recreate); `default_transaction_read_only = on` | Public recalls API (NEON_DATABASE_URL_RO) |
+
+The `recalls_readonly` grants are applied by the dbt `grant_gold_readonly` post-hook rather than as a one-time migration grant, because gold tables are dropped and recreated on each build — a static grant would be wiped.
 
 ## See also
 

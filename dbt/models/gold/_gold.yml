@@ -4,7 +4,7 @@ models:
   - name: dim_date
     description: >
       Generated calendar dimension (ADR 0038 §2; built 2026-06-08 decision). One row per
-      calendar day, 1960-01-01..(current year + 2, dynamic). Replaces the inline date_trunc(published_at)
+      calendar day, 1940-01-01..(current year + 2, dynamic). Replaces the inline date_trunc(published_at)
       across the date-grained fct_* models (the C11 wiring step). dim_ prefix per ADR 0038.
     columns:
       - name: date_day
@@ -131,8 +131,9 @@ models:
       it is NOT cross-source comparable — always filter by source, no 'ALL' rollup. unit_category
       (count/weight/volume/grouping) keeps incommensurable units apart. NHTSA potaff is collapsed to
       one count per recall (repeats across component rows). FDA/USDA come from the C13 quantity parse,
-      basis-aware: per_product rows are summed, total_all_products (a recall-wide total repeated per
-      product row) is max'd. CPSC remains free-text-only (no parse).
+      basis-agnostic: the recall-wide quantity repeats identically across the recall's product rows, so
+      units = max(quantity_value) per (recall, category) — a SUM would over-count by the row count (the
+      basis-sum/GREATEST logic was replaced 2026-06-09). CPSC remains free-text-only (no parse).
     columns:
       - name: source
         tests:
@@ -282,3 +283,18 @@ models:
       - name: recall_count
         tests:
           - not_null
+
+  - name: gold_meta
+    description: >
+      One-row gold-layer rebuild stamp (serving-layer plan R4, ADR 0038 §2). rebuilt_at = the dbt
+      run_started_at (UTC), identical across every model in one `dbt build`; read by the serving API
+      (recalls-api) to compute a layer-wide ETag / Last-Modified for conditional GET / 304. Granted to
+      recalls_readonly by the gold-folder post-hook. schema_version is a manual bump via
+      --vars '{gold_schema_version: "2"}'.
+    columns:
+      - name: rebuilt_at
+        description: Gold-layer build timestamp (UTC) — the dbt run start time.
+        tests: [not_null]
+      - name: schema_version
+        description: Manually bumped gold contract version string (default '1').
+        tests: [not_null]

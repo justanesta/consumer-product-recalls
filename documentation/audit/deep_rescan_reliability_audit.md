@@ -31,16 +31,24 @@ corpus-level gate that can exit before `BronzeLoader.load()`.
   `content_hash`). This is the dominant share of the 21 min. **Measured 2026-06-02 (W6 acceptance,
   PR #54): the DB-compare is essentially the *entire* cost** — a full deep-rescan logged `load_bronze`
   ≈ 21.5 min vs ~13s for download+parse+validate combined (download 4.9s, parse 1.8s, validate 6.7s over
-  322,672 rows). Converts the inference above into a measurement.
+  322,672 rows). Converts the inference above into a measurement. **Resolved 2026-06-12 (W10, → ADR 0041):** the ~59-chunk fan-out (O(corpus × chunks)) collapses to one `pg_temp` staging-table JOIN (`_fetch_existing_hashes_staged`, O(corpus) one pass) — fetch ≈ 17 min → ≈ 6 s, full daily run → 61 s, dedup decision byte-identical. The residual O(corpus) one-pass (still not O(delta)) is the deferred generated-column escalation documented in ADR 0041.
 - **`response_inner_content_sha256` is write-only.** It is INSERTed after the load
   (`_augment_response_row`) and **never SELECTed back to gate a run.** NHTSA has no short-circuit on the
   deep-rescan path; the USCG `_should_short_circuit` two-gate pattern is explicitly disabled on the
   listing deep-rescan subclasses. **Resolved 2026-06-02 (W6, PR #54):** `NhtsaDeepRescanLoader` now reads
   the prior run's inner SHAs from `response_inner_content_sha256_by_archive` (migration 0021) and
   short-circuits a no-change deep-rescan in ~5s — see `project_scope/deep-rescan-reliability-plan.md`.
+  Additionally, the incremental path (`NhtsaExtractor`) gained a parallel inner-SHA short-circuit
+  (`_should_short_circuit_incremental` — the single-archive analog of W6) on
+  `feature/pre-go-live-validation` (2026-06-10): on a no-change day the incremental run skips the
+  ~241k-row parse AND the O(corpus) bronze dedup lookup entirely, returning in seconds. Bypassed when
+  `since` is set or on rebaseline `change_type`s. See
+  `src/extractors/nhtsa.py:_should_short_circuit_incremental`.
 - **Whole load in one transaction.** `NhtsaDeepRescanLoader.load_bronze` wraps the entire ~59-chunk
   fetch + single batched insert in one `engine.begin()` — efficient for the insert, but holds one
-  connection open for the full multi-minute DB phase.
+  connection open for the full multi-minute DB phase. **Resolved 2026-06-12 (W10, → ADR 0041):** the
+  ~59-chunk fan-out is replaced by a single staging-table JOIN (`_fetch_existing_hashes_staged`); the
+  DB phase is now ~6 s, so the connection-hold window is no longer multi-minute.
 - **Per-source no-op cost.** FDA windowed mode scales with *delta* (cheap); FDA full-corpus ≈ 4.5 min
   pagination; USCG detail holds **no** DB connection during its ~14k-page HTTP loop (it opens a fresh
   `engine.begin()` only for the final write).

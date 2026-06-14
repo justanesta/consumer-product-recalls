@@ -1,6 +1,6 @@
 # 0026 — Lifecycle tracking via per-run snapshot-presence manifest
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-06-09 — NHTSA track_presence enabled; campno key via DedupContract.presence_recall_id_field; deep-rescan-only write; see Acceptance resolution §1)
 - **Date:** 2026-05-01
 - **Supersedes:** —
 - **Superseded by:** —
@@ -222,12 +222,9 @@ That said, the same empirical check applies: snapshot the full bulk POST result
 twice over a meaningful window and diff. If no `PRODUCTID` ever disappears, FDA
 does not need this manifest. If even rare retractions occur, the manifest applies.
 
-### NHTSA — TBD, evaluate at Phase 5c
+### NHTSA — Resolved (C16, 2026-06-09)
 
-NHTSA is a full-snapshot flat file. Each release supersedes the previous one;
-records absent from the new file are retracted by definition. The manifest
-applies trivially — every flat file *is* a manifest. Implementation may collapse
-to "the raw payload's identity set, computed at land time."
+NHTSA track_presence is enabled per the Amendment at the top of this ADR. Key decisions recorded there: (1) presence keyed on campno (not the regen-unstable RECORD_ID), (2) only NhtsaDeepRescanLoader writes the manifest (both archives = full-corpus snapshot). Verified PASS 2026-06-13 via scripts/sql/_pipeline/verify_nhtsa_presence_closed.sql.
 
 ### USCG — TBD, evaluate at Phase 5d
 
@@ -238,6 +235,8 @@ own brittleness probably dominates the architectural concerns at that point.
 ### Cross-source decision
 
 **Decided 2026-05-01 (acceptance resolution at top): USDA-only initially.** The original draft recommended populating the manifest for all five sources from day-one, but the empirical evidence is concentrated in USDA. CPSC and FDA's first-extraction findings show no retractions; NHTSA and USCG haven't been extracted yet. Land the mechanism with USDA, then extend to other sources when their findings present a comparable signal.
+
+Amendment (2026-06-09, C16): NHTSA was added to the tracked-source set; see the Amendment at the top of this ADR for the campno-key and deep-rescan-only design. Track-presence sources are now {usda, nhtsa}. The 2026-05-01 "USDA-only initially" resolution is superseded for NHTSA.
 
 The bronze loader implementation must be source-parameterized — adding CPSC or FDA later should be a config change (a per-source `track_presence: bool` on the extractor config), not a structural refactor. The `extraction_run_identities` table schema accommodates all five sources from day one (the `langcode` column is nullable for non-bilingual sources).
 

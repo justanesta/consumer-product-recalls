@@ -33,7 +33,7 @@ subcommand's flags.
 
 ## Commands
 
-There are seven commands: [`version`](#recalls-version),
+There are eight commands: [`version`](#recalls-version),
 [`extract`](#recalls-extract-source),
 [`deep-rescan`](#recalls-deep-rescan-source),
 [`re-ingest`](#recalls-re-ingest-source),

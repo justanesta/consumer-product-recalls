@@ -14,7 +14,7 @@ The verbose forms in the per-tool sections below are kept for clarity (any reade
 |---|---|---|
 | **dbt** | `DBT_PROJECT_DIR=$(pwd)/dbt`, `DBT_PROFILES_DIR=$(pwd)/dbt` | `--project-dir dbt --profiles-dir dbt` on every dbt subcommand |
 | **aws** (R2) | `AWS_ENDPOINT_URL=https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com` (plus the standard `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` mapped from your R2 credentials, or `AWS_PROFILE` if you keep them in `~/.aws/credentials`) | `--endpoint-url $R2_ENDPOINT` on every `aws s3 ...` invocation |
-| **psql** | `PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGSSLMODE` (libpq standards — split out of `NEON_DATABASE_URL`) | The `$NEON_DATABASE_URL` argument; bare `psql` connects to the dev branch |
+| **psql** | `PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGSSLMODE` (libpq standards — split out of `NEON_DATABASE_URL`) | The `$NEON_DATABASE_URL` argument; bare `psql` connects to whichever Neon branch `NEON_DATABASE_URL` targets (production main branch in the current setup; swap to your dev branch DSN for local exploration) |
 
 Concrete examples — same command both ways:
 
@@ -71,6 +71,11 @@ uv run recalls re-ingest <source> \                       # R2 replay (Phase 6d)
     --from-date 2026-01-01 --to-date 2026-01-31 \
     --change-type=schema_rebaseline                       # required: schema_rebaseline | hash_helper_rebaseline
 uv run recalls recover-rejected <source>                  # un-quarantine invariant false-positives
+uv run recalls deep-rescan <source>                       # historical / full-corpus rescan
+uv run recalls resolve-firms                              # rebuild firm_crosswalk (run after dbt staging)
+uv run recalls resolve-firms --dry-run                    # preview without writing
+uv run recalls parse-quantities                           # rebuild quantity_crosswalk (run after dbt staging)
+uv run recalls audit-firm-rollups                         # rank rollup clusters for false-merge review
 python scripts/backfill_manifest.py [--dry-run|--apply]   # USDA presence-manifest backfill (ADR 0028 Mech C)
 ```
 
@@ -254,7 +259,7 @@ neonctl connection-string --project-id <id> --branch-name dev             # get 
 neonctl operations list --project-id <id>                                 # see what's in flight
 ```
 
-The dev/main branching pattern is described in [ADR 0005](decisions/0005-storage-tier-neon-and-r2.md). Phase 7 plans to use Neon branching for integration-test DBs (per ADR 0015) — until then, dev branch is shared local scratch.
+The dev/main branching pattern is described in [ADR 0005](decisions/0005-storage-tier-neon-and-r2.md). Integration-test DBs use ephemeral Neon branches via the `test_db_url` fixture (per ADR 0015; neutralize with `NEON_API_KEY=` to run without branching). The dev branch is now disposable — the production pipeline runs against the main branch.
 
 ---
 
@@ -343,7 +348,7 @@ Then if anything in the snapshot looks off for a specific source, drill in with 
 
 #### Two things you may notice on day-1
 
-1. **CPSC's watermark is far in the past** (currently `2025-04-21` from your earlier override). Tomorrow's routine run will fetch ~143 records (the buffer-window backfill) plus anything published today. After that one run, the watermark advances to ~today and subsequent days will fetch single digits.
+1. **CPSC uses a date-windowed watermark.** On first run after a fresh seed, the cursor may fetch a backfill window (~143 records); subsequent routine runs fetch single digits. A `--lookback-days 7` override is safe for debugging without manual watermark edits.
 2. **USDA recalls and USDA establishments will fetch the full payload every run** (~2002 and ~7945 records respectively) regardless of watermark — that's by design per Finding D. The `inserted` count should be tiny (1-10) once bronze is stable; the high `extracted` count is normal.
 
 ### Fresh-clone setup, end to end
