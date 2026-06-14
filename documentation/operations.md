@@ -31,9 +31,11 @@ Plus a transformation workflow scheduled to run after the latest extraction comp
 
 | Workflow | Schedule | Action |
 |---|---|---|
-| `transform.yml` | Daily, time-shifted ~30 min after the latest daily extractor | `dbt build --project-dir dbt` + `dbt test --project-dir dbt`. |
+| `transform.yml` | Daily, 03:00 UTC (1 hr after the 02:xx extracts — ADR 0010 2026-06-08 grid) | `dbt build` (pre-resolve, staging+silver) → `recalls resolve-firms` → `recalls parse-quantities` → `dbt build` (post-resolve, silver+gold) → `dbt snapshot` → `dbt test`. Full sequence: [architecture.md § Transform run-order](architecture.md). |
 
-Pipeline state — per-source watermarks (last-seen publication timestamps, ETags, pagination cursors) and per-run metadata (status, counts, duration, `change_type`) — lives in Neon Postgres: `source_watermarks` and `extraction_runs`. For presence-tracked sources (USDA initially, [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md)) a third table, `extraction_run_identities` (migration 0027), records which recall identities each successful run returned — written automatically inside the run's `_record_run` transaction, **no operator action**. Retention: keep-forever for now (~2K rows per USDA run); revisit a TTL only if disk growth becomes material. Full rationale in [ADR 0020](decisions/0020-pipeline-state-tracking.md). The queries below are written against these tables.
+> **Cron guard:** `transform.yml`'s scheduled job is gated by the `CRON_ENABLED` repository variable (`if: github.event_name != 'schedule' || vars.CRON_ENABLED == 'true'`). The schedule is registered but does **NOT** fire until `CRON_ENABLED` is set to `true` (C40 go-live action). `workflow_dispatch` always fires regardless.
+
+Pipeline state — per-source watermarks (last-seen publication timestamps, ETags, pagination cursors) and per-run metadata (status, counts, duration, `change_type`) — lives in Neon Postgres: `source_watermarks` and `extraction_runs`. For presence-tracked sources (USDA + NHTSA per [ADR 0026](decisions/0026-lifecycle-tracking-snapshot-presence-manifest.md) as amended by C16; NHTSA manifest written only on full-enumerating deep-rescan runs, keyed on `campno`) a third table, `extraction_run_identities` (migration 0027), records which recall identities each successful run returned — written automatically inside the run's `_record_run` transaction, **no operator action**. Retention: keep-forever for now (~2K rows per USDA run); revisit a TTL only if disk growth becomes material. Full rationale in [ADR 0020](decisions/0020-pipeline-state-tracking.md). The queries below are written against these tables.
 
 ### SCD-2 snapshots (dbt-managed history)
 
@@ -150,7 +152,7 @@ Follow the per-credential runbook below for each set. Rotate one credential at a
 
 ### Rotating the Neon Postgres password
 
-1. In the Neon console, open the project's connection settings and generate a new password for the role the pipeline uses.
+1. In the Neon console, open the project's connection settings and generate a new password for **`recalls_app`** (the pipeline runtime role — the role `NEON_DATABASE_URL` points at in GitHub Actions secrets and local `.env`). The owner and `recalls_readonly` roles rotate separately on the same 90-day cadence; follow this same runbook substituting the role name.
 2. Construct the new `NEON_DATABASE_URL` with the new password (keep the host, database name, and options unchanged).
 3. Update the local `.env` (or password-manager vault item) with the new URL.
 4. Update the `NEON_DATABASE_URL` GitHub Actions repository secret.
@@ -196,11 +198,12 @@ If a credential is suspected compromised, rotate immediately — do not wait for
 ## Restricted app role (production `*_rejected` mutation guard)
 
 [ADR 0013](decisions/0013-error-handling-retries-idempotency-and-quarantine.md) (2026-06-09
-amendment) enforces the `*_rejected` audit tables as **append-only** in production via two
-Neon roles. The restricted role and its complete grant posture are defined by migration `0033`
+amendment) enforces the `*_rejected` audit tables as **append-only** in production via a
+pipeline/serving role split. Together with migration 0034, production now has three Neon roles.
+The restricted pipeline role and its complete grant posture are defined by migration `0033`
 (it supersedes the old standalone grant script); this is a **one-time setup** before cron go-live.
 
-**The two roles:**
+**The three roles:**
 
 - **Privileged role** — the existing table-owner role. Full DDL/DML. Used by (a) Alembic
   migrations (operator-run, never in CI) **and** (b) dbt (`build`/`snapshot`/`test`) in the
@@ -208,15 +211,22 @@ Neon roles. The restricted role and its complete grant posture are defined by mi
   `recalls_app` is deliberately not granted.
 - **Restricted role `recalls_app`** — used by the SQLAlchemy/CLI runtime: extractors,
   deep-rescans, `resolve-firms` and `parse-quantities` (the last two run inside the transform
-  cron), and the future read-only API. `SELECT`/`INSERT`/`UPDATE` on the working tables;
-  migration 0031 **revokes** `TRUNCATE`/`DELETE`/`UPDATE` on every `*_rejected` table, so the
-  runtime can only append + read them.
+  cron). `SELECT`/`INSERT`/`UPDATE` on the working tables; migration 0031 **revokes**
+  `TRUNCATE`/`DELETE`/`UPDATE` on every `*_rejected` table, so the runtime can only append +
+  read them. Does **NOT** serve the read-only API — that is `recalls_readonly` (migration 0034).
+- **Read-only serving role `recalls_readonly`** (migration 0034) — used by the public
+  recalls-api. `SELECT` on gold tables only (re-granted each dbt build by the
+  `grant_gold_readonly` post-hook, since gold tables are recreated each run); `GRANT USAGE ON
+  SCHEMA public`; `default_transaction_read_only = on` session belt. Expose its DSN to the API
+  as `NEON_DATABASE_URL_RO`. Activated out-of-band: `ALTER ROLE recalls_readonly LOGIN PASSWORD
+  <strong pw>`.
 
 **Where credentials live:**
 
 | Credential | Role | Stored in | Used by |
 |---|---|---|---|
-| `NEON_DATABASE_URL` (DSN) | `recalls_app` | `NEON_DATABASE_URL` GitHub Actions secret **+** local `.env` | extract / deep-rescan / `resolve-firms` / `parse-quantities` / API — every SQLAlchemy run |
+| `NEON_DATABASE_URL` (DSN) | `recalls_app` | `NEON_DATABASE_URL` GitHub Actions secret **+** local `.env` | extract / deep-rescan / `resolve-firms` / `parse-quantities` — every SQLAlchemy run |
+| `NEON_DATABASE_URL_RO` (DSN) | `recalls_readonly` | API-repo GitHub Actions secret (not a pipeline secret) | recalls-api serving layer — gold `SELECT` only |
 | `NEON_HOST/USER/PASSWORD/DBNAME` (split fields) | owner | GitHub Actions secrets **+** local `.envrc` | dbt `build`/`snapshot`/`test` in the transform cron |
 | `NEON_DATABASE_URL` override (owner DSN) | owner | **operator-held only** (local `.env.migrations` or a password manager — **not** a GitHub secret) | `alembic upgrade head` only |
 
@@ -308,6 +318,28 @@ surfaces as an outage. Do this once during H-a:
 Per-day loaded counts for the H-a artifact (read-only, either role):
 `psql -f scripts/sql/_pipeline/simulation_daily_counts.sql`.
 
+### `recalls_readonly` setup (one-time, before go-live — serving API)
+
+1. **Create the role via migration 0034** (run as owner, same as 0033):
+   ```bash
+   NEON_DATABASE_URL="<privileged-owner-DSN>" alembic upgrade head
+   ```
+   Migration 0034 creates `recalls_readonly` as a `NOLOGIN` SQL shell — no password committed.
+   It grants `USAGE ON SCHEMA public` and sets `default_transaction_read_only = on`. **SELECT
+   grants on gold tables are NOT in the migration** — they are applied by the
+   `grant_gold_readonly` dbt post-hook on every `dbt build` (else wiped by the nightly gold
+   drop + recreate).
+2. **Activate the role** (out-of-band, same plaintext-password note as `recalls_app`):
+   ```sql
+   ALTER ROLE recalls_readonly LOGIN PASSWORD '<strong pw>';
+   ```
+   Generate the password in your manager first, then paste in `psql` as owner.
+3. **Expose the DSN** — add the `recalls_readonly` connection string as `NEON_DATABASE_URL_RO`
+   to the recalls-api repo's GitHub Actions secrets (not this pipeline's secrets).
+4. **Verify** — connect as `recalls_readonly` and confirm:
+   - `SELECT` on a gold table succeeds (after at least one `dbt build` has run the post-hook).
+   - `INSERT`/`UPDATE` on a gold table fails with `permission denied` (the session belt).
+
 ---
 
 ## Re-ingestion procedure (after schema change)
@@ -348,7 +380,7 @@ Per [ADR 0014](decisions/0014-schema-evolution-policy.md), when an agency change
 
 ### USDA presence-manifest backfill (one-shot)
 
-`scripts/backfill_manifest.py` ([ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md) Mechanism C) reconstructs the USDA presence manifest (`extraction_run_identities`) for runs that predate the table (6c migration 0027), so `recall_lifecycle.is_currently_active` / `was_ever_retracted` extend back to a `run_id` floor. **USDA-only** (the only `default_track_presence` source). **Census-first** — the default mode is read-only:
+`scripts/backfill_manifest.py` ([ADR 0028](decisions/0028-backfill-historical-reextraction-semantics.md) Mechanism C) reconstructs the USDA presence manifest (`extraction_run_identities`) for runs that predate the table (6c migration 0027), so `recall_lifecycle.is_currently_active` / `was_ever_retracted` extend back to a `run_id` floor. **USDA-only** (NHTSA is also a `default_track_presence` source per C16, but its pre-table history is not backfillable via this script — NHTSA manifests are only valid after a full-enumerating deep-rescan, which post-dates migration 0027). **Census-first** — the default mode is read-only:
 
 ```bash
 # (a Python script, not a `recalls` subcommand — run it directly)
@@ -388,6 +420,12 @@ recalls deep-rescan uscg_manufacturer_details \
 ```
 
 **Bulk `Date Modified` → mark it a re-baseline.** `date_modified` is **in** the bronze content hash (`src/extractors/uscg_manufacturer_detail.py`), so if USCG bulk-bumps it across the directory (a cosmetic, site-wide timestamp change with no real content edit) a Tier-2 sweep re-inserts the *entire* corpus. Run that sweep with **`--change-type=schema_rebaseline`** so the wave is recorded as a re-baseline, not real edits — keeping the audit trail honest and freshness untouched (the deep-rescan path already skips `_touch_freshness`). The SCD-2 sidecar is unaffected either way: `firm_uscg_attributes_snapshot` excludes `date_modified` from its `check_cols`, so no phantom version is banked.
+
+---
+
+### Go-live simulation + sign-off record (WS-H)
+
+The 2–3 day local simulation, deep-rescan validation, and sign-off checklist (H-a through C40) are recorded in [documentation/operations/go_live_simulation.md](operations/go_live_simulation.md). This is the operator artifact reviewed before flipping `CRON_ENABLED` to `true`.
 
 ---
 

@@ -209,9 +209,9 @@ Two access paths, both backed by that mart's indexes:
   roles, recalls_by_source (jsonb dict → `dict[str,int]`), distinct_products,` and the three per-source
   SCD-2 sidecar blocks `establishment_attributes / manufacturer_attributes / fda_attributes` (jsonb
   arrays → `list[SidecarAttributes]`, typed loosely as the sidecar shapes differ by source). 404 on miss.
-  - **NOTE:** the three firm-sidecar names are being renamed to `firm_{usda,uscg,fda}_attributes` by the
-    phase-7 branch (C19) before this repo is built — confirm the final mart column names against the live
-    `mart_firm_profile.sql` at build time.
+  - **NOTE:** the three firm-sidecar names were renamed to `firm_{usda,uscg,fda}_attributes` on
+    `feature/pre-go-live-validation` (2026-06-13); `mart_firm_profile.sql` already uses them — no
+    confirmation step needed at build time.
 
 ### Deferred — dashboard endpoints over `fct_*`
 
@@ -223,7 +223,7 @@ un-defers the `/stats/*` family; ADR 0024 resolves whether they ship in API-v1. 
 scope for the portfolio milestone, `/stats/*` is effectively v1. Scope them only if/when the frontend
 (Phase 9) needs them — and note the
 geography lens trap: `fct_recalls_by_geography` has two non-interchangeable bases (`distribution` vs
-`firm_location`); any endpoint MUST expose `geography_basis` and carry the "never read as consumer
+`firm_registration`); any endpoint MUST expose `geography_basis` and carry the "never read as consumer
 impact" caveat from `gold_design_notes.md`. Don't quietly pick one. `fct_recalls_by_country` (FDA+USDA
 only) is the country analogue of the `distribution` lens: its `'US'` cell is **derived** from
 distribution scope, and a US+abroad recall counts once per country, so per-country counts sum to more
@@ -514,9 +514,8 @@ these commits describe what Claude Code writes, not what it executes against liv
 **Branch `feature/api-firms`:**
 - C7. `GET /firms/{id}`: `FirmProfile` + per-source `SidecarAttributes` jsonb blocks, 404. Integration:
   a firm spanning two sources (cross-source rollup), `recalls_by_source` dict. **NOTE:** the three
-  firm-sidecar names are being renamed to `firm_{usda,uscg,fda}_attributes` by the phase-7 branch (C19)
-  before this repo is built — confirm the final mart column names against the live `mart_firm_profile.sql`
-  at build time.
+  firm-sidecar names were renamed to `firm_{usda,uscg,fda}_attributes` on `feature/pre-go-live-validation`
+  (2026-06-13); `mart_firm_profile.sql` already uses them — no confirmation step needed at build time.
 
 **Branch `feature/api-openapi-contract`:**
 - C8. OpenAPI enrichment (summaries/descriptions/examples/`responses=`), `export_openapi.py`, committed

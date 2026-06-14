@@ -299,11 +299,11 @@ explicitly if R1 is scoped gold-only).
 
 ### R5 — Rename sidecar OUTPUT columns to `firm_{usda,uscg,fda}_attributes` · **Recommended (do pre-go-live, before the API's first `openapi.json` freeze — API-BREAKING after)**
 
-**What / why.** `mart_firm_profile`'s sidecar outputs are `establishment_attributes` (= **USDA**),
-`manufacturer_attributes` (= **USCG** boat MIC), `fda_attributes` (= **FDA**). The
-`establishment`/`manufacturer` names are misleading (they read generic but are source-specific). Rename
-them to source-tagged names matching the already-renamed silver source tables and the C19 intent
-(ADR 0036). **This is a dbt model edit, NOT an Alembic migration** (gold marts are dbt
+**What / why.** ✅ **Landed on this branch (2026-06-13).** `mart_firm_profile`'s sidecar outputs **were**
+`establishment_attributes` (= **USDA**), `manufacturer_attributes` (= **USCG** boat MIC), `fda_attributes`
+(= **FDA**) — now renamed to `firm_usda_attributes` / `firm_uscg_attributes` / `firm_fda_attributes`. The
+`establishment`/`manufacturer` names read generic but were source-specific; the new names match the
+already-renamed silver source tables and the C19 intent (ADR 0036). **This is a dbt model edit, NOT an Alembic migration** (gold marts are dbt
 `materialized='table'`; the `migrations/` are bronze-layer).
 
 **Verified zero downstream dbt breakage.** The only `mart_firm_profile` consumer in the DAG,
@@ -456,14 +456,14 @@ Flip `[x]` and append `Done YYYY-MM-DD (PR #N)` **once, at merge** (documentatio
 rule). Branch-granular sub-tasks belong in the draft-PR body, not here.
 
 - [ ] **R1** `0034_recalls_readonly_role.py` written, `alembic upgrade head` clean, operator activated `LOGIN PASSWORD` out-of-band, `NEON_DATABASE_URL_RO` handed to the API
-- [ ] **R2** `mart_recall_summary` `(published_at desc, recall_event_id)` post_hook index; `EXPLAIN` shows Index Scan no Sort
-- [ ] **R3** `mart_product_search` `recall_product_upcs` GIN; `EXPLAIN` of `@>` shows Bitmap Index Scan
-- [ ] **R4** `gold_meta` model built; one row; `rebuilt_at` advances per build; in the RO grant set
-- [ ] **R5** sidecar columns renamed (2 spots + `_gold.yml`); `dbt build --select mart_firm_profile+` green; **coordinated with API openapi freeze**
+- [ ] **R2** `mart_recall_summary` `(published_at desc, recall_event_id)` post_hook index; `EXPLAIN` shows Index Scan no Sort (code-complete on branch; activate after dbt build)
+- [ ] **R3** `mart_product_search` `recall_product_upcs` GIN; `EXPLAIN` of `@>` shows Bitmap Index Scan (code-complete on branch; activate after dbt build)
+- [ ] **R4** `gold_meta` model built; one row; `rebuilt_at` advances per build; in the RO grant set (code-complete on branch; activate after dbt build)
+- [ ] **R5** sidecar columns renamed (2 spots + `_gold.yml`); `dbt build --select mart_firm_profile+` green; **coordinated with API openapi freeze** (code-complete on branch; activate after dbt build)
 - [ ] **R6** `_gold.yml` fct_units_recalled + dim_date descriptions fixed; `fct_recalls_by_country` added to deferred-`/stats/*` inventory
 - [ ] **R7** ANALYZE confirmed/added for the 3 serving marts; planner uses R2/R3 indexes
-- [ ] **O1** (optional) coalesce product_names/models/hins to `'[]'::jsonb`
-- [ ] **O2** (optional) prune or keep the all-null `upc` btree (decision recorded)
+- [ ] **O1** (optional) coalesce product_names/models/hins to `'[]'::jsonb` (code-complete on branch; activate after dbt build)
+- [ ] **O2** (optional) prune or keep the all-null `upc` btree — decision: keep as placeholder (`mart_product_search.sql` comment); no action required unless measured as a problem
 - [ ] **O3** row counts shared with the API team
 - [ ] **C1 / D1 / N1** — no action (recorded decisions); revisit C1 only under measured `?firm=` load + ADR 0037 amendment
 
@@ -493,6 +493,4 @@ rule). Branch-granular sub-tasks belong in the draft-PR body, not here.
   posture), ADR 0024 / ADR 0025 (the API design + deploy that consume gold).
 - **Per-mart authoritative schema + the full API-side audit:** API repo
   `project_scope/build/01-ground-truth-gold-marts.md` and `07-gold-layer-recommendations.md`.
-- **Master index:** add a one-line pointer to this plan from `project_scope/implementation_plan.md`
-  (its job per documentation_model type 3); flip this plan's `Status:` to `Active` when work starts on a
-  branch and to `Complete (PR #N)` at merge.
+- **Master index:** pointer exists at `project_scope/implementation_plan.md` (Phase 8 Prerequisites section); this plan's `Status:` is already `Active`. Flip to `Complete (PR #N)` at merge.

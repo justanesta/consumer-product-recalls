@@ -21,7 +21,7 @@ audit doc.
 Both are also wrapped as dbt singular tests at `severity=warn` under
 `dbt/tests/source_assumptions/`.
 
-## Baseline as of YYYY-MM-DD
+## Baseline as of 2026-05-08 (development slice)
 
 > **Run after**: `psql "$NEON_DATABASE_URL" -f scripts/sql/fda/bronze/assert_productid_stable.sql`
 > and the F2 sibling. Paste Q1, Q2, Q3 outputs below.
@@ -176,6 +176,23 @@ Not affected by the filter: CPSC scripts (cross-run grouping on
 name/model values; rebaseline rows with same name/model don't trigger
 drift) and the USDA bilingual-atomicity script (uses `last_modified_date`
 directly, not hash transitions).
+
+## 2026-06-13 refresh — full-corpus production seed
+
+F1 (PRODUCTID stability) re-run against the **full production corpus** after the FDA seed
+(`scripts/sql/fda/bronze/assert_productid_stable.sql`, 2026-06-13):
+
+| Output cell | Observed | Notes |
+|---|---|---|
+| Q1 `drift_group_count` | **0** | No `(recall_event_id, product_description_txt, recall_num)` candidate key observed with >1 distinct PRODUCTID across runs. |
+| Q2 candidate-renumber groups | (0 rows) | Empty, as expected given Q1 = 0. |
+| Q3 corpus shape | **134,642 bronze rows / 134,567 distinct PRODUCTIDs / 50,551 distinct recall_events / 6 distinct runs** | Only 75 excess rows over distinct PRODUCTIDs (~1.0006 rows/PRODUCTID) — a freshly-seeded corpus with almost no edit-snapshot accumulation yet, vs the dev slice's ~1.89. |
+
+**Interpretation.** F1 **still holds at full-corpus scale** — 0 PRODUCTID renumbers across 134,642 rows
+(≈24× the 2026-05-08 dev-slice row count), materially stronger evidence that FDA silver's reliance on
+PRODUCTID as the product surrogate is sound. ADR 0031's "any non-zero rate" threshold remains a future
+trigger, not at risk. (Only F1 was re-run here; the 2026-05-08 F2/EVENTLMD routine-path verdict stands —
+re-run `assert_eventlmd_correlates_with_content_change.sql` to refresh it.)
 
 ## ADR 0031 threshold reconciliation
 

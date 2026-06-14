@@ -20,7 +20,9 @@ Companion artifacts:
   empirical baselines from running the falsification scripts.
 - **Detection scripts** — `scripts/sql/<source>/bronze/assert_*.sql`
   (rich diagnostic, operator-facing) + `dbt/tests/source_assumptions/assert_*.sql`
-  (thin pass/fail, CI-facing at `severity=warn`).
+  (thin pass/fail, CI-facing; group default `severity=warn` except
+  `assert_cpsc_products_array_append_only.sql`, which is escalated to
+  `severity=error` — ADR 0031 amendment 2026-06-13).
 
 ## Why this exists
 
@@ -216,7 +218,7 @@ Three things prompted the audit:
 
 | | |
 |---|---|
-| **Why load-bearing** | ADR 0030 bronze identity. Silver `recall_product_id` is the md5 of the same 11 fields per `recall_product.sql:99-131`. |
+| **Why load-bearing** | ADR 0030 bronze identity. Silver `recall_product_id` is the 7-tuple md5 (single-homed in `stg_nhtsa_recalls_current`; `recall_product.sql` NHTSA CTE at lines 146-183) since the 6c.7 cutover (ADR 0034); the 11-tuple remains the bronze audit grain. |
 | **Evidence today** | Verified end-to-end via `documentation/nhtsa/incremental_delta_findings.md` Section G. Empirical drift baseline: ~0.0005%/day (1 case in 240k — the AC DELCO `maketxt` normalization documented 2026-05-08 in ADR 0031:84). |
 | **Falsification script** | Existing: `scripts/sql/nhtsa/bronze/assert_eleven_tuple_identity_stable.sql`, `assert_nine_tuple_identity_stable.sql`. dbt wrapper: `assert_nhtsa_eleven_tuple_identity_stable.sql`. |
 | **ADR 0031 threshold** | >0.01% silver row count fragmented per month, OR systematic drift on a previously-stable field. |
@@ -293,8 +295,8 @@ summary table below.
 | # | Source | Status | Empirical baseline | Notes |
 |---|---|---|---|---|
 | C1 | CPSC | **Verified** | 1,357 distinct recalls, no duplicates | Natural key works as designed |
-| C2 | CPSC | **Untestable on observed data** | All 1,357 recalls have exactly 1 product | Failure mode physically can't fire on 1-element arrays; first observed CPSC edit (recall `00015`, 2026-05-07/08, retailers text typo) didn't touch products[] |
-| C3 | CPSC | **One positive signal** | 0/1 cross-run cases violated | Only 1 cross-run case in corpus (recall `00015`); name/model byte-stable across the edit |
+| C2 | CPSC | **Validated at scale — 0 violations** | 0 violations across multi-product corpus (8.3% multi-product, max 57; first genuine cross-version + multi-product test 2026-06-13) | Failure mode now both physically possible and exercised on cross-version data — and it holds. De-risked the 2026-06-13 key migration (ADR 0031 amendment). dbt test escalated to `severity=error`. |
+| C3 | CPSC | **First real drift observed — informational** | 9 name cases (0 model), 2026-06-13 | All at ordinal 1 on low-numbered recalls; likely a one-time early-capture backfill. No longer load-bearing for identity (name/model out of the key since ADR 0031 amendment 2026-06-13) — these feed the deferred Move-2 history surface. |
 | C4 | CPSC | Already false → mitigated | Re-confirmed by recall `00015` | CPSC fixed a typo on 2026-05-08 without advancing `last_publish_date`; deep-rescan policy correct |
 | F1 | FDA | **Verified** | 0 PRODUCTID renumbers across 5,529 bronze rows / 2,924 distinct PRODUCTIDs / 7 runs | "Any non-zero rate" threshold not at risk |
 | F2 | FDA | **Verified within routine path** | 41 real edits, 0 silent edits, 0 archive-migration noise (all post rebaseline-filter) | Pre-filter showed 2,535 false silent edits; all attributable to 2026-05-01 architecture realignment (ADR 0027). Cell B = 0 contradicts ADR 0023's archive-migration narrative — worth periodic re-check |

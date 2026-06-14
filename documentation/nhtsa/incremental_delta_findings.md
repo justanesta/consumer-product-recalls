@@ -32,6 +32,8 @@ are sustainable. Even at the high end, expect a few hundred net inserts
 per day after the initial seed; bandwidth tax is the ~14 MB ZIP
 download, not bronze writes.
 
+**Note (2026-06-10, feature/pre-go-live-validation):** an inner-SHA short-circuit was added to `NhtsaExtractor.extract()`. When the POST_2010 decompressed-content SHA matches the prior successful run's SHA, `extract` returns `[]` immediately — the ~241k-row parse and O(corpus) bronze dedup lookup are bypassed entirely (the W6-equivalent for the daily incremental path). The 99.7% rejection rate described here applies to change-day runs only; no-change days short-circuit before validation. See `src/extractors/nhtsa.py:_should_short_circuit_incremental`.
+
 ---
 
 ## B. Net-new vs. amendment split
@@ -131,6 +133,8 @@ correct for free-tier dev workflows; production uses `NhtsaDeepRescanLoader`
 which has no `--since` filter at all.
 
 ---
+
+> **NOTE 2026-06-13:** The 11-tuple silver decision referenced later in this document (Section G and the "Silver fragmentation impact" subsection of Section K) was superseded by ADR 0033 (v1.5 SCD-2, 7-tuple anchor: `campno + normalize_maketxt(maketxt) + modeltxt + yeartxt + compname + rcl_cmpt_id + mfr_comp_ptno`) and ADR 0034 (cutover). The current `recall_product_id` excludes `mfr_comp_desc`, `mfr_comp_name`, `bgman`, and `endman` from the key — those are now Type-1/Type-2 snapshot attributes in `nhtsa_recall_product_snapshot`. The empirical observations in this document remain valid as historical findings.
 
 ## F. Bursty distribution
 
@@ -282,6 +286,8 @@ TOTAL drift: 1
 ```
 
 The single drift event is **NHTSA performing a string normalization** (collapsing the space between `"AC DELCO"` and `"DELCO"`). It's the canonical "natural keys change" failure mode that motivates surrogate-key best practice. **No deterministic surrogate built from natural identity fields can be drift-immune** — the drift can land on any of the 9 fields, not just batch-level ones. This is a downstream-reconciliation problem, not a key-design problem.
+
+> **SUPERSEDED 2026-06-13 by ADR 0033/0034 (v1.5 7-tuple anchor).** The formula below was the v1 decision (2026-05-08); it no longer reflects current code. The 11-tuple hash included `mfr_comp_desc`, `mfr_comp_name`, `bgman`, and `endman` in the key — those fields are now snapshot attributes, demoted per the 2026-06-06 ADR 0033 amendment. See ADR 0033 for the replacement 7-tuple definition (single-homed in `stg_nhtsa_recalls_current`).
 
 ### Silver decision (2026-05-08) — option 3b: 11-tuple hash for `recall_product_id`
 
@@ -605,6 +611,8 @@ Pre-amendment sanity check uses the same command against `nhtsa/2026-05-08/4c2d3
 
 ### Silver fragmentation impact
 
+> **NOTE 2026-06-13:** Under ADR 0033/0034 v1.5, `mfr_comp_desc` is out of the `recall_product_id` key. The Pierce population event now versions via `nhtsa_recall_product_snapshot` (Type-2 history) rather than fragmenting silver into 192 rows. The fragmentation described below was the v1 behavior and is no longer current.
+
 Per ADR 0031:84's `recall_product_id = md5(11-tuple)` recipe, each of the 96 logical Pierce products now appears twice in silver:
 
 - 96 `recall_product` rows with `mfr_comp_desc = ''` (pre-amendment versions, semantically stale)
@@ -735,7 +743,7 @@ Refinements to the inferential reading above:
 
 **rcdate is mutable in practice.** The Sections D / H.6 framing of rcdate as a *rare* amendment field is empirically supported (3 recalls over a 13-day window = ~0.23 recalls/day affected); the 52% row-level rate is a multiplicative artifact of the row-broadcast mechanism, not a frequency increase.
 
-**Reconciliation impact** — `rcdate` is a payload attribute, not part of any candidate identity tuple (11-tuple per ADR 0030/0031, 6-tuple per ADR 0033). It does not fragment silver in either v1 or v1.5. The 189 amendment inserts on these 3 recalls are a **bronze write-volume cost** that ADR 0033's 6-tuple + Type-1-latest-wins design absorbs as attribute updates without fragmentation. The class slots cleanly into the existing "value edit on attribute field" reconciliation rule (`project_scope/archive/silver_v15_migration_plan.md`); no taxonomy extension warranted. The "amendment row count vs. distinct-recalls-affected" gap is a useful metric to surface in `recall_event_history` (Phase 6c) so consumers can see "this rcdate appears to have changed 88 times" vs. "this rcdate changed once and propagated to 88 product-rows of the same recall."
+**Reconciliation impact** — `rcdate` is a payload attribute, not part of any candidate identity tuple (11-tuple per ADR 0030/0031, 7-tuple per ADR 0033). It does not fragment silver in either v1 or v1.5. The 189 amendment inserts on these 3 recalls are a **bronze write-volume cost** that ADR 0033's 7-tuple + Type-1-latest-wins design absorbs as attribute updates without fragmentation. The class slots cleanly into the existing "value edit on attribute field" reconciliation rule (`project_scope/archive/silver_v15_migration_plan.md`); no taxonomy extension warranted. The "amendment row count vs. distinct-recalls-affected" gap is a useful metric to surface in `recall_event_history` (Phase 6c) so consumers can see "this rcdate appears to have changed 88 times" vs. "this rcdate changed once and propagated to 88 product-rows of the same recall."
 
 **Empirical closure (Q2 + Q3 captures, 2026-05-25):**
 
@@ -792,11 +800,11 @@ The 0 on the natural-key core is the structural invariant the 11-tuple was desig
 | natural-key core | 0 | 0 | 0 |
 | **TOTAL** | **267** | **113** | **380** |
 
-The 113 real_drift breaks down as 96 `mfr_comp_desc` (Pierce ARROW XT 4×12×2 grid from Section K — the field-population class) + 17 batch-window real_drift across `bgman`+`endman` (H.3 / I / H.4 / L plus the BMW K 1600 cluster surfaced below). The 267 structural is entirely `mfr_comp_ptno` supplier-supersession multi-batch — silver-correct under both v1 `md5(11-tuple)` and v1.5 `md5(6-tuple)` per ADR 0033.
+The 113 real_drift breaks down as 96 `mfr_comp_desc` (Pierce ARROW XT 4×12×2 grid from Section K — the field-population class) + 17 batch-window real_drift across `bgman`+`endman` (H.3 / I / H.4 / L plus the BMW K 1600 cluster surfaced below). The 267 structural is entirely `mfr_comp_ptno` supplier-supersession multi-batch — silver-correct under both v1 `md5(11-tuple)` and v1.5 `md5(7-tuple)` per ADR 0033.
 
 **Novel cluster surfaced 2026-05-25** — `26V214000` (BMW K 1600 B/GT/GTL motorcycles, `POWER TRAIN:MANUAL TRANSMISSION:SEALS/GASKETS`, Reverse Gear Control Unit ptno `8524078`) is contributing to **both** `endman` (3 cases — K 1600 B/GT/GTL each with endman populated → NULL) and `bgman` (1 case — K 1600 B with bgman populated → NULL) real_drift. Section L.4 explicitly flagged 26V214000's structural `mfr_comp_ptno` involvement (4 groups) as "worth monitoring," but the simultaneous H1-class NULL-regression in batch-window fields wasn't yet documented. Same multi-class-on-one-recall shape Section L.4 noted for 26V189000 Pacifica (structural ptno + real_drift bgman). One recall, three independent drift facets.
 
-**ADR 0031 silver-fragmentation rate**: 113 real_drift / 74,107 bronze rows = 0.15%. Materially above ADR 0031:84's `>0.01% per month` trigger threshold, but **entirely attributable to two well-documented editorial events**: Section K Pierce population (96, ≈85% of real_drift) and the cumulative batch-window cluster from Sections H/I/L plus today's 26V214000 BMW K 1600 (17, ≈15%). K remains the single largest source of fragmentation in the corpus by ~6×. ADR 0033's v1.5 6-tuple architecture eliminates ~99% of this — 113 → 1 (the AC DELCO normalization case that fragments at all grains).
+**ADR 0031 silver-fragmentation rate**: 113 real_drift / 74,107 bronze rows = 0.15%. Materially above ADR 0031:84's `>0.01% per month` trigger threshold, but **entirely attributable to two well-documented editorial events**: Section K Pierce population (96, ≈85% of real_drift) and the cumulative batch-window cluster from Sections H/I/L plus today's 26V214000 BMW K 1600 (17, ≈15%). K remains the single largest source of fragmentation in the corpus by ~6×. ADR 0033's v1.5 7-tuple architecture eliminates ~99% of this — 113 → 1 (the AC DELCO normalization case that fragments at all grains).
 
 ### M.5 Inner-hash sensitivity refinement — necessary but not sufficient
 
@@ -851,7 +859,7 @@ The findings in this section reinforce the v1.5 SCD-2 design decision in ADR 003
 
 - **rcdate-mutable (M.2)** — slots into "value edit on attribute field" → Type-1 latest-wins under v1.5. No taxonomy change.
 - **Oxford-comma class (M.3)** — empirical evidence the per-field whitespace-normalization deliverable in `feature/recall-event-history` is mission-critical, not nice-to-have. Without it, the 5/21 wave alone produces 160 silver-level `field_edited` events on a single conceptual edit. With it, those collapse to a single canonical-text-comparison no-op.
-- **Identity drift at 380 (M.4)** — affirms ADR 0033's premise that the 11-tuple's secondary descriptors (`mfr_comp_ptno`, `mfr_comp_desc`, `bgman`, `endman`) are mutable in practice and should not be in the silver anchor key. The 6-tuple anchor proposed in ADR 0033:47–86 maps to the natural-key core fields that show 0 drift across the full corpus.
+- **Identity drift at 380 (M.4)** — affirms ADR 0033's premise that the 11-tuple's secondary descriptors (`mfr_comp_desc`, `mfr_comp_name`, `bgman`, `endman`) are mutable in practice and should not be in the silver anchor key. The 7-tuple anchor per ADR 0033 (as amended 2026-06-06) maps to the natural-key core fields plus `mfr_comp_ptno` (structural, not drift-prone) that show 0 drift across the full corpus.
 - **Inner-hash refinement (M.5)** — independent of ADR 0033, but reinforces the architectural choice to make bronze content_hash dedup the canonical change oracle rather than relying on upstream hashes.
 
 No ADR 0033 amendment warranted. Future Phase 6c `feature/recall-event-history` work should include the M.2/M.3 patterns as test fixtures (a synthetic rcdate-shift archive and a synthetic Oxford-comma archive) to validate the Type-1/Type-2 mechanism handles them as designed.

@@ -138,6 +138,7 @@ R2_ACCESS_KEY_ID=your_dev_r2_access_key
 R2_SECRET_ACCESS_KEY=your_dev_r2_secret_access_key
 R2_BUCKET_NAME=consumer-product-recalls-dev
 
+# FDA credentials are OPTIONAL — only the FDA extractor reads them. Leave these out if you are not running FDA extractions.
 FDA_AUTHORIZATION_USER=your_oii_user
 FDA_AUTHORIZATION_KEY=your_oii_key
 ```

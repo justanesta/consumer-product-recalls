@@ -1,7 +1,13 @@
 # FDA press-release (Tier-3) historical seed + durable deep-rescan — plan
 
+> **Archived 2026-06-13** (phase-7 plan C36). Code/infra complete and merged (#63, #69), and the one
+> residual — the one-time FDA press-release **historical seed run** — was executed by the operator on
+> 2026-06-13. Both archival conditions met; moved to `project_scope/archive/` and frozen as-of archival
+> per `project_scope/archive/README.md` (do not edit to reflect later reality — write a new plan if the
+> subject is revived).
+
 - **Status:** Active (2026-06-09) — **code/infra complete**: S0–S5 (full-natural-key dedup fix, `deep_rescan_checkpoints` migration 0030, checkpointed recent-first resumable driver + `--checkpointed` CLI, sampling/floor probes, doc-sync) shipped via PR #63, plus self-healing 503 cooldown + circuit-breaker via PR #69. **Remaining: the one-time historical seed RUN** (operator step — WS-H of `project_scope/phase-7-production-plus-todos-plan.md`); archive once it completes (phase-7 plan C36).
-- **Branch:** `feature/capture-fda-press-release-backlog-b`
+- **Branch:** merged to main via PRs #59–#62 (code complete; named branch superseded and deletable); this plan now tracks the remaining operator seed run (WS-H of `project_scope/phase-7-production-plus-todos-plan.md`)
 - **Owns:** completing the FDA Tier-3 press-release historical seed (the last backlogged
   recall-data capture for production) + the FDA-shaped durability work that the universal
   `deep-rescan-reliability-plan.md` does not already own.

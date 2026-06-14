@@ -33,8 +33,12 @@ id; the dated sections below predate the migration and are kept as provenance.)
 - **C2 (array append-only):** `scripts/sql/cpsc/bronze/assert_products_array_append_only.sql`
 - **C3 (name/model normalization):** `scripts/sql/cpsc/bronze/assert_name_model_normalization_stable.sql`
 
-Both are also wrapped as dbt singular tests at `severity=warn` under
-`dbt/tests/source_assumptions/`.
+Both are also wrapped as dbt singular tests under `dbt/tests/source_assumptions/`.
+`assert_cpsc_products_array_append_only.sql` is `severity=error` (in-file
+`config()` override, escalated 2026-06-13 — it now guards CPSC product identity,
+not just fragmentation; a violation conflates rather than fragments).
+`assert_cpsc_name_model_normalization_stable.sql` remains at the group default
+`severity=warn` (editorial monitor only, no longer load-bearing for identity).
 
 ## Baseline as of 2026-05-08
 

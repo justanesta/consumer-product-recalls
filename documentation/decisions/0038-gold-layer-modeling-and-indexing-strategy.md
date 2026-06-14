@@ -1,6 +1,6 @@
 # 0038 — Gold-layer modeling and indexing strategy
 
-**Status:** Accepted (ratified at the Phase 6e merge, #62)
+**Status:** Accepted (ratified at the Phase 6e merge, #62) | Amended 2026-06-13 (serving-layer branch, ADR 0042)
 **Date:** 2026-06-07
 
 > **Amended 2026-06-08 (Phase 6f.1):** a first concrete gold consumer is now on the horizon — the
@@ -11,6 +11,9 @@
 > justify the star. The decision is deferred to Phase 8 framing (ADR 0024, API↔gold relationship);
 > the narrative + the `dim_date` no-regret early piece live in `gold_design_notes.md` §"Deferred: a
 > dimensional star schema", and the sequencing is tracked in `implementation_plan.md`. No code change.
+
+> **Amended 2026-06-13 (serving-layer branch, ADR 0042):** the gold layer now uses `post_hook`s in
+> three distinct classes — see §6 amendment note below.
 
 ## Context
 
@@ -46,6 +49,20 @@ The original Phase-6 plan also listed "silver/gold Alembic migrations" — that 
    - **Silver/gold** indexes are declared in dbt `config(indexes=[…])`, so dbt re-creates them on every table rebuild — no post-hooks, no Alembic. Gold indexes are co-located in each `mart_` model's config; silver indexes are added to each silver model's config.
    - Index selection covers FK/join columns, natural keys, the documented Phase-8 API filter predicates (`source`, `published_at`, `classification`, `firm.normalized_name`, product `hin`/`model`/`upc`), and the search GIN. dbt `unique`-test assertions on primary keys are backed by real Postgres unique indexes.
    - Because there is no traffic yet, these are first-principles. **Phase-7 follow-up (recorded here):** re-profile with `pg_stat_statements` once the API is live; drop unused indexes, add observed hot paths. dbt model contracts (Postgres-enforced PK/FK) are deferred as an optional later hardening.
+
+> **Amended 2026-06-13 (ADR 0042):** the claim "no post-hooks" in §6 is superseded on the
+> serving-layer branch. Three classes of `post_hook` are now in use:
+>
+> 1. **Expression KEYSET index** — `mart_recall_summary` declares a `post_hook` to create
+>    `(published_at DESC, recall_event_id)` via raw DDL (`mart_recall_summary.sql:9-13`), because
+>    `config(indexes=[…])` cannot express descending-column index specifications.
+> 2. **ANALYZE** — all three serving marts (`mart_recall_summary`, `mart_product_search`,
+>    `mart_firm_profile`) run `analyze {{ this }}` as a `post_hook` after each table rebuild so
+>    the planner has current statistics immediately.
+> 3. **Folder-level `recalls_readonly` grant** — `dbt_project.yml` applies
+>    `+post-hook: "{{ grant_gold_readonly() }}"` to every gold model (`dbt_project.yml:30`,
+>    `macros/grant_gold_readonly.sql`), re-granting `SELECT` to the public read-only API role
+>    after each nightly drop+recreate. See ADR 0042 for the full serving-layer read contract.
 
 7. **A companion index audit deliverable** (`documentation/index_audit.md`) records the bronze confirmation pass and the silver/gold additions in one table (layer → object → index → query pattern → verdict).
 

@@ -1,6 +1,6 @@
 # Go-live production simulation — validation record (WS-H)
 
-- **Status:** In progress (fill in) — branch `feature/pre-go-live-validation`
+- **Status:** In progress — H-a, H-b (seed-data), H-d complete; H-e (version bump), H-f (artifact commit + #71 close), C40 (cron on) pending. See sign-off checklist below.
 - **Purpose:** the expected-vs-actual audit trail for WS-H-a (2–3 day daily simulation) and
   WS-H-b (deep-rescan validation), per `project_scope/phase-7-production-plus-todos-plan.md`.
   This consolidated cross-source record is the operator artifact reviewed before flipping the
@@ -80,9 +80,10 @@ One-liner (see "Commands" below):
 seeds rather than re-running them (a full local re-seed is dominated by `uscg_manufacturer_details`'s
 >6 h sweep). Seed-data validation **green** 2026-06-13 (`seed_verify.sql` + `watermark_health.sql`):
 
-- **Migrations at head** (alembic `0033`). **All 8 bronze tables at full-corpus counts** — cpsc 9,854 ·
-  fda 134,642 · nhtsa 323,899 · uscg_manufacturers 16,274 · uscg_manufacturer_details 16,274 ·
-  uscg_recalls 1,763 · usda_establishments 8,091 · usda_recalls 4,015 — all meet/exceed the 6a.5 gates.
+- **Migrations at head** (alembic `0033`). **All 9 bronze tables at full-corpus counts** — cpsc 9,854 ·
+  fda 134,642 · fda_press_releases 1,423 (historical seed run 2026-06-13) · nhtsa 323,899 ·
+  uscg_manufacturers 16,274 · uscg_manufacturer_details 16,274 · uscg_recalls 1,763 ·
+  usda_establishments 8,091 · usda_recalls 4,015 — all meet/exceed the 6a.5 gates.
 - **Watermark coverage + discipline:** every source has a watermark row; the incremental path advances
   it correctly (each 06-13 routine run = "advanced this run"), and the historical_seed runs did not
   clobber the cursors (they track the routine values). ✓
@@ -94,6 +95,9 @@ seeds rather than re-running them (a full local re-seed is dominated by `uscg_ma
 | GHA deep-rescan workflow proof — dispatch **one** cheap source (e.g. `deep-rescan-cpsc`) via the Actions UI | seeds were run locally → the Actions path (restricted role + secrets + dispatch) is unproven | before the first **monthly** deep-rescan safety-net cron fires |
 | ~~NHTSA presence (#71)~~ **DONE 2026-06-13** | a fresh `historical_seed` deep-rescan (run `26601d0b`) banked the manifest — 30,075 campnos; `verify_nhtsa_presence_closed.sql` → **PASS** (all 30,075 NHTSA recalls presence-populated, untracked sources clean). | #71 is data-valid; flips to `[x]` at H-f |
 | USCG-detail `--shard 0 --shard-count 3` timing **on GHA** | confirm a 1/3 shard finishes under `timeout-minutes: 330` (raise `--shard-count` if long) | before its monthly cron |
+
+> **Runbook for the two GHA legs above:** [`post_go_live_residual_validation.md`](post_go_live_residual_validation.md)
+> — step-by-step dispatch + pass criteria. Both validate already-built functionality; no code changes expected.
 
 ---
 
@@ -116,7 +120,7 @@ pwr psql -f scripts/sql/_pipeline/simulation_daily_counts.sql
 ## Sign-off → go-live
 
 - [x] H-a: 2–3 days of sane loaded counts + green transform recorded above
-- [x] H-b (seed-data): seeds verified green (head 0033, full-corpus counts, watermark discipline). **Residual legs tracked above** — GHA workflow proof · NHTSA presence (#71) · USCG-detail shard timing — sequenced before their respective monthly crons; none blocks daily go-live
+- [x] H-b (seed-data): seeds verified green (head 0033, full-corpus counts, watermark discipline). **Residual legs tracked above** — GHA workflow proof · USCG-detail shard timing — sequenced before their respective monthly crons; none blocks daily go-live
 - [x] H-d: `pre-commit run --all-files` green (7/7) · #44 Dependabot pre-commit ecosystem confirmed · C21 overlay disposition documented (`development.md`, `implementation_plan.md`)
 - [ ] H-e: version bumped (`pyproject.toml`)
 - [ ] H-f: this doc + per-source results committed · TODO #71 **ready to close** (post-C16 NHTSA full-enum run verified 2026-06-13 — `verify_nhtsa_presence_closed.sql` = PASS)

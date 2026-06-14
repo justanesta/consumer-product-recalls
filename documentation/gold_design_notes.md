@@ -28,6 +28,10 @@ Surrogate keys are **reused from silver verbatim** (`recall_event_id`, `recall_p
 - `mart_product_search` — one row per product + a stored `tsvector` `search_vector`. Feeds
   `GET /products/search`. Search is **Postgres built-in FTS** (tsvector + GIN); `pg_trgm` is not
   enabled (ADR 0037), so no fuzzy/trigram search.
+- `gold_meta` — one-row gold-layer rebuild stamp: `rebuilt_at` (dbt `run_started_at`, UTC, identical
+  across every model in one `dbt build`) and `schema_version` (manual contract-version bump via
+  `--vars '{gold_schema_version: "2"}'`). Read by the API to compute a layer-wide ETag / Last-Modified
+  for conditional GET / 304. Covered by the `grant_gold_readonly` post-hook (ADR 0042 R4).
 
 **Aggregates (dashboards):** `fct_recalls_by_week`/`_by_month`/`_by_year`, `fct_recalls_monthly_trend`
 (rolling averages + YoY over a dense month spine), `fct_recalls_by_firm` (leaderboard), `fct_recalls_by_classification`,
@@ -35,6 +39,25 @@ Surrogate keys are **reused from silver verbatim** (`recall_event_id`, `recall_p
 (distribution countries, FDA+USDA; ISO-3166-1 alpha-2 with a derived `US` cell), `fct_units_recalled`.
 Most carry a `source` dimension with an `'ALL'` rollup via `GROUPING SETS` (one model serves a
 per-source page and the cross-source total).
+
+## Serving-layer access control (R1/R4, ADR 0042)
+
+Three components form the published read contract between the pipeline and the `recalls-api`:
+
+- **`gold_meta`** (R4) — the one-row rebuild stamp described in the Catalog above. Its `rebuilt_at`
+  and `schema_version` columns are the `_gold.yml` column contract; see `dbt/models/gold/gold_meta.sql`
+  for the implementation.
+- **`recalls_readonly` role** (R1) — a `NOLOGIN` SQL role provisioned out-of-band by migration
+  `0034_recalls_readonly_role`. Gold-only `SELECT`; `default_transaction_read_only = on`; **not** a
+  `neon_superuser` member. The role's DSN is exposed as `NEON_DATABASE_URL_RO`. It is activated
+  out-of-band (the pipeline owns schema, the API owns the connection string).
+- **`grant_gold_readonly` macro** — applied to every model under `dbt/models/gold/` via
+  `dbt_project.yml +post-hook`. Re-grants `SELECT` to `recalls_readonly` after each nightly
+  drop+recreate of the gold tables. Tolerant of the role being absent (dev/CI ephemeral branches) so
+  those builds do not fail. See `dbt/macros/grant_gold_readonly.sql`.
+
+Together these ensure the API's read path survives nightly rebuilds without any manual re-grant.
+The full stability obligations (column contract, key recipes, source enum) are recorded in ADR 0042.
 
 ## Design notes worth knowing
 
@@ -91,17 +114,28 @@ per-source page and the cross-source total).
   across them, so it is collapsed to **one max per recall** (a naive product-grain sum overcounts
   ~100×; `potaff` verified constant within a campno → exact). USCG is 1:1 with `recall_event` (no
   fan-out). **FDA/USDA added 2026-06-09 (C13)** from the `recall_product` quantity parse,
-  **basis-aware**: `per_product` rows are *summed* across the recall's products, a `total_all_products`
-  value (a recall-wide total repeated on every product row) is *max'd* — the `quantity_basis` flag is
-  what prevents an N× overcount. `total_units` sums per-recall magnitudes — a recall-**magnitude**
-  measure, not unique items. **CPSC stays free-text-only** (no parse); the value/unit parse for it
-  remains in the units-enrichment backlog.
+  **basis-agnostic**: the recall-wide quantity repeats identically across the recall's product rows
+  (e.g. "15,779,607 units" on all 14 rows of a recall), so `units = max(quantity_value)` per
+  `(recall, category)` — a naive `SUM` over-counts by the product-row count. The v1 parser emits a
+  value only for clean single-quantity strings and NULLs messy multi-product breakdowns (precision
+  guards in `quantity.py`; messy tail → AI extractor v2, freetext-enrichment-backlog), so rows
+  reaching here are clean. The basis-sum/GREATEST logic was replaced 2026-06-09. `total_units` sums
+  per-recall magnitudes — a recall-**magnitude** measure, not unique items.
+  **CPSC stays free-text-only** (no parse); the value/unit parse for it remains in the
+  units-enrichment backlog.
 - **Indexing** (ADR 0038): silver/gold indexes are declared in dbt `config(indexes=[...])` so they
   re-create on each table rebuild. Two load-bearing specials: a **functional index on
   `firm_fda_attributes((firm_fei_num::text))`** (the firm→sidecar join casts FEI to text), and
   **`ANALYZE` post_hooks** on the firm-join-chain tables so a freshly-rebuilt table has fresh planner
   stats immediately (without them, an incremental rebuild fell back to seq-scans — `fct_recalls_by_geography`
-  went 3s → 130s until ANALYZE was added).
+  went 3s → 130s until ANALYZE was added). Two additional gold serving-mart indexes added for the
+  Phase 8 API (ADR 0042): **(1) `mart_recall_summary`** — an expression index on
+  `(published_at DESC, recall_event_id)`, the R2 keyset-pagination anchor for `GET /recalls` cursor
+  queries; declared via `post_hook` because column-list `config(indexes=[...])` cannot express
+  expression indexes. **(2) `mart_product_search`** — a GIN index on `recall_product_upcs`, serving
+  the R3 recall-level UPC containment query (`@> :upc`); declared via `config(indexes=[{columns:
+  [recall_product_upcs], type: gin}])` (column-list config, not a post_hook). The per-product `upc`
+  btree remains (all-NULL today, kept as a forward-looking placeholder).
 - **Performance rewrites (2026-06-09, no schema change):** the two items below are pure query
   rewrites with no observable output change. Note: the `geography_basis` value rename
   (`firm_location → firm_registration`, C17) also touched `fct_recalls_by_geography` this session

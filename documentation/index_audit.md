@@ -11,8 +11,15 @@ so the Phase-7 follow-up (below) re-profiles against real traffic.
 - **Bronze** — Alembic-managed (`migrations/versions/`); indexes persist with the append-only tables.
 - **Silver / gold** — declared in each model's `config(indexes=[...])`, so dbt drops + recreates them
   on every `dbt build` (the tables are rebuilt each run). Gold indexes are co-located in each
-  `mart_` model. One expression index that the column-list config can't express is added via
-  `post_hook` (see firm_fda_attributes below).
+  `mart_` model. `post_hook` serves three distinct purposes here:
+  (1) **Expression / keyset indexes** the column-list `config(indexes=[...])` cannot express —
+  `firm_fda_attributes`'s functional `(firm_fei_num::text)` index (see silver below) and
+  `mart_recall_summary`'s `(published_at DESC, recall_event_id)` keyset-pagination index (R2);
+  (2) **`grant_gold_readonly` macro** — applied to every gold model via the gold-folder
+  `+post-hook` in `dbt_project.yml`, re-granting `SELECT` to `recalls_readonly` after each
+  nightly drop+recreate (migration 0034 / R1);
+  (3) **`ANALYZE`** — several gold marts call `analyze {{ this }}` post-build to update planner
+  statistics immediately (separate from the index classes above).
 
 ## Bronze — confirmed appropriate (no change)
 
@@ -58,11 +65,12 @@ and `mart_firm_profile` is `firm_fda_attributes.firm_fei_num::text = company_id`
 
 | Model | Indexes |
 |---|---|
-| `mart_recall_summary` | unique `recall_event_id`; `(source, published_at)`; `is_active`; `classification` |
-| `mart_firm_profile` | unique `firm_id`; `normalized_name` |
-| `mart_product_search` | unique `recall_product_id`; `recall_event_id`; `hin`; `model`; `upc`; **GIN** `search_vector` (FTS) |
+| `mart_recall_summary` | unique `recall_event_id`; `(source, published_at)`; `is_active`; `classification`; expression `(published_at DESC, recall_event_id)` (post_hook, keyset-pagination — R2); post_hook ANALYZE |
+| `mart_firm_profile` | unique `firm_id`; `normalized_name`; post_hook ANALYZE |
+| `mart_product_search` | unique `recall_product_id`; `recall_event_id`; `hin`; `model`; `upc`; **GIN** `search_vector` (FTS); **GIN** `recall_product_upcs` (recall-level UPC containment `@> :upc`, declared via column-list `config(indexes=[...])`, NOT a post_hook — R3); post_hook ANALYZE |
 | `fct_recalls_by_geography` | `(geography_basis, source, state_code)`; `state_code` |
 | `fct_recalls_by_*` (aggregates) | none — materialized as views (small, recomputed) |
+| `gold_meta` | no content indexes (single-row table); `recalls_readonly` SELECT grant applied via folder-level `grant_gold_readonly` post_hook (`dbt_project.yml:30`) |
 
 ## Phase-7 follow-up (recorded per ADR 0038)
 
