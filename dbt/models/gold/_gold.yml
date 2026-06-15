@@ -176,11 +176,30 @@ models:
       - name: published_at
         tests:
           - not_null
+      - name: distribution_scope
+        description: >
+          Distribution breadth — 100% NOT NULL, 4-value enum across all sources (gold-audit 2026-06-14:
+          Nationwide 42,183 / Regional 32,255 / Unspecified 11,973 / International 6,967). A clean
+          cross-source filter the recalls-api relies on; this test guards the contract so a new value or
+          a NULL introduced upstream in silver fails loudly instead of silently breaking the API.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Nationwide', 'Regional', 'Unspecified', 'International']
       - name: firms
         description: jsonb array of {firm_id, name, role, match_confidence} for the recall.
       - name: product_count
         tests:
           - not_null
+      - name: search_vector
+        description: >
+          Recall-grain Postgres FTS tsvector (Option B, gold-audit 2026-06-15) for GET /recalls/search
+          (v1.1, API-side). setweight buckets (4, 1:1, so a real brand/product match can outrank a
+          narrative-only mention): A=title; B=product_names+primary_firm_name (what/who); C=recall_reason
+          (why); D=consequence_of_defect (harm tail). The field->bucket mapping is the gold contract; the API
+          tunes the numeric ts_rank_cd weights at query time (no rebuild). GIN-indexed via config(indexes)
+          (hash-named, immune to the post_hook-oscillation class). Additive/non-breaking (ADR 0042).
 
   - name: mart_firm_profile
     description: >

@@ -90,11 +90,11 @@ seeds rather than re-running them (a full local re-seed is dominated by `uscg_ma
 
 **Residual legs — sequencable; none blocks the daily-extract go-live:**
 
-| Leg | Why it isn't covered by the seed verification | When it's actually needed |
-|---|---|---|
-| GHA deep-rescan workflow proof — dispatch **one** cheap source (e.g. `deep-rescan-cpsc`) via the Actions UI | seeds were run locally → the Actions path (restricted role + secrets + dispatch) is unproven | before the first **monthly** deep-rescan safety-net cron fires |
-| ~~NHTSA presence (#71)~~ **DONE 2026-06-13** | a fresh `historical_seed` deep-rescan (run `26601d0b`) banked the manifest — 30,075 campnos; `verify_nhtsa_presence_closed.sql` → **PASS** (all 30,075 NHTSA recalls presence-populated, untracked sources clean). | #71 is data-valid; flips to `[x]` at H-f |
-| USCG-detail `--shard 0 --shard-count 3` timing **on GHA** | confirm a 1/3 shard finishes under `timeout-minutes: 330` (raise `--shard-count` if long) | before its monthly cron |
+| Leg | Why it isn't covered by the seed verification | When it's actually needed | Run? | `records_inserted` | Notes
+|---|---|---|---|---|---|
+| GHA deep-rescan workflow proof — dispatch **one** cheap source (e.g. `deep-rescan-cpsc`) via the Actions UI | seeds were run locally → the Actions path (restricted role + secrets + dispatch) is unproven | before the first **monthly** deep-rescan safety-net cron fires | ✓ 06-14 |  37 | Took 37 seconds
+| ~~NHTSA presence (#71)~~ **DONE 2026-06-13** | a fresh `historical_seed` deep-rescan (run `26601d0b`) banked the manifest — 30,075 campnos; `verify_nhtsa_presence_closed.sql` → **PASS** (all 30,075 NHTSA recalls presence-populated, untracked sources clean). | #71 is data-valid; flips to `[x]` at H-f | ✓ 06-14 | 15 | Took 1 min 22 seconds
+| USCG-detail `--shard 0 --shard-count 3` timing **on GHA** | confirm a 1/3 shard finishes under `timeout-minutes: 330` (raise `--shard-count` if long) | before its monthly cron | ✓ 06-14 | 2 | Took 2 hours 34 mins 45 seconds
 
 > **Runbook for the two GHA legs above:** [`post_go_live_residual_validation.md`](post_go_live_residual_validation.md)
 > — step-by-step dispatch + pass criteria. Both validate already-built functionality; no code changes expected.

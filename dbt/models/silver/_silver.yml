@@ -216,6 +216,15 @@ models:
           published "205" counts the paren form only and undercounts the true recycle set.
         tests:
           - not_null
+      - name: mic_renamed_not_recycled
+        description: >
+          True when the MIC has a prior holder, none OOB-recycled, and EVERY prior slot is a source-tagged
+          "(previous name)" rename → the SAME manufacturer renamed, not a different firm (6c.5(a)).
+          recall_event_firm downgrades these from uscg_mic_time_sensitive_unresolved to uscg_mic_unambiguous.
+          Published into the public /firms/{id} JSONB via to_jsonb(firm_uscg_attributes) — documented here per
+          the gold-audit G7 contract-drift fix (was in the model SELECT but absent from this contract).
+        tests:
+          - not_null
       - name: prior_holders
         description: jsonb array of the non-null Past Company names, for inspection.
 

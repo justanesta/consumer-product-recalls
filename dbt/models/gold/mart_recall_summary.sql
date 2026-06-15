@@ -5,14 +5,24 @@
       {'columns': ['source', 'published_at']},
       {'columns': ['is_active']},
       {'columns': ['classification']},
+      {'columns': ['distribution_state_codes'], 'type': 'gin'},
+      {'columns': ['distribution_country_codes'], 'type': 'gin'},
+      {'columns': ['search_vector'], 'type': 'gin'},
     ],
     post_hook=[
-      "create index if not exists {{ this.name }}_published_at_desc_evt
+      "drop index if exists {{ this.schema }}.{{ this.name }}_published_at_desc_evt",
+      "create index {{ this.name }}_published_at_desc_evt
        on {{ this }} (published_at desc, recall_event_id)",
       "analyze {{ this }}",
     ]
 ) }}
 
+-- R2 keyset index post_hook uses DROP-THEN-CREATE (not `create index if not exists`): Postgres index
+-- names are unique per SCHEMA, so a fixed-name `if not exists` collides with the same-named index still
+-- attached to dbt's `__dbt_backup` table mid-rebuild, no-ops, and is then dropped with the backup — so the
+-- index OSCILLATED out every other build (gold-audit G0, root-caused 2026-06-15). drop-if-exists frees the
+-- stale backup name first, so the index rebuilds deterministically every run.
+--
 -- mart_recall_summary — denormalized one-row-per-recall serving table (Phase 6e, ADR 0038).
 -- Feeds GET /recalls (list) and GET /recalls/{source}/{recall_id} (detail): the silver
 -- recall_event header plus its firm rollup, product rollup, lifecycle summary, and
@@ -56,6 +66,7 @@ product_rollup as (
         recall_event_id,
         count(*)                                                              as product_count,
         jsonb_agg(distinct product_name) filter (where product_name is not null) as product_names,
+        string_agg(distinct product_name, ' ') filter (where product_name is not null) as product_names_text,
         jsonb_agg(distinct model) filter (where model is not null)              as models,
         jsonb_agg(distinct hin) filter (where hin is not null)                  as hins
     from {{ ref('recall_product') }}
@@ -113,7 +124,21 @@ select
     rl.was_ever_retracted,
     -- edit-history flags (recall_event_history)
     coalesce(hr.edit_event_count, 0)  as edit_event_count,
-    (hr.source_recall_id is not null) as has_been_edited
+    (hr.source_recall_id is not null) as has_been_edited,
+    -- Option B (gold-audit 2026-06-15): recall-grain FTS vector for GET /recalls/search (v1.1, API-side).
+    -- field->setweight-bucket is the gold contract; the API tunes the NUMERIC {D,C,B,A} weights at query
+    -- time via ts_rank_cd (no rebuild). 4 buckets, 1:1, so a real brand/product match can outrank a
+    -- narrative-only mention: A=title; B=what/who (product names + primary firm); C=why (recall_reason);
+    -- D=harm tail (consequence_of_defect). corrective_action + hazards excluded (boilerplate / opaque jsonb).
+    -- GIN via config(indexes) above (hash-named, immune to the post_hook oscillation noted at the top).
+    (
+        setweight(to_tsvector('english', coalesce(re.title, '')), 'A')
+        || setweight(to_tsvector('english',
+               coalesce(pr.product_names_text, '') || ' '
+            || coalesce(fr.primary_firm_name, '')), 'B')
+        || setweight(to_tsvector('english', coalesce(re.recall_reason, '')), 'C')
+        || setweight(to_tsvector('english', coalesce(re.consequence_of_defect, '')), 'D')
+    )                                 as search_vector
 from {{ ref('recall_event') }} re
 left join firm_rollup fr                    on fr.recall_event_id = re.recall_event_id
 left join product_rollup pr                 on pr.recall_event_id = re.recall_event_id
