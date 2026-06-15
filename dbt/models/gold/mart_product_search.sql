@@ -5,7 +5,6 @@
       {'columns': ['recall_event_id']},
       {'columns': ['hin']},
       {'columns': ['model']},
-      {'columns': ['upc']},
       {'columns': ['search_vector'], 'type': 'gin'},
       {'columns': ['recall_product_upcs'], 'type': 'gin'},
     ],
@@ -13,12 +12,14 @@
 ) }}
 
 -- R3: the `recall_product_upcs` GIN above serves recall-level UPC containment (`@> :upc`) — the real
--- UPC search path (the per-product `upc` column is NULL for every row today). O2: the all-NULL `upc`
--- btree is kept as a forward-looking placeholder (operator's call; drop it if build/storage cost matters).
+-- UPC search path (the per-product `upc` column is NULL for every row today). O2/G5: the all-NULL `upc`
+-- btree was DROPPED 2026-06-15 (gold-audit confirmed `upc` 0% populated — an empty index rebuilt nightly
+-- for no benefit); the `upc` COLUMN stays as a forward-looking placeholder for structured per-product UPCs.
 
 -- mart_product_search — one row per recall_product, denormalized for "is my product recalled?"
 -- (Phase 6e, ADR 0038). Feeds GET /products/search and the app's keyword search. Two access
--- paths: (1) exact-identifier lookup on hin (USCG) / model (NHTSA, CPSC) / upc — btree-indexed;
+-- paths: (1) exact-identifier lookup on hin (USCG) / model (NHTSA, CPSC) — btree-indexed (the all-NULL
+-- per-product `upc` btree was dropped, G5);
 -- (2) free-text keyword search over a stored tsvector — GIN-indexed (Postgres built-in FTS; no
 -- pg_trgm per ADR 0037).
 --

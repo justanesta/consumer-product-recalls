@@ -5,11 +5,17 @@
       {'columns': ['firm_state_cd']},
     ],
     post_hook=[
-      "create index if not exists idx_firm_fda_attributes_fei_text on {{ this }} ((firm_fei_num::text))",
+      "drop index if exists {{ this.schema }}.idx_firm_fda_attributes_fei_text",
+      "create index idx_firm_fda_attributes_fei_text on {{ this }} ((firm_fei_num::text))",
       "analyze {{ this }}",
     ]
 ) }}
 
+-- The functional FEI index uses DROP-THEN-CREATE (not `create index if not exists`): a fixed index name
+-- collides with the same-named index still on dbt's `__dbt_backup` table mid-rebuild and oscillates out
+-- every other build (same Postgres schema-unique-name gotcha as mart_recall_summary's R2 keyset index;
+-- gold-audit G0, root-caused 2026-06-15). This index is load-bearing for the firm->sidecar FEI::text join.
+--
 -- FDA-registered establishment (firm) attributes — address + firm-continuity
 -- metadata that doesn't fit on firm.sql (which is keyed on normalized name and
 -- shared across CPSC/FDA/USDA/NHTSA/USCG). The third firm-attribute sidecar,

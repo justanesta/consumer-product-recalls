@@ -135,7 +135,10 @@ The full stability obligations (column contract, key recipes, source enum) are r
   expression indexes. **(2) `mart_product_search`** — a GIN index on `recall_product_upcs`, serving
   the R3 recall-level UPC containment query (`@> :upc`); declared via `config(indexes=[{columns:
   [recall_product_upcs], type: gin}])` (column-list config, not a post_hook). The per-product `upc`
-  btree remains (all-NULL today, kept as a forward-looking placeholder).
+  btree was **dropped (gold-audit G5, 2026-06-15)** — `upc` is 0% populated, so the btree was an empty index
+rebuilt nightly for no benefit; the `upc` *column* stays as a placeholder. **Gold-audit G1 (2026-06-15)**
+added two GIN indexes on `mart_recall_summary`'s `distribution_state_codes` / `distribution_country_codes`
+so the recalls-api array filters (`@>` / `&&`) are index-backed instead of seq-scanning the recall mart.
 - **Performance rewrites (2026-06-09, no schema change):** the two items below are pure query
   rewrites with no observable output change. Note: the `geography_basis` value rename
   (`firm_location → firm_registration`, C17) also touched `fct_recalls_by_geography` this session
