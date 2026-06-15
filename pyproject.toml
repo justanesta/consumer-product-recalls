@@ -36,13 +36,13 @@ recalls = "src.cli.main:app"
 
 [dependency-groups]
 dev = [
-    "pytest>=9.0.3,<10",
+    "pytest>=9.1.0,<10",
     "pytest-vcr>=1.0,<2",
     "pytest-cov>=7.1.0,<8",
     "respx>=0.21,<1",
     "vcrpy>=8.1.1,<9",
     "pyyaml>=6.0,<7",
-    "ruff>=0.15.16,<1",
+    "ruff>=0.15.17,<1",
     "pyright>=1.1.410,<2",
     "pre-commit>=4.6.0,<5",
     "hypothesis>=6.155.2,<7",
