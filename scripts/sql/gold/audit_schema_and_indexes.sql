@@ -76,6 +76,7 @@ ORDER BY table_name, ordinal_position;
 \echo '    R3 GIN (mart_product_search recall_product_upcs), search_vector GIN, the sidecar (state)/(fei::text).'
 \echo '    GAP CHECK: look for any GIN on mart_recall_summary.distribution_state_codes / _country_codes (the'
 \echo '    confirmed array filters) — absence here = the headline BLOCKED-ON-GOLD finding.'
+\echo '    (CONFIRMED PRESENT 2026-06-16 — G1 landed; both GINs live. See documentation/index_audit.md.)'
 SELECT
     tablename                                   AS object,
     indexname                                   AS index,
