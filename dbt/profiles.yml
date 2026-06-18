@@ -1,7 +1,7 @@
 consumer_product_recalls:
-  target: dev
+  target: main
   outputs:
-    dev:
+    main:
       type: postgres
       # dbt-postgres requires individual connection fields; cannot accept a raw DSN.
       # Set NEON_HOST, NEON_USER, NEON_PASSWORD, NEON_DBNAME in .env (see .env.example).
