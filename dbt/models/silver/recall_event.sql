@@ -38,8 +38,12 @@ with cpsc_events as (
         announced_at,
         published_at,
         cast(null as timestamptz)              as first_posted_at,
-        title,
-        description                            as recall_reason,
+        -- Empty-string → NULL guard (ADR 0027). stg_cpsc does NOT normalize, so CPSC's raw '' for
+        -- absent free-text leaks here. title is clean today (0 empties, 2026-06-17 probe) but
+        -- wrapped defensively; description→recall_reason had 1 empty. Display-only: no CPSC key or
+        -- dedup uses these. See scripts/sql/cross_source/empty_string_freetext_audit.sql.
+        nullif(trim(title), '')                as title,
+        nullif(trim(description), '')          as recall_reason,
         url,
         cast(null as text)                     as classification,
         cast(null as text)                     as lifecycle_status,
@@ -282,7 +286,12 @@ nhtsa_events as (
         coalesce(datea, rcdate)                                        as published_at,
         cast(null as timestamptz)                                      as first_posted_at,
         campno || ' — ' || mfgname                                     as title,
-        desc_defect                                                    as recall_reason,
+        -- Empty-string → NULL guard (ADR 0027). NHTSA flat-file uses a literal '' for absent
+        -- (flat_file_observations.md:326), and stg_nhtsa only normalizes yeartxt — so its free-text
+        -- narrative/code fields leak '' here. Wrapped downstream of staging: the product snapshot +
+        -- 11-tuple dedup read staging-raw values, so this display-only normalization can't churn
+        -- them (recall_event feeds no snapshot/key). Counts per field from the 2026-06-17 probe.
+        nullif(trim(desc_defect), '')                                  as recall_reason,  -- 2,401 ''
         cast(null as text)                                             as url,
         cast(null as text)                                             as classification,
         -- NHTSA has no lifecycle status; the old do_not_drive/park_outside "hack"
@@ -321,11 +330,11 @@ nhtsa_events as (
         cast(null as boolean)                                          as related_to_outbreak,
         cast(null as boolean)                                          as archived,
         cast(null as text)                                             as firm_contact_block_text,
-        corrective_action                                              as corrective_action,
-        conequence_defect                                              as consequence_of_defect,
-        notes                                                          as notes,
-        mfgcampno                                                      as mfgcampno,
-        fmvss                                                          as fmvss,
+        nullif(trim(corrective_action), '')                            as corrective_action,     -- 2,389 ''
+        nullif(trim(conequence_defect), '')                            as consequence_of_defect, -- 4,891 ''
+        nullif(trim(notes), '')                                        as notes,                 -- 1,110 ''
+        nullif(trim(mfgcampno), '')                                    as mfgcampno,             -- 16,883 ''
+        nullif(trim(fmvss), '')                                        as fmvss,                 -- 24,089 '' (fmvss is a product-snapshot check_col, but recall_event reads staging-raw, so safe)
         cast(null as text)                                             as firm_contact_person,
         -- B3b: residual fields only. desc_defect → recall_reason,
         -- corrective_action / conequence_defect (→ consequence_of_defect) /

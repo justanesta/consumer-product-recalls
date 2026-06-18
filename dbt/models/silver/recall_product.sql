@@ -233,6 +233,43 @@ all_products as (
     select * from nhtsa_products
     union all
     select * from uscg_products
+),
+
+-- Empty-string → NULL guard for the free-text product passthroughs, applied SOURCE-UNIFORMLY
+-- at the union output (defensive: no current or future source can leak a '' into the serving
+-- layer). Rationale: CPSC explodes these straight from the source JSON via `->>`, which returns
+-- '' for an absent Model/Type/Description (confirmed live 2026-06-17), and NHTSA's flat file uses
+-- '' as the absent-value sentinel — and neither stg_cpsc nor stg_nhtsa normalizes (stg_usda
+-- already does this dance, which is why only CPSC/NHTSA were dirty). Wrapping here (not in the
+-- per-source CTEs) keeps it in ONE place AND keeps it downstream of the NHTSA snapshot/identity
+-- machinery, so it can never perturb recall_product_id, the 11-tuple dedup grain, or the SCD-2
+-- check_cols. trim() also collapses whitespace-only values to NULL. category_id (40.4% '') and
+-- number_of_units (31.7% '') are CPSC identifier/quantity fields where '' is likewise the source's
+-- absent-marker (field_audit_2026_w22.md) — normalized too. NULLing number_of_units is crosswalk-
+-- safe: the join below is an equality on the raw quantity string, and '' was never a crosswalk key
+-- (it is not a parseable quantity), so '' and NULL both miss identically. The remaining text columns
+-- (model_year, hin, upc, the artifact-name fields) are already null-clean upstream (staging nullif /
+-- not '' carriers). See TODO "Performance" §2 and scripts/sql/cross_source/empty_string_freetext_audit.sql.
+normalized as (
+    select
+        recall_product_id,
+        recall_event_id,
+        source,
+        source_recall_id,
+        nullif(trim(product_name), '')        as product_name,
+        nullif(trim(product_description), '') as product_description,
+        nullif(trim(model), '')               as model,
+        nullif(trim(type), '')                as type,
+        nullif(trim(category_id), '')         as category_id,
+        nullif(trim(number_of_units), '')     as number_of_units,
+        unit_count,
+        model_year,
+        hin,
+        label_artifact_name,
+        distribution_list_artifact_name,
+        upc,
+        source_specific_attrs
+    from all_products
 )
 
 -- C14: clean processing-category token array (jsonb), derived ONCE from the unioned `type` column
@@ -261,6 +298,6 @@ select
     xq.quantity_unit,
     xq.quantity_category,
     xq.quantity_basis
-from all_products ap
+from normalized ap
 left join {{ source('enrichment', 'quantity_crosswalk') }} xq
     on xq.raw_quantity = ap.number_of_units

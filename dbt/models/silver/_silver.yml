@@ -79,6 +79,22 @@ models:
           - accepted_values:
               arguments:
                 values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
+      # Empty-string free-text is normalized to NULL source-uniformly in recall_product.sql
+      # (the `normalized` CTE, ADR 0027): product_name / product_description / model / type /
+      # category_id / number_of_units. CPSC and NHTSA were the two sources leaking '' (their
+      # staging models don't nullif, unlike USDA/FDA/USCG). Probe:
+      # scripts/sql/cross_source/empty_string_freetext_audit.sql.
+      - name: product_description
+        description: >
+          Free-text product description. DOCUMENTED-EMPTY-BY-SOURCE for CPSC — the CPSC API returns
+          the products[].Description key but it is 100% blank across the corpus
+          (field_audit_2026_w22.md §7), so the CPSC branch is 100% NULL by construction post-fix
+          (not a bug). Populated for FDA/USDA/NHTSA(partial)/USCG. '' → NULL per ADR 0027.
+      - name: model
+        description: >
+          Product model. DOCUMENTED-EMPTY-BY-SOURCE for CPSC — products[].Model is 100% blank across
+          the corpus (field_audit_2026_w22.md §7) → 100% NULL by construction. cast-NULL for
+          FDA/USDA/USCG; effectively NHTSA-only (modeltxt). '' → NULL per ADR 0027.
       # C13: structured quantity parsed from number_of_units via quantity_crosswalk (FDA + USDA;
       # NULL for other sources / unparseable). v1 is PRECISION-scoped (2026-06-09): a value is emitted
       # only for clean single-quantity strings (~70% value+unit, +17% value-only); the messy ~10%
