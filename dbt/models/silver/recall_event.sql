@@ -30,6 +30,11 @@
 --   case_open_date / opened_on with the 1970-01-01 sentinel mapped to NULL
 --   per Finding O.
 
+-- Empty-string normalization (ADR 0027) is applied PER-SOURCE here (CPSC + NHTSA branches only),
+-- NOT source-uniformly like recall_product's union-output `normalized` CTE — deliberate: FDA/USDA/
+-- USCG already nullif at staging, and a uniform wrap over recall_event's 50+ mixed-type columns isn't
+-- worth it. assert_no_blank_freetext_serving guards every source at the test layer, so a staging
+-- regression or new un-normalized source is caught loudly rather than relying on this asymmetry.
 with cpsc_events as (
     select
         md5('CPSC' || '|' || source_recall_id) as recall_event_id,

@@ -1,6 +1,6 @@
 -- Phase 5c Step 5 — silver-layer smoke check after NHTSA landing.
 --
--- Run after `dbt build --select +silver --target dev` to verify the silver
+-- Run after `dbt build --select +silver --target main` to verify the silver
 -- tables look plausible. Complements `dbt test` (which checks structural
 -- properties like uniqueness and referential integrity) by sanity-checking
 -- the actual row counts and the documented v1 drift case.

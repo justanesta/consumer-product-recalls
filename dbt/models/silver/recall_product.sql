@@ -243,13 +243,15 @@ all_products as (
 -- already does this dance, which is why only CPSC/NHTSA were dirty). Wrapping here (not in the
 -- per-source CTEs) keeps it in ONE place AND keeps it downstream of the NHTSA snapshot/identity
 -- machinery, so it can never perturb recall_product_id, the 11-tuple dedup grain, or the SCD-2
--- check_cols. trim() also collapses whitespace-only values to NULL. category_id (40.4% '') and
--- number_of_units (31.7% '') are CPSC identifier/quantity fields where '' is likewise the source's
--- absent-marker (field_audit_2026_w22.md) — normalized too. NULLing number_of_units is crosswalk-
--- safe: the join below is an equality on the raw quantity string, and '' was never a crosswalk key
--- (it is not a parseable quantity), so '' and NULL both miss identically. The remaining text columns
--- (model_year, hin, upc, the artifact-name fields) are already null-clean upstream (staging nullif /
--- not '' carriers). See TODO "Performance" §2 and scripts/sql/cross_source/empty_string_freetext_audit.sql.
+-- check_cols. trim() also collapses whitespace-only to NULL. category_id (40.4% '') takes the same
+-- guard. number_of_units (31.7% '' for CPSC) uses nullif WITHOUT trim, on purpose: it is the
+-- quantity_crosswalk JOIN KEY (xq.raw_quantity = ap.number_of_units, below), and the crosswalk is
+-- built by `recalls parse-quantities` from the UNtrimmed FDA/USDA staging strings — so trimming here
+-- would orphan any padded quantity row from its crosswalk match (an FDA-coverage regression). nullif
+-- alone still NULLs the CPSC '' (the goal); whitespace-only number_of_units is 0 today and would be
+-- caught by assert_no_blank_freetext_serving. The remaining text columns (model_year, hin, upc, the
+-- artifact-name fields) are already null-clean upstream (staging nullif / not '' carriers). See
+-- TODO "Performance" §2 and scripts/sql/cross_source/empty_string_freetext_audit.sql.
 normalized as (
     select
         recall_product_id,
@@ -261,7 +263,7 @@ normalized as (
         nullif(trim(model), '')               as model,
         nullif(trim(type), '')                as type,
         nullif(trim(category_id), '')         as category_id,
-        nullif(trim(number_of_units), '')     as number_of_units,
+        nullif(number_of_units, '')           as number_of_units,  -- nullif ONLY: quantity_crosswalk join key (see note above)
         unit_count,
         model_year,
         hin,
