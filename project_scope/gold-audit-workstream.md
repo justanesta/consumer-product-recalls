@@ -89,8 +89,8 @@ silently drops the other sources — **keep returning, do not filter**.
 | `lifecycle_status` | ✗0 | ✓ | ✓ | ✗0 | ✓ | GOOD — null CPSC/NHTSA; **unindexed (G4)** |
 | `is_active` (tri-state) | ✗ | ✓ | ✓ | ✗ | ✓ | **GOOD** indexed — f 46,265 · NULL 39,928 · t 7,185 |
 | `classification` | ✗ | ✓ | ✓ | ✗ | ✓ | indexed but **source-native** (`Class I/II/III` · `H/L/M/S`) — filter only within source |
-| `distribution_state_codes` `text[]` | ✗0 | 36,344 | 793 | ✗0 | ✗0 | GOOD array, FDA/USDA only — **no GIN (G1)** |
-| `distribution_country_codes` `text[]` | ✗0 | 7,237 | ✗0 | ✗0 | ✗0 | GOOD array, **FDA-only in practice**; `US`=0 confirmed; **no GIN (G1)** |
+| `distribution_state_codes` `text[]` | ✗0 | 36,344 | 793 | ✗0 | ✗0 | GOOD array, FDA/USDA only — **GIN ✅ (G1, 2026-06-16)** |
+| `distribution_country_codes` `text[]` | ✗0 | 7,237 | ✗0 | ✗0 | ✗0 | GOOD array, **FDA-only in practice**; `US`=0 confirmed; **GIN ✅ (G1, 2026-06-16)** |
 | `risk_level` | ✗0 | ✗0 | 1,217 | ✗0 | ✗0 | **⚠ param-trap (USDA-only) — confirmed** |
 | `reason_category` | ✗0 | ✗0 | 1,202 | ✗0 | ✗0 | **⚠ param-trap (USDA-only) — confirmed** |
 | `distribution_states` (scalar) | ✗0 | ✗0 | 872 | ✗0 | ✗0 | render-only USDA passthrough; redundant w/ `_state_codes` (G7) |
@@ -144,10 +144,11 @@ btree** (G5). Do **not** index `distribution_scope` (4-value enum — a seq/bitm
 - **DONE (Batch 1):** added `dbt/tests/assert_gold_serving_indexes_present.sql` — a singular test (severity=error) that fails if the R2 keyset index or R3 UPC GIN is missing from the live catalog. It runs in `transform.yml`'s existing final `dbt test` step (no workflow edit needed), so a recurrence fails CI instead of silently degrading the API.
 - **CONFIRMED FIXED 2026-06-15:** rebuilt `mart_recall_summary` **twice consecutively** — `verify_gold_readiness §3` read `R2 = PASS` after *both* (pre-fix the 2nd build would have flipped it to `FAIL`); `firm_fda_attributes` rebuilt once to bank its fix. Oscillation gone. The `dbt test` index gate remains as defense-in-depth.
 
-### G1 — 🟠 P1: GIN on `distribution_state_codes` + `distribution_country_codes`
+### G1 — 🟢 RESOLVED 2026-06-16 (was 🟠 P1): GIN on `distribution_state_codes` + `distribution_country_codes`
 
 - The two **confirmed GOOD array filters** have **no index on the mart** (the GINs exist only on silver `recall_distribution_area`). `@>` / `&&` array filters in `GET /recalls` run a seq-scan over 93k rows.
 - **Action:** add to `mart_recall_summary` config: `{'columns':['distribution_state_codes'],'type':'gin'}` and `{'columns':['distribution_country_codes'],'type':'gin'}`. **Break-risk: none. Effort: S.**
+- **✅ RESOLVED 2026-06-16:** both GINs are live on `mart_recall_summary` (`audit_schema_and_indexes.sql` §C — `distribution_state_codes`, `distribution_country_codes`), added via `config(indexes=[...])` (hash-named → oscillation-immune, like G3). The `@>`/`&&` array filters in `GET /recalls` are now index-backed. Authoritative inventory: [`documentation/index_audit.md`](../documentation/index_audit.md) (Gold table).
 
 ### G2 — 🟢 P2 (downgraded): add the `distribution_scope` `accepted_values` test
 
@@ -219,7 +220,7 @@ btree** (G5). Do **not** index `distribution_scope` (4-value enum — a seq/bitm
 | Predicate / route | Blocked on | Item |
 |---|---|---|
 | `GET /recalls` default recency + keyset pagination | the R2 index is **missing** | **G0** |
-| `?distribution_state_codes=` / `?distribution_country_codes=` (array `@>`) | no GIN | **G1** |
+| `?distribution_state_codes=` / `?distribution_country_codes=` (array `@>`/`&&`) | ✅ GIN built (G1, 2026-06-16) | **G1 done** |
 | `?distribution_scope=` (as a *trusted* enum) | no test/verified domain | **G2** |
 | `GET /recalls/search` (recall FTS) | ✅ `search_vector`+GIN built (G3) — endpoint is v1.1 | **G3 done** |
 | `?announced_at` range (at scale) | unindexed | **G4** |
