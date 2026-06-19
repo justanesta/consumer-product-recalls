@@ -8,6 +8,7 @@
       {'columns': ['distribution_state_codes'], 'type': 'gin'},
       {'columns': ['distribution_country_codes'], 'type': 'gin'},
       {'columns': ['search_vector'], 'type': 'gin'},
+      {'columns': ['firms'], 'type': 'gin'},
     ],
     post_hook=[
       "drop index if exists {{ this.schema }}.{{ this.name }}_published_at_desc_evt",
@@ -110,6 +111,10 @@ select
     -- firm rollup
     fr.primary_firm_name,
     coalesce(fr.firm_count, 0)        as firm_count,
+    -- `firms` is GIN-indexed via config(indexes) above (hash-named, oscillation-immune) so the recalls-api's
+    -- GET /recalls?firm_id={id} filter resolves as an index-backed jsonb containment match
+    -- (`firms @> '[{"firm_id": :id}]'`) instead of a seq-scan of the corpus. jsonb_ops serves `@>`; a tighter
+    -- jsonb_path_ops opclass is a Phase-7 re-profile option (needs a post_hook — config(indexes) can't set one).
     coalesce(fr.firms, '[]'::jsonb)   as firms,
     -- product rollup (O1: coalesce the array rollups to '[]' for serving-layer consistency with `firms`)
     coalesce(pr.product_count, 0)     as product_count,

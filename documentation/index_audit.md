@@ -65,7 +65,7 @@ and `mart_firm_profile` is `firm_fda_attributes.firm_fei_num::text = company_id`
 
 | Model | Indexes |
 |---|---|
-| `mart_recall_summary` | unique `recall_event_id`; `(source, published_at)`; `is_active`; `classification`; expression `(published_at DESC, recall_event_id)` (post_hook, keyset-pagination — R2); **GIN** `distribution_state_codes`, **GIN** `distribution_country_codes` (array `@>`/`&&` containment — G1); **GIN** `search_vector` (recall-grain FTS for `/recalls/search` — G3); the three GINs via `config(indexes=[...])` (hash-named → oscillation-immune); post_hook ANALYZE |
+| `mart_recall_summary` | unique `recall_event_id`; `(source, published_at)`; `is_active`; `classification`; expression `(published_at DESC, recall_event_id)` (post_hook, keyset-pagination — R2); **GIN** `distribution_state_codes`, **GIN** `distribution_country_codes` (array `@>`/`&&` containment — G1); **GIN** `search_vector` (recall-grain FTS for `/recalls/search` — G3); **GIN** `firms` (jsonb `@>` containment for the firm-profile `GET /recalls?firm_id` filter — added 2026-06-19, website-frontend-plan §5.4); all four GINs via `config(indexes=[...])` (hash-named → oscillation-immune); post_hook ANALYZE |
 | `mart_firm_profile` | unique `firm_id`; `normalized_name`; post_hook ANALYZE |
 | `mart_product_search` | unique `recall_product_id`; `recall_event_id`; `hin`; `model`; `upc`; **GIN** `search_vector` (FTS); **GIN** `recall_product_upcs` (recall-level UPC containment `@> :upc`, declared via column-list `config(indexes=[...])`, NOT a post_hook — R3); post_hook ANALYZE |
 | `fct_recalls_by_geography` | `(geography_basis, source, state_code)`; `state_code` |
@@ -73,6 +73,8 @@ and `mart_firm_profile` is `firm_fda_attributes.firm_fei_num::text = company_id`
 | `gold_meta` | no content indexes (single-row table); `recalls_readonly` SELECT grant applied via folder-level `grant_gold_readonly` post_hook (`dbt_project.yml:30`) |
 
 > **As-built reconciliation (2026-06-16):** the Gold table above was verified against the live catalog (`scripts/sql/gold/audit_schema_and_indexes.sql` §C; gold rebuilt 04:32 UTC). The three `mart_recall_summary` GINs added since the original Phase-6e pass — the two geo arrays (workstream **G1**) and `search_vector` (**G3**) — landed via `config(indexes)` and are present + stable. This file is the authoritative index inventory; `project_scope/gold-audit-workstream.md` points here rather than restating it.
+
+> **Addendum (2026-06-19):** a fourth `mart_recall_summary` GIN — on the `firms` jsonb rollup — was added via `config(indexes)` to make the website firm-profile's `GET /recalls?firm_id={id}` containment filter (`firms @> '[{"firm_id": :id}]'`) index-backed instead of a corpus seq-scan (website-frontend-plan §5.4). **Verified present** against the live catalog after the 21:16 UTC gold rebuild (`scripts/sql/gold/audit_schema_and_indexes.sql` §C — `GIN (firms)` on the 93,444-row table; `last_analyze` fresh). Planner-pick confirmed via `scripts/sql/gold/verify_firms_gin_plan.sql` — Bitmap Index Scan on the GIN runs ~1.2 ms vs ~139 ms for the forced seq-scan baseline (~114×; 173 vs 17,478 buffers; measured 2026-06-19). The `assert_gold_serving_indexes_present.sql` guard is intentionally **not** extended to it yet — consistent with the G1 geo GINs (config(indexes) GINs are oscillation-immune, and `?firm_id` is not a *live* API filter until the API ships the param); add the guard row alongside that API change.
 
 ## Phase-7 follow-up (recorded per ADR 0038)
 
