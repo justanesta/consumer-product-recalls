@@ -32,6 +32,53 @@ verify tail re-run, so the result set is complete.
 > session working set; the runnable queries are materialized under
 > `scripts/sql/cross_source/provenance_audit/` (§6).
 
+## 1b. LIVE RESULTS — what the catalog run verified (2026-06-19, prod)
+
+The catalog was run against prod (`data/exploratory/provenance_audit/*.out`). **This section is
+authoritative and supersedes the static inferences below wherever they disagree.** Headline: the **served
+Silver/Gold surface is empty-string clean and structurally sound**; the FDA-classification drift is the one
+confirmed contract defect; several static empty-string findings were **refuted by the data**; and one new
+finding surfaced (`event_type` absent).
+
+| Finding | Static call | **Live verdict** | Evidence |
+|---|---|---|---|
+| FDA `classification` = `{1,2,3,NC}` not `Class I/II/III` | HIGH | **CONFIRMED** | `recall_event` + `mart_recall_summary` + `fct_recalls_by_classification`: FDA `1`=7523/`2`=34165/`3`=8902/`NC`=12 |
+| USDA firm-sidecar `''` leak (`establishment_name`/`city`/`state`/`zip`) | HIGH bug | **REFUTED** | `firm_usda_attributes` + snapshot: **all 0 empty**. Columns lack `nullif` but the source never blanks them → *latent gap, no live occurrence* |
+| `recall_event.url` `''` leak (CPSC/USCG) | MED bug | **REFUTED** | `mart_recall_summary.url` + `mart_product_search.url` = 0 empty |
+| `release_type` `''` | MED | **REFUTED** | domain = `{Firm, FDA, State}`, no `''` |
+| `firm_crosswalk.match_confidence` `rapidfuzz_high` drift | MED (#4) | **REFUTED** | live value is `rapidfuzz_rollup`; all 13 bridge values ⊆ the 17-value accepted set |
+| All other served free-text (`consumer_contact`, `corrective_action`, `consequence_of_defect`, `fmvss`, `recall_reason`, `notes`, product free-text, FDA/USCG firm sidecars) | risk | **CLEAN (0 `''`)** | `recall_event`/`recall_product`/`mart_*` sweeps all 0 |
+| `event_type` column (ADR 0003) | uncovered | **NEW FINDING — column ABSENT** | `recall_event` has no `event_type`; ADR 0003's `TEXT NOT NULL DEFAULT 'RECALL'` was never implemented |
+| `recall_event_id` md5 recipe | unverified | **CONFIRMED CORRECT** | `bad_recipe = 0` (byte-exact `md5(source\|source_recall_id)`) |
+| `terminated_year` = FDA+USDA+USCG (doc says USDA+USCG) | doc_wrong | **CONFIRMED** | FDA `n_nonnull` = 41,645 |
+| `mart_recall_summary` distribution arrays NULLABLE (#6) | MED | **CONFIRMED** | 53,345 NULL `distribution_state_codes`/`_country_codes` (vs O1 arrays = 0 null) |
+| `quantity_basis` domain | docs say `{per_product, total_all_products}` | **NEW — 3rd value `unknown`** (3,948 rows) | `recall_product` |
+| `recall_lifecycle` NHTSA presence | docs "USDA-only" | **STALE — now USDA+NHTSA** | NHTSA `is_currently_active` non-null = 30,075 (C16 manifest banked) |
+| accepted_values domains (#5: `classification`/`lifecycle_status`/`risk_level`/`initiated_by`/uscg `status`) | proposed | **DOMAINS CONFIRMED** (tests well-founded) | per-source enum runs all within the proposed sets |
+| Grain/uniqueness/FK/O1-arrays/key-recipe/index/date-sanity (≈40 checks) | — | **ALL CONFORM** | incl. FEI functional index present, `recall_product_id` 470,973 unique, gold_meta single-row |
+
+**Revised actionable list** (the empty-string *code* fixes are now largely unnecessary — the served data is
+already clean):
+
+1. **FDA `classification` doc reconciliation** (ADR 0042 ✓done, `_gold.yml` ✓done; remaining: `data_schemas.md`) + add `accepted_values(warn)` on `recall_event.classification` over the real union. **Confirmed.**
+2. **`event_type`** — implement ADR 0003's column (`TEXT NOT NULL DEFAULT 'RECALL'`) **or** mark ADR 0003 deferred/superseded; it is currently absent. **New, decision needed.**
+3. **`accepted_values(warn)` tests** for `classification`/`lifecycle_status`/`risk_level`/`initiated_by` (+ uscg `status`) — domains are now empirically confirmed (#5).
+4. **`mart` distribution arrays** — `coalesce(...,'{}')` or document NULL-vs-`{}` for the API (#6, confirmed: 53,345 NULL).
+5. **Doc-only**: `data_schemas.md` `terminated_year` → FDA+USDA+USCG; `recall_lifecycle`/`_silver.yml` presence → USDA+NHTSA; document `quantity_basis = 'unknown'`; `database_overview.md` ER `text[]` (confirmed `ARRAY`/`_text`); `_silver.yml` `recall_event` inventory (`is_active` etc.).
+6. **Optional / DROP** — USDA-sidecar `nullif`, `recall_event.url` `nullif`, `release_type` `nullif`, `firm_crosswalk` test: **refuted by data**. Add `nullif` only as defensive hardening for a latent gap, not a fix.
+
+### Applied on `chore/data-provenance` (2026-W25)
+
+- **ADR 0042** + **`_gold.yml`** — FDA `classification` corrected to `{1,2,3,NC}` (done earlier this branch).
+- **ADR 0003** — `event_type` recorded as deferred-not-implemented, with the two ship triggers (PHA-semantics clarification / a recall-adjacent feed).
+- **`_silver.yml`** — added `classification` / `lifecycle_status` / `risk_level` / `initiated_by` `accepted_values(warn)` tests + `firm_uscg_attributes.status` test (domains live-confirmed) **and** column docs for `classification`/`lifecycle_status`/`is_active`/`risk_level`/`initiated_by`/`terminated_year`; `is_currently_active`/`was_ever_retracted` → USDA+NHTSA. **Author-only — run on the next `dbt build`/`dbt test`.**
+- **`_gold.yml`** — `mart_recall_summary.distribution_state_codes`/`_country_codes` documented as **NULLable at mart grain** (decided: document, not coalesce — NULL = no distribution-area row vs `'{}'` = matched/empty; API models `list | None`).
+- **`data_schemas.md`** — `terminated_year` → FDA+USDA+USCG. **`database_overview.md`** — ER arrays annotated `text[]`.
+- **Catalog** — 5 query bugs fixed (3 type-mismatch `''` probes on non-text columns, the graceful `event_type` existence probe, the missing `url` probe).
+- **`_silver.yml` `recall_event` inventory — COMPLETE:** all **52/52** columns now documented (diffed against the live type sweep — zero missed, zero typo'd; per-source field→source map stays single-homed in `cross_source_consolidation.md` §1).
+- **Deferred:** only the `nullif` defensive-hardening items (refuted by data — latent gap, not a defect).
+- **Capstone DONE:** API handover written to `consumer-product-recalls-api/project_scope/data-side-provenance-handover-2026-06-19.md`. A broad search of that repo found its **current code + `provenance-analysis-2026-06-17.md` are already correct** (FDA `1/2/3/NC`, distribution arrays `list|None`, presence flags pruned, `event_type` absent) — so the handover is framed as **independent cross-repo confirmation** + closing their two `UNVERIFIED` items with our live measurements + flagging the **stale `build/01–05`** planning docs (which still say FDA `Class I/II/III`, contradicting their own code). No API code change required by this branch.
+
 ## 2. Headline finding — published-contract enum drift (FDA `classification`)
 
 **ADR 0042 (line 16) states `classification` is source-native "FDA/USDA `Class I/II/III`".** That is **wrong

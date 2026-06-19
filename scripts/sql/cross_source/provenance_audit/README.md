@@ -19,8 +19,10 @@ distribution conflation). Each block states the **CONFORMS** result — any devi
 
 ## Notes
 
-- **Schemas:** staging views = `staging`; silver = `silver`; gold = `gold`; dbt seeds = `public`
-  (`public.us_state_abbr.abbr`, `public.country_iso.alpha2`).
+- **Schemas:** everything — staging views, silver tables, gold marts/facts, dbt seeds — lives in schema
+  `public`; only the SCD-2 **snapshots** live in `silver_snapshots`. (dbt `generate_schema_name` →
+  `target.schema = public`; snapshots are the one group that sets a custom schema.) Seeds:
+  `public.us_state_abbr.abbr`, `public.country_iso.alpha2`.
 - **Exclude from the `''` probe:** date columns (`bgman`/`endman`/`in_business`/`out_of_business`),
   `status_regulated_est` (`''` is a meaningful value), and the history tables
   (`recall_event_history.old_value/new_value`, `recall_product_history` NHTSA cols — `''` by design).
