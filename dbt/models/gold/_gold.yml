@@ -93,7 +93,10 @@ models:
   - name: fct_recalls_by_classification
     description: >
       Recall counts by classification + risk_level per source + 'ALL' rollup. Source-native enums
-      (not conformed cross-source); CPSC/NHTSA NULL = unclassified bucket.
+      (NOT conformed cross-source) — FDA classification = {1,2,3,NC} (numeric codes, NOT 'Class I/II/III');
+      USDA = {Class I, Class II, Class III, Public Health Alert}; USCG = {H,L,M,S}; CPSC/NHTSA NULL =
+      unclassified bucket. risk_level is USDA-only {High - Class I, Low - Class II, Marginal - Class III,
+      Public Health Alert}. (Per-source domains verified by the 2026-W25 provenance audit.)
     columns:
       - name: source
         tests:
