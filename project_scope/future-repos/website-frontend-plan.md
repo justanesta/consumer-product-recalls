@@ -1,5 +1,7 @@
 # Website / frontend — greenfield plan (Phase 9, separate repo)
 
+> **⚠️ API-contract reconciliation (2026-06-19, post API-side audit).** The framework/architecture strategy below (Astro + Cloudflare Pages + hybrid build-time/live + OpenAPI-generated client) is **current and validated** against the now-deployed API and the user's Cloudflare infra — no change. But several **API-contract specifics in §5 are stale or ahead of what the API actually exposes**; they are corrected inline below and tagged **[API-2026-06-19]**. The authoritative live contract is the API repo's [`project_scope/future-repos/frontend-api-handoff.md`](../../../consumer-product-recalls-api/project_scope/future-repos/frontend-api-handoff.md) + its `openapi.json`; per-source field provenance is in that repo's [`documentation/data_contract.md`](../../../consumer-product-recalls-api/documentation/data_contract.md). **Headlines:** the `/stats/*` + `fct_*` dashboard endpoints are **not built** (dashboards + landing charts are blocked); there is **no `?firm_id=` filter** on `/recalls`; the `/recalls` filter params differ from §5.2 (`published_after`/`is_active`/keyset `cursor`, not `date_from`/`status`/`page`); FDA `classification` is `1/2/3/NC` (not `Class I/II/III`); and the lifecycle/edit observability fields plus the per-product `upc` field were **pruned/dropped**. CORS is **open (`*`, GET-only)**, so browser fetch works with no proxy.
+
 > **Status:** Draft scope for a **future, separate repository** (the consumer-facing website). Not built
 > in the pipeline repo. This is a Claude-Code-ready plan: drop it into the new repo as `PLAN.md` and
 > work the phased commit ladder at the bottom.
@@ -50,6 +52,8 @@ cross-dimensional pivoting. That is exactly the gold-design-notes branch that co
 This verdict is a recommendation to ADR 0024 (serving-layer API design), which `implementation_plan.md`
 line 523 and ADR 0038 §1 route the star-vs-`fct_*` decision into. The frontend does not need the star;
 the API contract should be designed against `fct_*` + the three `mart_*`.
+
+> **[API-2026-06-19] Status of the `/stats/*` surface this verdict asks for:** the API was **built and deployed** (the four entity endpoints + `/recalls/search` + health), but the **`/stats/*` + `fct_*` dashboard family was NOT included** — it is still deferred (ADR 0024 not yet ratified). **Consequence:** the landing charts (§5.1) and the entire dashboards page (§5.5) are **blocked** until either (a) the `/stats/*` endpoints are built, or (b) the *pipeline* exports the `fct_*` aggregates to static JSON for a build-time bake (the §9 fallback; the website still never queries Postgres directly). The entity/search pages (§5.2–5.4, §5.6) do **not** depend on this and are buildable now. Sequence the build so dashboards come after this decision lands.
 
 ---
 
@@ -208,17 +212,19 @@ Static, build-time data. The portfolio's front door — explain the project + he
   ← `GET /stats/overview` ← *(new, trivial)* `fct_recalls_overview` **or** API-computed from `fct_*`.
 - **Recalls over time (all-source)** — area/line chart, monthly. ← `GET /stats/recalls-by-month?source=ALL` ← `fct_recalls_by_month` (`source='ALL'`).
 - **By source** — small-multiples or stacked bar of recalls per source. ← `fct_recalls_by_month` per-source rows.
-- **By classification** — bar (FDA Class I/II/III, USDA high/low, etc.). ← `GET /stats/by-classification` ← `fct_recalls_by_classification`.
+- **By classification** — bar, **source-native legends** (FDA `1/2/3/NC`, USDA `Class I/II/III`+`Public Health Alert`, USCG `H/L/M/S`). ← `GET /stats/by-classification` ← `fct_recalls_by_classification`. **[API-2026-06-19: FDA is `1/2/3/NC`, NOT `Class I/II/III`; `classification` is source-native and not unified, so legends/filters must be scoped per source. Endpoint not built — see §0 note.]**
 - Methodology / "what this data is and isn't" copy block (static MDX) — links to the data-source notes;
   **must state the geography caveat** (registration ≠ harm) so the firm-geography chart isn't misread.
+
+> **[API-2026-06-19]** The hero KPI strip and all three charts on this page read the **`/stats/*`** family (`/stats/overview`, `/stats/recalls-by-month`, `/stats/by-classification`), which **does not exist yet** (§0 note). This whole page is blocked until `/stats/*` is built or `fct_*` is exported for a build-time bake.
 
 ### 5.2 Recalls browser (`/recalls`)
 
 The interactive heart. Live API, paginated, filterable, deep-linkable (filters in the URL querystring).
 
 - **Filterable, paginated recalls table** — columns: date, source, title, classification, firm,
-  status. Filters: source, classification, date range, firm, status. ← `GET /recalls?source=&classification=&date_from=&date_to=&firm_id=&status=&page=` ← `mart_recall_summary`.
-- **Result-count + active-filter chips**; URL is the source of truth so a filtered view is shareable.
+  status. Filters: source, classification, date range, firm, status. ← `GET /recalls?source=&classification=&published_after=&published_before=&firm=&is_active=&limit=&cursor=` ← `mart_recall_summary`. **[API-2026-06-19: corrected params — dates are `published_after`/`published_before` (also `announced_after`/`_before`), not `date_from/to`; status is the tri-state `is_active` (CPSC/NHTSA are `null` and match neither true nor false), not `status`; paging is **keyset** `cursor`+`limit`, not `page=`; `firm` is a case-insensitive substring on the PRIMARY firm name — **there is no `firm_id` filter** (see §5.4). The six categorical filters accept multi-value any-of via repeat or comma.]**
+- **Result-count + active-filter chips**; URL is the source of truth so a filtered view is shareable. **[API-2026-06-19: `next_cursor` is opaque and tied to the exact filter set — put filters in the URL (shareable), treat the cursor as ephemeral forward-paging state (no "jump to page N"), and reset to page 1 on a `400 bad_cursor`. `with_total=true` adds a count via a second query.]**
 - Row → recall detail page (5.3).
 
 ### 5.3 Recall detail (`/recalls/[source]/[recall_id]`)
@@ -226,11 +232,14 @@ The interactive heart. Live API, paginated, filterable, deep-linkable (filters i
 Statically pre-rendered for a bounded popular set (SEO); falls back to live fetch for the long tail.
 
 - **Header card** — title, source badge, classification, status, dates. ← `GET /recalls/{source}/{recall_id}` ← `mart_recall_summary`.
-- **Products list** — product rollup (names, identifiers). ← same payload (`product` rollup). *(Identifier note: per-product `upc` is NULL across all sources today — see §5.6; recall-level UPCs live on the `recall_product_upcs` jsonb. Surface HIN/model, not a per-product UPC column, until enrichment lands.)*
+- **Products list** — product rollup (names, identifiers). ← same payload (`product` rollup). *(Identifier note: the per-product `upc` field was **removed from the API response [API-2026-06-19]** — it was NULL for every source; recall-level UPCs live on the `recall_product_upcs` jsonb and the `upc=` search matches those. Surface HIN/model, not a per-product UPC column.)*
 - **Firms block** — linked firm chips (role + match confidence). ← same payload (`firms` jsonb) → links to 5.4.
-- **Lifecycle timeline** — announced → amended → terminated, plus edit-history flags. ← same payload
-  (the `recall_lifecycle` summary + `recall_event_history` flags already in `mart_recall_summary`; the
-  API just projects them — **no new model**, see §0/§5.6).
+- **Lifecycle timeline** — announced → published, status, and a `(revised)` badge. ← same payload
+  (`announced_at`, `published_at`, `lifecycle_status`, `is_active`, `has_been_edited`).
+  **[API-2026-06-19: the richer edit-history fields (`edit_count` / `edit_event_count` / `first_seen_at` /
+  `last_seen_at` / `is_currently_active` / `was_ever_retracted`) were PRUNED from the API response — only the
+  boolean `has_been_edited` remains (no dated edit history; a dated "last revised" is a future cross-repo
+  item). Scope the timeline to the fields above.]**
 
 ### 5.4 Firm profile (`/firms/[firm_id]`)
 
@@ -238,8 +247,22 @@ Statically pre-rendered for top-N most-recalled firms (SEO); live fetch otherwis
 
 - **Identity card** — canonical name, aliases, per-source registered attributes. ← `GET /firms/{id}` ← `mart_firm_profile`.
 - **Recalls-by-source mini-bar** — `recalls_by_source` jsonb. ← same payload.
-- **This firm's recalls table** — ← `GET /recalls?firm_id={id}` ← `mart_recall_summary`.
-- **Firm rank context** — "Nth most-recalled firm." ← `GET /stats/firm-leaderboard` ← `fct_recalls_by_firm`.
+- **This firm's recalls table** — ← `GET /recalls?firm_id={id}` ← `mart_recall_summary`. **[API-2026-06-19: ⚠️ `?firm_id=` does NOT exist on `/recalls` today. Options: (a) request the backend add a `?firm_id=` filter over the `firms` rollup (recommended — precise, includes co-recalled firms), or (b) use `?firm={canonical_name}` substring, which matches only the PRIMARY firm name and can over/under-match. This feature is blocked until (a).]**
+  > **[PERF-2026-06-19] Pipeline-side prerequisite for the recommended option (a): a GIN index on the
+  > `firms` rollup — DONE on this branch.** A `?firm_id=` filter resolves to a jsonb **containment** match
+  > over `mart_recall_summary.firms` (the `jsonb_agg` of `{firm_id, name, role, match_confidence}` objects) —
+  > e.g. `where firms @> '[{"firm_id": :id}]'`. Without an index that is a **sequential scan of the full
+  > recalls corpus (130k+)** on every firm-profile load, so gold now **GIN-indexes `firms`** via
+  > `config(indexes=[{'columns': ['firms'], 'type': 'gin'}])` in `mart_recall_summary` (hash-named →
+  > oscillation-immune), alongside the existing GINs on `distribution_state_codes` /
+  > `distribution_country_codes` / `search_vector` (and `mart_product_search`'s `recall_product_upcs` GIN for
+  > the analogous UPC containment). The default `jsonb_ops` opclass serves `@>`; a tighter pure-containment
+  > `jsonb_path_ops` opclass is a Phase-7 re-profile option (needs a `post_hook` — `config(indexes)` can't set
+  > an opclass). Recorded in `documentation/index_audit.md`; the GIN is **built + catalog-verified** (gold
+  > rebuilt 2026-06-19, `audit_schema_and_indexes.sql` §C). **Remaining (cross-repo, API side only):** the API
+  > still has to add the `?firm_id=` param + containment predicate (`firms @> jsonb_build_array(jsonb_build_object('firm_id', :id))`);
+  > the pipeline index it relies on is in place.
+- **Firm rank context** — "Nth most-recalled firm." ← `GET /stats/firm-leaderboard` ← `fct_recalls_by_firm`. **[API-2026-06-19: `/stats/*` not built — see §0 note.]**
 
 ### 5.5 Dashboards (`/dashboards`)
 
@@ -268,6 +291,8 @@ Static, build-time. The data-viz showcase — the "look at the trends" page. **E
 > currently **defers** `/stats/*` out of API-v1, gated on Phase-9 need via **ADR 0024**. This dashboard
 > inventory **is** that trigger — it un-defers the `/stats/*` surface in the FastAPI plan, so the two
 > plans are consistent-by-reference (this plan asks; ADR 0024 ratifies).
+>
+> **[API-2026-06-19] Build status:** the API shipped **without** `/stats/*` — every panel in the table above is blocked until the `/stats/*` family is built (ADR 0024) **or** the pipeline exports the `fct_*` aggregates to static JSON for a build-time bake (§9 fallback). No panel here is buildable against the current deployed API.
 
 > **Data-honesty requirement (carry the gold-notes caveats into the UI):** the two geography charts
 > are **different questions** and **not interchangeable** (`gold_design_notes.md` §"Geography has two
@@ -282,7 +307,7 @@ Static, build-time. The data-viz showcase — the "look at the trends" page. **E
 
 Live API, the consumer-facing utility. An interactive island.
 
-- **Search box** — keyword over product name/description + recall title + firm name. ← `GET /products/search?q=` ← `mart_product_search` (Postgres FTS / tsvector; **no fuzzy/trigram** — ADR 0037 — so the UI copy says "keyword search," not "fuzzy," and offers tips for exact identifiers).
+- **Search box** — keyword over product name/description + recall title + firm name. ← `GET /products/search?q=` ← `mart_product_search` (Postgres FTS / tsvector; **no fuzzy/trigram** — ADR 0037 — so the UI copy says "keyword search," not "fuzzy," and offers tips for exact identifiers). **[API-2026-06-19: a recall-grain keyword search also exists — `GET /recalls/search?q=` (returns `RecallSummary`+`rank`) — if you want a "search recalls" mode distinct from product search.]**
 - **Exact-identifier lookup** — HIN / model / UPC fields. ← `GET /products/search?hin=&model=&upc=` ← `mart_product_search` btree columns.
   > **UPC honesty caveat (carry it into the UI like geography/units):** product-grain `upc` is **NULL for every source today** (`mart_product_search.sql` — CPSC UPCs are recall-level, FDA returns none via the bulk endpoint), so a v1 UPC box at product grain returns **nothing**. UPC matching exists **only** as a containment filter over the recall-level `recall_product_upcs` jsonb. Ship the UPC field only against that jsonb path (or label it "coming when per-product UPC enrichment lands"); HIN/model btree lookup is genuinely populated.
 - **Results** → recall detail (5.3). Empty-state copy: "No match ≠ not recalled — search is over our

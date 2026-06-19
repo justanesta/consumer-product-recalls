@@ -204,7 +204,11 @@ models:
           distribution_state_codes: NULL = no distribution-area row; '{}' = row exists, no foreign country.
           API: list[str] | None.
       - name: firms
-        description: jsonb array of {firm_id, name, role, match_confidence} for the recall.
+        description: >
+          jsonb array of {firm_id, name, role, match_confidence} for the recall (O1: coalesced to non-null
+          '[]'). GIN-indexed via config(indexes) (hash-named, immune to the post_hook-oscillation class) so the
+          recalls-api's GET /recalls?firm_id={id} filter is an index-backed jsonb containment match
+          (`firms @> '[{"firm_id": :id}]'`) rather than a corpus seq-scan. jsonb_ops opclass serves `@>`.
       - name: product_count
         tests:
           - not_null
