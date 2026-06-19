@@ -22,3 +22,25 @@ Keep the table named `recall_event` for v1. Add an `event_type TEXT NOT NULL DEF
 - v1 serving views and dashboards that omit `WHERE event_type = 'RECALL'` will silently include future non-recall events when they exist. Gold-layer views must be explicit about which event types they aggregate.
 - The default value preserves backwards compatibility for queries written before the discriminator existed.
 - One column of cost today buys avoidance of a meaningful migration later.
+
+## Implementation status — DEFERRED, not yet implemented (2026-W25)
+
+As of 2026-06-19 the `event_type` column has **not** been created on `recall_event` — confirmed absent by
+the Silver/Gold provenance audit (`documentation/audit/silver_gold_provenance_audit_2026_w25.md`, the
+`event_type_not_null_single_value` check). It was deliberately left out because, with every in-scope source
+supplying only consumer recalls, the column would be **100% `'RECALL'`** — a constant carrying no
+information today. The decision above stands as the *design* for the column; it ships when either trigger
+makes the discriminator meaningful:
+
+1. **USDA/FDA "Public Health Alert" semantics are clarified.** PHA currently rides as a `classification` /
+   `lifecycle_status` value, but it may be legally/semantically a *distinct regulatory action* rather than a
+   recall class. If USDA/FDA confirm PHA is its own action type, it becomes the first non-`'RECALL'`
+   `event_type`.
+2. **A recall-adjacent, non-recall feed is ingested** — e.g. FAA Airworthiness Directives (ADs), or EPA
+   enforcement/cancellation actions (ADR 0001) — at which point `event_type` discriminates them from recalls
+   exactly as this ADR intends.
+
+When either lands: add `'RECALL'::text as event_type` (NOT NULL) to the existing source branches in
+`recall_event.sql` + the new value on the new branch, an `accepted_values` test, and the
+`WHERE event_type = 'RECALL'` guard on the gold serving models (per Consequences above). Silver-only,
+constant column → **no bronze re-baseline**.

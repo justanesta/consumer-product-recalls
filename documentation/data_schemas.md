@@ -228,11 +228,11 @@ Terms for the cross-source firm entity-resolution overlay (Phase 6b, [ADR 0037](
 
 ### `recall_event.terminated_year` (C6)
 
-**Source:** USDA + USCG only (NULL for CPSC, FDA, NHTSA).
+**Source:** FDA + USDA + USCG (NULL for CPSC, NHTSA). _(Corrected 2026-W25: FDA also populates this — 41,645 rows — the prior "USDA + USCG only" was wrong; confirmed by the provenance audit.)_
 
 **Type:** `int`, nullable.
 
-**Semantics:** the **year** in which the recall was closed / terminated. USDA uses a year-only `closed_year` field (post-2026-06 API change) when the precise `closed_date` is absent; `terminated_year` is `coalesce(closed_year::int, extract(year from closed_at)::int)`. USCG: `extract(year from case_close_date)::int`.
+**Semantics:** the **year** in which the recall was closed / terminated. FDA: `extract(year from termination_dt)::int`. USDA uses a year-only `closed_year` field (post-2026-06 API change) when the precise `closed_date` is absent; `terminated_year` is `coalesce(closed_year::int, extract(year from closed_at)::int)`. USCG: `extract(year from case_close_date)::int`.
 
 **Relation to `terminated_at`:** `terminated_at` carries the full `timestamptz` when available; `terminated_year` carries the year. When only year-grain data is available (USDA `closed_year`), `terminated_at` is NULL but `terminated_year` is set — **no fabricated date**. When a precise close date is present, both are populated (and `terminated_year = extract(year from terminated_at)`).
 

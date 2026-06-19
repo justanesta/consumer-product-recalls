@@ -55,6 +55,167 @@ models:
           - accepted_values:
               arguments:
                 values: ['Nationwide', 'International', 'Regional', 'Unspecified']
+      - name: classification
+        description: >
+          Source-native severity/classification — NOT a unified enum (ADR 0042). FDA = {1,2,3,NC}
+          (numeric codes, NOT 'Class I/II/III'); USDA = {Class I,Class II,Class III,Public Health Alert};
+          USCG = {H,L,M,S}; CPSC/NHTSA = NULL. Per-source domains confirmed by the 2026-W25 provenance audit.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['1', '2', '3', 'NC', 'Class I', 'Class II', 'Class III', 'Public Health Alert', 'H', 'L', 'M', 'S']
+              config:
+                severity: warn
+      - name: lifecycle_status
+        description: >
+          Source-native lifecycle/status (no cross-source conformance). FDA {Ongoing,Terminated,Completed};
+          USDA {Active Recall,Closed Recall,Public Health Alert}; USCG initcap'd {Open,Closed}; CPSC/NHTSA NULL.
+          Domain confirmed 2026-W25.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Ongoing', 'Terminated', 'Completed', 'Active Recall', 'Closed Recall', 'Public Health Alert', 'Open', 'Closed']
+              config:
+                severity: warn
+      - name: is_active
+        description: >
+          Cross-source active signal (feeds gold fct_recall_status + the API) — TRI-STATE boolean: true/false
+          for FDA/USDA/USCG (from native status fields); NULL for CPSC + NHTSA (no native status, ADR 0026).
+          The NULL is load-bearing (ADR 0042) and must not be collapsed to false. Tri-state confirmed 2026-W25.
+      - name: risk_level
+        description: >
+          USDA-only derived label (1:1 from classification); NULL for all other sources. Domain confirmed 2026-W25.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['High - Class I', 'Low - Class II', 'Marginal - Class III', 'Public Health Alert']
+              config:
+                severity: warn
+      - name: initiated_by
+        description: >
+          Conformed initiator flag (ADR 0036 D4): {firm,agency}; populated for FDA + NHTSA, NULL for
+          CPSC/USDA/USCG. Domain confirmed 2026-W25.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['firm', 'agency']
+              config:
+                severity: warn
+      - name: terminated_year
+        description: >
+          Integer year-grain close flag. Populated for FDA + USDA + USCG (NOT just USDA+USCG — confirmed
+          2026-W25: FDA 41,645 rows); NULL for CPSC/NHTSA. Coalesce semantics in data_schemas.md.
+      # ---- Remaining recall_event columns (2026-W25 inventory completion, fix #8). Per-source field->source
+      # map is single-homed in documentation/audit/cross_source_consolidation.md §1; descriptions here are concise. ----
+      - name: title
+        description: >
+          Recall headline (text). CPSC/USDA native; FDA/NHTSA/USCG synthesized (e.g. campno + mfgname).
+          Populated for all 5 sources.
+      - name: recall_reason
+        description: >
+          Defect/reason narrative (text; ADR rename D1 from `description`). All 5 sources (CPSC description /
+          FDA product_short_reason_txt / USDA summary / NHTSA desc_defect / USCG coalesce(problem_1,problem_2)).
+          Guarded by assert_no_blank_freetext_serving.
+      - name: url
+        description: >
+          Source recall page (text). CPSC/USDA/USCG only; FDA + NHTSA NULL (FDA URL is a deferred (b) lookup).
+          2026-W25 audit found 0 empty-string.
+      - name: first_posted_at
+        description: >
+          timestamptz — FDA first public posting (`posted_internet_dt`); blank pre-2022-10-25; distinct from
+          published_at. NULL for non-FDA.
+      - name: terminated_at
+        description: >
+          timestamptz close date — FDA termination_dt / USDA closed_date / USCG case_close_date; NULL for
+          CPSC/NHTSA. Year-grain fallback is terminated_year.
+      - name: campaign_started_at
+        description: timestamptz — USCG campaign_open_date; NULL elsewhere.
+      - name: campaign_ended_at
+        description: timestamptz — USCG campaign_close_date; NULL elsewhere.
+      - name: last_editorial_date
+        description: timestamptz — USCG last_date; NULL elsewhere.
+      - name: owner_notified_at
+        description: timestamptz — NHTSA odate (owner-notification; 1901 sentinel to NULL); NULL elsewhere.
+      - name: recall_initiator
+        description: >
+          Source-native raw initiator (text) — FDA voluntary_type_txt (4 corpus values) / NHTSA influenced_by;
+          NULL for CPSC/USDA/USCG. The CONFORMED flag is initiated_by (ADR 0036 D4).
+      - name: notification_method
+        description: text — FDA initial_firm_notification_txt; NULL elsewhere.
+      - name: reason_category
+        description: >
+          text — USDA recall_reason category string (comma-joined multi-value); NULL elsewhere. Tokenized into
+          reason_category_tokens.
+      - name: reason_category_tokens
+        description: >
+          jsonb array of USDA reason-category tokens (split of reason_category; C14). USDA-only, NULL elsewhere.
+          Guarded by assert_usda_reason_tokens_in_taxonomy.
+      - name: distribution_states
+        description: >
+          text (SCALAR) — USDA distribution-states free-text. DISTINCT from recall_distribution_area
+          .distribution_state_codes[] (array) — the ADR 0042 conflation hazard. USDA-only.
+      - name: distribution_area_summary
+        description: text — FDA distribution_area_summary_txt (the parse source for distribution_scope). FDA-only.
+      - name: hazards
+        description: >
+          jsonb array — CPSC hazard objects {Name, HazardType, HazardTypeID}; nested HazardType/HazardTypeID
+          empty-string is CPSC source-by-design (NOT a normalization target). CPSC-only.
+      - name: remedies
+        description: jsonb — CPSC remedies. CPSC-only.
+      - name: remedy_options
+        description: jsonb/text[] — CPSC remedy_options. CPSC-only.
+      - name: injuries
+        description: jsonb — CPSC injuries. CPSC-only.
+      - name: images
+        description: jsonb — CPSC product images. CPSC-only.
+      - name: consumer_contact
+        description: text — CPSC consumer-contact block. CPSC-only. 2026-W25 audit found 0 empty-string.
+      - name: manufacturer_countries
+        description: jsonb/text[] — CPSC manufacturer countries. CPSC-only.
+      - name: coordinated_recall_urls
+        description: jsonb/text[] — CPSC in_conjunctions (coordinated-recall URLs). CPSC-only.
+      - name: sales_channel_narrative
+        description: >
+          jsonb — CPSC retailer narrative (Option B — retailers removed from the firm dim, landed here).
+          CPSC-only.
+      - name: product_upcs
+        description: >
+          jsonb — CPSC recall-LEVEL UPC objects (NOT per-product); nested empty-string is source-by-design.
+          CPSC-only.
+      - name: firm_contact_block_text
+        description: text — USDA company_media_contact block. USDA-only. 2026-W25 audit found 0 empty-string.
+      - name: related_to_outbreak
+        description: boolean — USDA related_to_outbreak. USDA-only (NULL elsewhere).
+      - name: archived
+        description: boolean — USDA archive_recall. USDA-only (NULL elsewhere).
+      - name: do_not_drive
+        description: boolean — NHTSA do_not_drive advisory. NHTSA-only (NULL elsewhere).
+      - name: park_outside
+        description: boolean — NHTSA park_outside (fire-risk) advisory. NHTSA-only (NULL elsewhere).
+      - name: corrective_action
+        description: text — NHTSA corrective_action. NHTSA-only. Guarded by assert_no_blank_freetext_serving.
+      - name: consequence_of_defect
+        description: >
+          text — NHTSA conequence_defect (source field typo; corrected at silver). NHTSA-only. Guarded by
+          assert_no_blank_freetext_serving.
+      - name: notes
+        description: text — NHTSA notes. NHTSA-only.
+      - name: mfgcampno
+        description: text — NHTSA manufacturer campaign number. NHTSA-only.
+      - name: fmvss
+        description: text — NHTSA Federal Motor Vehicle Safety Standard number(s). NHTSA-only.
+      - name: firm_contact_person
+        description: text — USCG company_official. USCG-only.
+      - name: source_payload_raw
+        description: >
+          jsonb — residual unmapped source fields (all sources); the audit/provenance bag (ADR 0002). NOT part
+          of the served API contract.
+      - name: content_hash
+        description: text — bronze content hash of this event's latest version (lineage; ADR 0007).
+      - name: extraction_timestamp
+        description: timestamptz — when the latest bronze version landed (lineage).
+      - name: raw_landing_path
+        description: text — R2 landing path of the raw source bytes (lineage; ADR 0005/0007).
     # (source, source_recall_id) uniqueness is now enforced explicitly via the
     # model-level dbt_utils.unique_combination_of_columns test above; the
     # recall_event_id unique test covers the same grain transitively (md5 key).
@@ -217,6 +378,16 @@ models:
         tests:
           - not_null
           - unique
+      - name: status
+        description: >
+          USCG operating status (SCD-2 check_col; ADR 0035). Small open enum — no accepted_values guard
+          existed; domain confirmed 2026-W25. Published into /firms/{id} via to_jsonb(firm_uscg_attributes).
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['In Business', 'Inactive', 'Federal or State Agency']
+              config:
+                severity: warn
       - name: detail_url
         tests:
           - not_null
@@ -528,9 +699,9 @@ models:
         tests:
           - not_null
       - name: is_currently_active
-        description: USDA-only (v1) — identity present in the latest enumerating run's manifest. NULL for other sources.
+        description: USDA + NHTSA — identity present in the latest enumerating run's manifest. NULL for CPSC/FDA/USCG. (Updated 2026-W25 — NHTSA presence is now populated — 30,075 rows — since the C16 deep-rescan manifest banked; was USDA-only at v1.)
       - name: was_ever_retracted
-        description: USDA-only (v1) — absent from some enumerating run since first appearance. NULL for other sources.
+        description: USDA + NHTSA — absent from some enumerating run since first appearance. NULL for CPSC/FDA/USCG. (Updated 2026-W25 — NHTSA presence now populated; was USDA-only at v1.)
 
   - name: uscg_mic_reassignment_years
     description: >

@@ -245,9 +245,9 @@ erDiagram
     }
     recall_distribution_area {
         text    recall_event_id        PK,FK
-        text    distribution_state_codes
+        text    distribution_state_codes    "text[] array"
         integer n_distribution_states
-        text    distribution_country_codes
+        text    distribution_country_codes  "text[] array"
         integer n_distribution_countries
     }
     recall_event_establishment_resolution {

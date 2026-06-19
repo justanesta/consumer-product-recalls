@@ -93,7 +93,10 @@ models:
   - name: fct_recalls_by_classification
     description: >
       Recall counts by classification + risk_level per source + 'ALL' rollup. Source-native enums
-      (not conformed cross-source); CPSC/NHTSA NULL = unclassified bucket.
+      (NOT conformed cross-source) — FDA classification = {1,2,3,NC} (numeric codes, NOT 'Class I/II/III');
+      USDA = {Class I, Class II, Class III, Public Health Alert}; USCG = {H,L,M,S}; CPSC/NHTSA NULL =
+      unclassified bucket. risk_level is USDA-only {High - Class I, Low - Class II, Marginal - Class III,
+      Public Health Alert}. (Per-source domains verified by the 2026-W25 provenance audit.)
     columns:
       - name: source
         tests:
@@ -187,6 +190,19 @@ models:
           - accepted_values:
               arguments:
                 values: ['Nationwide', 'Regional', 'Unspecified', 'International']
+      - name: distribution_state_codes
+        description: >
+          text[] — US state codes the recall was distributed to (FDA+USDA parse). NULLABLE at mart grain
+          (unlike the silver sidecar's '{}' coalesce): mart_recall_summary LEFT JOINs recall_distribution_area,
+          so a recall with NO distribution-area row (all CPSC/NHTSA/USCG + FDA/USDA with no parsed geography —
+          53,345 rows / 57%, audited 2026-W25) is NULL here, DISTINCT from '{}' (row exists, zero states). The
+          recalls-api must model this as list[str] | None, NOT always-present — contrast the O1 arrays
+          (product_names/models/hins/firms) which ARE coalesced to non-null '[]'.
+      - name: distribution_country_codes
+        description: >
+          text[] — foreign ISO-3166-1 alpha-2 codes (US excluded by design). Same mart-grain nullability as
+          distribution_state_codes: NULL = no distribution-area row; '{}' = row exists, no foreign country.
+          API: list[str] | None.
       - name: firms
         description: jsonb array of {firm_id, name, role, match_confidence} for the recall.
       - name: product_count
