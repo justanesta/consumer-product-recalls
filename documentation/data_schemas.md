@@ -105,7 +105,7 @@ narrative = [`gold_design_notes.md`](gold_design_notes.md); per-model contracts 
 
 | Model | Grain | Key columns |
 |---|---|---|
-| `dim_date` | one row per calendar day; `date_day` unique key | `date_day`, `year`, `quarter`, `month`, `month_name`, `iso_week`, `iso_day_of_week`, `day_name`, `day_of_year`, `iso_week_start`, `month_start`, `quarter_start`, `year_start`, `is_weekend`, `us_fiscal_year` (US fed. fiscal year: Oct-start, labelled by the calendar year it ends in). Spine: **1940-01-01** .. (current year + 2, dynamic). The 1940 floor matches `assert_recall_event_date_sanity`'s ERROR floor, so any sane `published_at` finds a row (no INNER JOIN drops). See [`gold_design_notes.md`](gold_design_notes.md). |
+| `dim_date` | one row per calendar day; `date_day` unique key | `date_day`, `year`, `quarter`, `month`, `month_name`, `iso_week`, `iso_day_of_week`, `day_name`, `day_of_year`, `iso_week_start`, `month_start`, `quarter_start`, `year_start`, `is_weekend`, `us_fiscal_year` (US fed. fiscal year: Oct-start, labelled by the calendar year it ends in). Spine: **1940-01-01** .. (current year + 2, dynamic). The 1940 floor matches `assert_recall_event_date_sanity`'s ERROR floor, so any sane `coalesce(announced_at, published_at)` finds a row (no INNER JOIN drops). See [`gold_design_notes.md`](gold_design_notes.md). |
 
 **Serving marts** (denormalized "one big table", materialized `table` + indexed — feed the Phase 8 API):
 
@@ -124,8 +124,8 @@ narrative = [`gold_design_notes.md`](gold_design_notes.md); per-model contracts 
 
 | Model | Grain |
 |---|---|
-| `fct_recalls_by_week` / `_by_month` / `_by_year` | recall count per period × source (+ `'ALL'`); period from `dim_date.month_start` / `year_start` / `iso_week_start` |
-| `fct_recalls_monthly_trend` | per source × month + rolling 3/12-mo avgs + YoY; period from `dim_date` |
+| `fct_recalls_by_week` / `_by_month` / `_by_year` | recall count per period × source (+ `'ALL'`); period from `dim_date.month_start` / `year_start` / `iso_week_start`; buckets on the announce date (`coalesce(announced_at, published_at)`, ADR 0038 §2026-W25) |
+| `fct_recalls_monthly_trend` | per source × month + rolling 3/12-mo avgs + YoY; period from `dim_date` (announce-date basis) |
 | `fct_recalls_by_firm` | most-recalled-firm leaderboard (rank) |
 | `fct_recalls_by_classification` | per source × classification / risk_level |
 | `fct_recall_status` | active / inactive / unknown per source |
@@ -220,7 +220,7 @@ Terms for the cross-source firm entity-resolution overlay (Phase 6b, [ADR 0037](
 | How are firm name variants collapsed (the fuzzy resolver)? | [`architecture.md`](architecture.md#srcenrichment--firm-resolution-stage-adr-0037) firm-resolution section; method in `src/enrichment/firm_resolution.py`; operator runbook in [`operations.md`](operations.md#firm-resolution-recalls-resolve-firms) |
 | What are the `quantity_*` fields on `recall_product`? | [Quantity fields section below](#recall_product-quantity-fields-c13) |
 | What countries are in `distribution_country_codes`? | `dbt/seeds/country_iso.csv` (~135 ISO-3166-1 alpha-2 codes; excludes `US` and `Georgia`); [country columns section below](#recall_distribution_area-country-columns-c12) |
-| Which `fct_*` models join `dim_date`? | The five date-grained aggregates: `fct_recalls_by_month`, `fct_recalls_by_year`, `fct_recalls_by_week`, `fct_recalls_monthly_trend`, `fct_units_recalled` (the C11 join scope). The other four `fct_*` carry no `date_trunc` — see [`gold_design_notes.md`](gold_design_notes.md) for the `dim_date` design and why those four stay date-free. |
+| Which `fct_*` models join `dim_date`? | The five date-grained aggregates: `fct_recalls_by_month`, `fct_recalls_by_year`, `fct_recalls_by_week`, `fct_recalls_monthly_trend`, `fct_units_recalled` (the C11 join scope) — they join `dim_date` on `coalesce(announced_at, published_at)::date` (announce-date basis, ADR 0038 §2026-W25). The other four `fct_*` carry no `date_trunc` — see [`gold_design_notes.md`](gold_design_notes.md) for the `dim_date` design and why those four stay date-free. |
 
 ---
 
@@ -327,7 +327,7 @@ Added to `recall_product` via a LEFT JOIN to `quantity_crosswalk` on `raw_quanti
 
 ## `fct_units_recalled`
 
-**Grain:** one row per `(source, unit_category, period)` where `period = dim_date.month_start`.
+**Grain:** one row per `(source, unit_category, period)` where `period = dim_date.month_start` (bucketed on the announce date — `coalesce(announced_at, published_at)`, ADR 0038 §2026-W25).
 
 **Key columns:** `source`, `unit_category`, `period`, `recalls_with_units`, `total_units`, `avg_units_per_recall`, `max_units`.
 

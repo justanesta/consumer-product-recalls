@@ -26,20 +26,20 @@ with clean_count as (
     select
         re.source,
         re.recall_event_id,
-        re.published_at,
+        coalesce(re.announced_at, re.published_at) as event_date,
         'count'::text               as unit_category,
         max(rp.unit_count)::numeric as units
     from {{ ref('recall_event') }} re
     join {{ ref('recall_product') }} rp on rp.recall_event_id = re.recall_event_id
     where re.source in ('NHTSA', 'USCG') and rp.unit_count is not null
-    group by re.source, re.recall_event_id, re.published_at
+    group by re.source, re.recall_event_id, coalesce(re.announced_at, re.published_at)
 ),
 
 parsed_qty as (
     select
         re.source,
         re.recall_event_id,
-        re.published_at,
+        coalesce(re.announced_at, re.published_at) as event_date,
         rp.quantity_category as unit_category,
         -- max, not sum: FDA/USDA quantity is recall-grain (repeats across product rows) — see header.
         max(rp.quantity_value) as units
@@ -48,7 +48,7 @@ parsed_qty as (
     where re.source in ('FDA', 'USDA')
       and rp.quantity_value is not null
       and rp.quantity_category is not null
-    group by re.source, re.recall_event_id, re.published_at, rp.quantity_category
+    group by re.source, re.recall_event_id, coalesce(re.announced_at, re.published_at), rp.quantity_category
 ),
 
 recall_units as (
@@ -57,7 +57,10 @@ recall_units as (
     select * from parsed_qty
 )
 
--- C11 (2026-06-09): month period from dim_date (lossless join on published_at::date).
+-- C11 (2026-06-09): month period from dim_date (lossless join).
+-- 2026-W25 (fix/announced-at-date-join, ADR 0038 amendment): the CTEs carry
+-- event_date = coalesce(announced_at, published_at); the month period buckets on the announce date,
+-- not the publish watermark (see fct_recalls_by_month). Lossless via the coalesce floor.
 select
     ru.source,
     ru.unit_category,
@@ -67,7 +70,7 @@ select
     round(avg(ru.units)) as avg_units_per_recall,
     max(ru.units)        as max_units
 from recall_units ru
-join {{ ref('dim_date') }} dd on dd.date_day = ru.published_at::date
+join {{ ref('dim_date') }} dd on dd.date_day = ru.event_date::date
 where ru.units is not null
 group by ru.source, ru.unit_category, dd.month_start
 order by period desc, source, unit_category

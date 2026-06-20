@@ -4,12 +4,13 @@
 -- the separate C11 step) and unlocks fiscal/holiday calendars cheaply.
 --
 -- Spine 1940-01-01 .. (current year + 2, dynamic). The start matches assert_recall_event_date_sanity's
--- ERROR floor (1940-01-01): any published_at that passes the sanity test therefore finds a dim_date
--- row, so the INNER JOINs in the fct_* models can never silently drop a sane recall (ISSUE-7,
--- check-your-work sweep 2026-06-09). (announced_at min observed is 1966-01-19 — a 1960s NHTSA recall —
--- but published_at is the join column and the sanity floor is the safe lower bound.) The end is a
--- SMALL dynamic forward buffer: no future-dated recalls (max ~ today), so the spine ends two years
--- out and auto-extends on each nightly rebuild — always covered, never stale.
+-- ERROR floor (1940-01-01): both announced_at and published_at are range-checked to [1940, now] by that
+-- test, so any sane recall finds a dim_date row and the INNER JOINs in the fct_* models can never
+-- silently drop one (ISSUE-7, check-your-work sweep 2026-06-09). (As of 2026-W25 the fct_* models join
+-- on coalesce(announced_at, published_at)::date; announced_at min observed is 1966-01-19 — a 1960s NHTSA
+-- recall — comfortably inside the 1940 floor, so no spine change was needed.) The end is a SMALL dynamic
+-- forward buffer: no future-dated recalls (max ~ today), so the spine ends two years out and auto-extends
+-- on each nightly rebuild — always covered, never stale.
 -- Grain = one row per calendar day; `date_day` is the unique key.
 {{
   config(

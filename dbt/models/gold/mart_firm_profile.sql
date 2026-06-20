@@ -64,7 +64,10 @@ firm_recalls as materialized (
         ref.role,
         re.source,
         re.is_active,
-        re.published_at
+        -- first/last_recall_at reflect when the recall was ANNOUNCED (the truthful event date),
+        -- not last-published. coalesce to the non-null published_at for the ~20 FDA events with no
+        -- announce date (2026-W25, fix/announced-at-date-join; mirrors the fct_* time-series basis).
+        coalesce(re.announced_at, re.published_at) as recall_date
     from {{ ref('recall_event_firm') }} ref
     join {{ ref('recall_event') }} re on re.recall_event_id = ref.recall_event_id
 ),
@@ -74,8 +77,8 @@ firm_event_stats as (
         firm_id,
         count(distinct recall_event_id)                          as total_recalls,
         count(distinct recall_event_id) filter (where is_active) as active_recalls,
-        min(published_at)                                        as first_recall_at,
-        max(published_at)                                        as last_recall_at,
+        min(recall_date)                                         as first_recall_at,
+        max(recall_date)                                         as last_recall_at,
         jsonb_agg(distinct role)                                 as roles
     from firm_recalls
     group by firm_id

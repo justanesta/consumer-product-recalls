@@ -15,6 +15,33 @@
 > **Amended 2026-06-13 (serving-layer branch, ADR 0042):** the gold layer now uses `post_hook`s in
 > three distinct classes — see §6 amendment note below.
 
+> **Amended 2026-W25 (`fix/announced-at-date-join`) — time-series facts bucket on the ANNOUNCE date,
+> not the publish date.** The five date-grained facts (`fct_recalls_by_month` / `_week` / `_year`,
+> `fct_recalls_monthly_trend`, `fct_units_recalled`) join `dim_date` on
+> `coalesce(announced_at, published_at)::date` instead of `published_at::date`, and
+> `mart_firm_profile.first_recall_at` / `last_recall_at` move to the same basis. **Rationale:**
+> `published_at` is a last-published/last-modified watermark, and FDA's (`event_lmd`) is bulk-stamped
+> ~2018-09 for the openFDA archive migration — so bucketing on it collapsed all pre-2018 FDA history
+> (~29k events) into one month. `announced_at` is the TRUE, backfill-immune recall-initiation date
+> (`recall_event.sql`), so it is the correct time-series basis. It is NULLABLE (~20 FDA events with no
+> trustworthy initiation date), so the join coalesces to the non-null `published_at` — keeping the inner
+> join **lossless** (the existing `assert_fct_recalls_by_month_reconciles` guard still passes;
+> `_by_week` / `_by_year` reconcile guards were added). **Pagination/sort is deliberately NOT changed:**
+> the `mart_recall_summary` keyset + R2 index stay on `published_at DESC` — keyset pagination requires a
+> non-null sort key, and surfacing recently *updated* recalls is the intended feed behavior. The two axes
+> are kept separate (`announced_at` = "when did it happen" / analytics; `published_at` = "what's
+> new/updated" / sort) and the mart exposes both. An optional future announce-recency feed (paginate on a
+> materialized `coalesce(announced_at, published_at)`) is logged in `TODO.md` §Performance; quarantining
+> the ~20 FDA nulls to force `announced_at` NOT NULL was **rejected** (deletes real recalls — 14 have a
+> recoverable year — and reverses the `recover-rejected fda` recovery). **`published_at` fidelity note
+> (describe it precisely everywhere):** it is a non-null recency FLOOR, not uniformly "last edited" —
+> CPSC `last_publish_date` / FDA `event_lmd` / USDA `last_modified_date` / USCG `last_date` are genuine
+> last-modified, but NHTSA's is `coalesce(DATEA, RCDATE)` where `DATEA` = "Record Creation Date"
+> (`RCL.txt:46`; the NHTSA flat file carries no last-modified field). **No schema/wire change** (the facts
+> expose `period`, not a raw date; the mart already exposes both dates) → no `gold_meta.schema_version`
+> bump; only the served *values* shift on the next `dbt build` (the FDA Sept-2018 spike disappears, FDA
+> history spreads across years).
+
 ## Context
 
 The medallion gold layer (ADR 0004) is the serving/analytics layer: it feeds the planned Phase 8 API (`GET /recalls`, `/recalls/{source}/{id}`, `/products/search`, `/firms/{id}`), the dashboards, the landing pages, and the keyword search promised in the project vision. Until Phase 6e the layer was a single stub (`recalls_by_month`, a view) — there was no decision record for how gold should be shaped, named, materialized, searched, or indexed.
