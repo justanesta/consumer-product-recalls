@@ -4,8 +4,9 @@ models:
   - name: dim_date
     description: >
       Generated calendar dimension (ADR 0038 §2; built 2026-06-08 decision). One row per
-      calendar day, 1940-01-01..(current year + 2, dynamic). Replaces the inline date_trunc(published_at)
-      across the date-grained fct_* models (the C11 wiring step). dim_ prefix per ADR 0038.
+      calendar day, 1940-01-01..(current year + 2, dynamic). Replaces the inline date_trunc
+      across the date-grained fct_* models (the C11 wiring step). dim_ prefix per ADR 0038. The fct_*
+      models join on coalesce(announced_at, published_at)::date (announce-date basis, ADR 0038 §2026-W25).
     columns:
       - name: date_day
         description: Calendar day — the unique dimension key.
@@ -17,7 +18,10 @@ models:
         tests: [not_null]
 
   - name: fct_recalls_by_month
-    description: Monthly recall counts per source + 'ALL' rollup (GROUPING SETS). Renamed from recalls_by_month.
+    description: >
+      Monthly recall counts per source + 'ALL' rollup (GROUPING SETS). Renamed from recalls_by_month.
+      Buckets on the announce date (coalesce(announced_at, published_at)), not the publish watermark
+      — ADR 0038 §2026-W25.
     columns:
       - name: period
         tests: [not_null]
@@ -31,7 +35,9 @@ models:
         tests: [not_null]
 
   - name: fct_recalls_by_week
-    description: Weekly recall counts per source + 'ALL' rollup. period = ISO week start (Monday).
+    description: >
+      Weekly recall counts per source + 'ALL' rollup. period = ISO week start (Monday). Buckets on
+      the announce date (coalesce(announced_at, published_at)) — ADR 0038 §2026-W25.
     columns:
       - name: period
         tests: [not_null]
@@ -45,7 +51,9 @@ models:
         tests: [not_null]
 
   - name: fct_recalls_by_year
-    description: Yearly recall counts per source + 'ALL' rollup. period = Jan 1 of the year.
+    description: >
+      Yearly recall counts per source + 'ALL' rollup. period = Jan 1 of the year. Buckets on the
+      announce date (coalesce(announced_at, published_at)) — ADR 0038 §2026-W25.
     columns:
       - name: period
         tests: [not_null]
@@ -61,7 +69,9 @@ models:
   - name: fct_recalls_monthly_trend
     description: >
       Monthly recall trend per source over a dense month spine — rolling 3/12-month averages +
-      year-over-year % change via window functions.
+      year-over-year % change via window functions. The month grain buckets on the announce date
+      (coalesce(announced_at, published_at)); the dense spine spans each source's announce range, so
+      FDA's spine extends back to its earliest initiation date (ADR 0038 §2026-W25).
     columns:
       - name: month
         tests: [not_null]
@@ -137,6 +147,7 @@ models:
       basis-agnostic: the recall-wide quantity repeats identically across the recall's product rows, so
       units = max(quantity_value) per (recall, category) — a SUM would over-count by the row count (the
       basis-sum/GREATEST logic was replaced 2026-06-09). CPSC remains free-text-only (no parse).
+      The month period buckets on the announce date (coalesce(announced_at, published_at)) — ADR 0038 §2026-W25.
     columns:
       - name: source
         tests:
@@ -177,8 +188,23 @@ models:
               arguments:
                 values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
       - name: published_at
+        description: >
+          Non-null recency FLOOR, used as the keyset sort/pagination key (newest-first feed) — NOT
+          uniformly "last edited". Per source it is the best available recency timestamp, coalesced to
+          the announce date when absent: CPSC last_publish_date, FDA event_lmd (last-modified, bulk-stamped
+          ~2018-09 for the openFDA archive migration), USDA last_modified_date, and USCG last_date are
+          genuine last-modified signals, but NHTSA's is coalesce(DATEA, RCDATE) where DATEA is a
+          RECORD-CREATION date (the NHTSA flat file carries no last-modified field). It must stay non-null
+          because it is the sort key. Contrast announced_at (truthful event date, nullable). Time-series
+          facts bucket on announced_at, NOT this column (ADR 0038 §2026-W25).
         tests:
           - not_null
+      - name: announced_at
+        description: >
+          The TRUE recall-initiation/announce date, conformed across sources and backfill-immune — the
+          correct basis for the time-series facts + firm first/last_recall_at. NULLABLE by design (~20 FDA
+          events with no trustworthy initiation date; see recall_event.sql). Use published_at when a
+          guaranteed non-null date is required (e.g. sort/pagination).
       - name: distribution_scope
         description: >
           Distribution breadth — 100% NOT NULL, 4-value enum across all sources (gold-audit 2026-06-14:

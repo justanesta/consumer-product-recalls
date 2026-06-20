@@ -190,11 +190,17 @@ factless bridge.
 `date_trunc` logic in the **five** date-grained `fct_*` models (by_month / by_year / by_week /
 monthly_trend / units; the other four `fct_*` carry no `date_trunc`) and unlocks fiscal/holiday
 calendars cheaply. **Built + wired 2026-06-09 (C10/C11):** `dim_date` (**1940-01-01** .. current-year+2,
-dynamic; unique `date_day`) is built, and the five models join it on `published_at::date` (verified
-lossless — 0 null / 0 out-of-range — and output byte-identical to the prior `date_trunc` form). The
-1940 floor matches `assert_recall_event_date_sanity`'s ERROR floor, so any `published_at` that passes
-the sanity test is guaranteed a `dim_date` row — INNER JOINs in the `fct_*` models can never silently
-drop a sane recall (ISSUE-7). Column definitions (year/quarter/month/week/iso/dow/us_fiscal_year) are
+dynamic; unique `date_day`) is built, and the five models join it on `coalesce(announced_at,
+published_at)::date` (**2026-W25, fix/announced-at-date-join** — moved off `published_at::date` so the
+time-series buckets on the TRUE announce date, not the publish watermark; FDA's `event_lmd` is
+bulk-stamped ~2018-09 for the openFDA archive, which had piled all pre-2018 FDA history into one
+month). `announced_at` is nullable (~20 FDA), so the coalesce floors to the non-null `published_at`,
+keeping the join lossless (guarded by `assert_fct_recalls_by_{month,week,year}_reconciles`; the C11
+wiring was originally verified byte-identical to the prior `date_trunc` form). The 1940 floor matches
+`assert_recall_event_date_sanity`'s ERROR floor (which range-checks BOTH dates), so any sane recall is
+guaranteed a `dim_date` row — INNER JOINs in the `fct_*` models can never silently drop one (ISSUE-7).
+Pagination/sort is unaffected: the `mart_recall_summary` R2 keyset stays on `published_at DESC` (the
+non-null freshness key). Column definitions (year/quarter/month/week/iso/dow/us_fiscal_year) are
 in `documentation/data_schemas.md`. The full Kimball star stays deferred (above); `dim_date` was the
 no-regret slice.
 
