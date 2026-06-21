@@ -1,7 +1,17 @@
 # 0042 — Gold serving marts are a published read contract
 
-**Status:** Accepted
+**Status:** Accepted | Amended 2026-W26 (announce-recency feed sort, ADR 0038 §2026-W26)
 **Date:** 2026-06-13
+
+> **Amended 2026-W26 (`fix/announced-index-sort-site`).** First exercise of the §3 bump rule under a
+> nuance it didn't quite cover. `mart_recall_summary` gained a stored `event_date` column (additive —
+> §3 says additive alone needs **no** bump) AND the default `GET /recalls` sort repointed from
+> `published_at DESC` to `event_date DESC`. The *column add* is backward-compatible, but the
+> **default-sort semantics change** ("newest first" now means newest *announced*, and the opaque keyset
+> cursor now encodes `event_date`) is a behavioral break a consumer must be able to detect — so
+> `gold_meta.schema_version` was bumped **1 → 2** and the API re-froze its `openapi.json`. Refinement to
+> §3: the bump trigger is "a consumer-observable break," which **includes a default-ordering / cursor-
+> semantics change even when the schema is technically additive," not just rename/remove/retype/re-key.
 
 ## Context
 

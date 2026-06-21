@@ -13,7 +13,7 @@
 
 with expected (label, tablename, must_match) as (
     values
-        ('R2 keyset (published_at DESC, recall_event_id)', 'mart_recall_summary', '%published_at desc%recall_event_id%'),
+        ('R2 keyset (event_date DESC, recall_event_id)',   'mart_recall_summary', '%event_date desc%recall_event_id%'),
         ('R3 recall_product_upcs GIN',                     'mart_product_search', '%using gin%recall_product_upcs%')
 )
 

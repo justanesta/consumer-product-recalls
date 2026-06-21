@@ -2,7 +2,7 @@
     materialized='table',
     indexes=[
       {'columns': ['recall_event_id'], 'unique': True},
-      {'columns': ['source', 'published_at']},
+      {'columns': ['source', 'event_date']},
       {'columns': ['is_active']},
       {'columns': ['classification']},
       {'columns': ['distribution_state_codes'], 'type': 'gin'},
@@ -11,9 +11,9 @@
       {'columns': ['firms'], 'type': 'gin'},
     ],
     post_hook=[
-      "drop index if exists {{ this.schema }}.{{ this.name }}_published_at_desc_evt",
-      "create index {{ this.name }}_published_at_desc_evt
-       on {{ this }} (published_at desc, recall_event_id)",
+      "drop index if exists {{ this.schema }}.{{ this.name }}_event_date_desc_evt",
+      "create index {{ this.name }}_event_date_desc_evt
+       on {{ this }} (event_date desc, recall_event_id)",
       "analyze {{ this }}",
     ]
 ) }}
@@ -23,6 +23,14 @@
 -- attached to dbt's `__dbt_backup` table mid-rebuild, no-ops, and is then dropped with the backup — so the
 -- index OSCILLATED out every other build (gold-audit G0, root-caused 2026-06-15). drop-if-exists frees the
 -- stale backup name first, so the index rebuilds deterministically every run.
+--
+-- The keyset index (and the (source, event_date) composite for the ?source= path) is built on EVENT_DATE
+-- = coalesce(announced_at, published_at), the announce-recency feed sort key (ADR 0038 §2026-W26). It was
+-- (published_at desc, recall_event_id) through 2026-W25; published_at stayed the keyset key while the
+-- time-series facts had already moved to announce-bucketing, which surfaced long-dormant recalls that got
+-- one minor agency edit at the top of the feed (a 2000 recall re-published days ago outranking genuinely
+-- newer ones). event_date is non-null by construction (published_at is the NOT-NULL fallback for the ~20
+-- FDA with no announce date), so the seek WHERE stays totally ordered — no NULLs-last hazard, no data loss.
 --
 -- mart_recall_summary — denormalized one-row-per-recall serving table (Phase 6e, ADR 0038).
 -- Feeds GET /recalls (list) and GET /recalls/{source}/{recall_id} (detail): the silver
@@ -95,6 +103,11 @@ select
     re.url,
     re.announced_at,
     re.published_at,
+    -- Non-null announce-recency feed sort key (ADR 0038 §2026-W26). Mirrors the fct_* time-series basis
+    -- (coalesce(announced_at, published_at)): the TRUE event date where known, falling back to the
+    -- NOT-NULL published_at for the ~20 FDA with no trustworthy announce date. Backs the (event_date desc,
+    -- recall_event_id) keyset index above; the recalls-api paginates GET /recalls on it.
+    coalesce(re.announced_at, re.published_at) as event_date,
     re.classification,
     re.risk_level,
     re.lifecycle_status,

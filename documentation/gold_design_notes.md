@@ -130,9 +130,11 @@ The full stability obligations (column contract, key recipes, source enum) are r
   stats immediately (without them, an incremental rebuild fell back to seq-scans — `fct_recalls_by_geography`
   went 3s → 130s until ANALYZE was added). Two additional gold serving-mart indexes added for the
   Phase 8 API (ADR 0042): **(1) `mart_recall_summary`** — an expression index on
-  `(published_at DESC, recall_event_id)`, the R2 keyset-pagination anchor for `GET /recalls` cursor
+  `(event_date DESC, recall_event_id)`, the R2 keyset-pagination anchor for `GET /recalls` cursor
   queries; declared via `post_hook` because column-list `config(indexes=[...])` cannot express
-  expression indexes. **(2) `mart_product_search`** — a GIN index on `recall_product_upcs`, serving
+  expression indexes. **Repointed from `(published_at DESC, …)` to `event_date` (= coalesce(announced_at,
+  published_at)) in 2026-W26 (ADR 0038 §2026-W26)** so the feed sorts by announce-recency, not last-publish;
+  the paired `(source, event_date)` column-list composite backs the `?source=` filtered sort. **(2) `mart_product_search`** — a GIN index on `recall_product_upcs`, serving
   the R3 recall-level UPC containment query (`@> :upc`); declared via `config(indexes=[{columns:
   [recall_product_upcs], type: gin}])` (column-list config, not a post_hook). The per-product `upc`
   btree was **dropped (gold-audit G5, 2026-06-15)** — `upc` is 0% populated, so the btree was an empty index
@@ -199,8 +201,12 @@ keeping the join lossless (guarded by `assert_fct_recalls_by_{month,week,year}_r
 wiring was originally verified byte-identical to the prior `date_trunc` form). The 1940 floor matches
 `assert_recall_event_date_sanity`'s ERROR floor (which range-checks BOTH dates), so any sane recall is
 guaranteed a `dim_date` row — INNER JOINs in the `fct_*` models can never silently drop one (ISSUE-7).
-Pagination/sort is unaffected: the `mart_recall_summary` R2 keyset stays on `published_at DESC` (the
-non-null freshness key). Column definitions (year/quarter/month/week/iso/dow/us_fiscal_year) are
+At the time (2026-W25), pagination/sort was left unchanged — the `mart_recall_summary` R2 keyset stayed
+on `published_at DESC` (the non-null freshness key) while only the time-series facts moved to announce
+bucketing. **This was finished in 2026-W26 (ADR 0038 §2026-W26):** the feed keyset was repointed to a new
+non-null `event_date = coalesce(announced_at, published_at)` mart column — the same announce-recency basis
+as the facts — because the `published_at DESC` feed surfaced long-dormant recalls that got one minor agency
+edit at the top of `GET /recalls`. Column definitions (year/quarter/month/week/iso/dow/us_fiscal_year) are
 in `documentation/data_schemas.md`. The full Kimball star stays deferred (above); `dim_date` was the
 no-regret slice.
 

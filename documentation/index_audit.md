@@ -14,7 +14,8 @@ so the Phase-7 follow-up (below) re-profiles against real traffic.
   `mart_` model. `post_hook` serves three distinct purposes here:
   (1) **Expression / keyset indexes** the column-list `config(indexes=[...])` cannot express —
   `firm_fda_attributes`'s functional `(firm_fei_num::text)` index (see silver below) and
-  `mart_recall_summary`'s `(published_at DESC, recall_event_id)` keyset-pagination index (R2);
+  `mart_recall_summary`'s `(event_date DESC, recall_event_id)` keyset-pagination index (R2,
+  repointed from `published_at DESC` to the announce-recency `event_date` in 2026-W26, ADR 0038 §2026-W26);
   (2) **`grant_gold_readonly` macro** — applied to every gold model via the gold-folder
   `+post-hook` in `dbt_project.yml`, re-granting `SELECT` to `recalls_readonly` after each
   nightly drop+recreate (migration 0034 / R1);
@@ -65,7 +66,7 @@ and `mart_firm_profile` is `firm_fda_attributes.firm_fei_num::text = company_id`
 
 | Model | Indexes |
 |---|---|
-| `mart_recall_summary` | unique `recall_event_id`; `(source, published_at)`; `is_active`; `classification`; expression `(published_at DESC, recall_event_id)` (post_hook, keyset-pagination — R2); **GIN** `distribution_state_codes`, **GIN** `distribution_country_codes` (array `@>`/`&&` containment — G1); **GIN** `search_vector` (recall-grain FTS for `/recalls/search` — G3); **GIN** `firms` (jsonb `@>` containment for the firm-profile `GET /recalls?firm_id` filter — added 2026-06-19, website-frontend-plan §5.4); all four GINs via `config(indexes=[...])` (hash-named → oscillation-immune); post_hook ANALYZE |
+| `mart_recall_summary` | unique `recall_event_id`; `(source, event_date)`; `is_active`; `classification`; expression `(event_date DESC, recall_event_id)` (post_hook, keyset-pagination — R2, repointed from `published_at` to announce-recency `event_date` 2026-W26); **GIN** `distribution_state_codes`, **GIN** `distribution_country_codes` (array `@>`/`&&` containment — G1); **GIN** `search_vector` (recall-grain FTS for `/recalls/search` — G3); **GIN** `firms` (jsonb `@>` containment for the firm-profile `GET /recalls?firm_id` filter — added 2026-06-19, website-frontend-plan §5.4); all four GINs via `config(indexes=[...])` (hash-named → oscillation-immune); post_hook ANALYZE |
 | `mart_firm_profile` | unique `firm_id`; `normalized_name`; post_hook ANALYZE |
 | `mart_product_search` | unique `recall_product_id`; `recall_event_id`; `hin`; `model`; `upc`; **GIN** `search_vector` (FTS); **GIN** `recall_product_upcs` (recall-level UPC containment `@> :upc`, declared via column-list `config(indexes=[...])`, NOT a post_hook — R3); post_hook ANALYZE |
 | `fct_recalls_by_geography` | `(geography_basis, source, state_code)`; `state_code` |

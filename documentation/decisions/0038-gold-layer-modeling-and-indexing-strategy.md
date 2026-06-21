@@ -1,6 +1,6 @@
 # 0038 — Gold-layer modeling and indexing strategy
 
-**Status:** Accepted (ratified at the Phase 6e merge, #62) | Amended 2026-06-13 (serving-layer branch, ADR 0042)
+**Status:** Accepted (ratified at the Phase 6e merge, #62) | Amended 2026-06-13 (serving-layer branch, ADR 0042) | Amended 2026-W25 (announce-date facts) | Amended 2026-W26 (announce-recency feed sort)
 **Date:** 2026-06-07
 
 > **Amended 2026-06-08 (Phase 6f.1):** a first concrete gold consumer is now on the horizon — the
@@ -26,7 +26,8 @@
 > (`recall_event.sql`), so it is the correct time-series basis. It is NULLABLE (~20 FDA events with no
 > trustworthy initiation date), so the join coalesces to the non-null `published_at` — keeping the inner
 > join **lossless** (the existing `assert_fct_recalls_by_month_reconciles` guard still passes;
-> `_by_week` / `_by_year` reconcile guards were added). **Pagination/sort is deliberately NOT changed:**
+> `_by_week` / `_by_year` reconcile guards were added). **Pagination/sort is deliberately NOT changed** [in
+> W25 — later finished in §2026-W26 below, which repointed the feed to `event_date`]**:**
 > the `mart_recall_summary` keyset + R2 index stay on `published_at DESC` — keyset pagination requires a
 > non-null sort key, and surfacing recently *updated* recalls is the intended feed behavior. The two axes
 > are kept separate (`announced_at` = "when did it happen" / analytics; `published_at` = "what's
@@ -41,6 +42,27 @@
 > expose `period`, not a raw date; the mart already exposes both dates) → no `gold_meta.schema_version`
 > bump; only the served *values* shift on the next `dbt build` (the FDA Sept-2018 spike disappears, FDA
 > history spreads across years).
+
+> **Amended 2026-W26 (`fix/announced-index-sort-site`) — the `GET /recalls` feed now sorts by
+> announce-recency, finishing what §2026-W25 deferred.** §2026-W25 deliberately left the feed keyset on
+> `published_at DESC`; in production this surfaced long-dormant recalls that got one minor agency edit at
+> the top of the feed (e.g. a 2000 recall re-published days ago outranking genuinely newer ones) and
+> clustered FDA's ~2018-09 `event_lmd` pile-up mid-feed. **Change:** `mart_recall_summary` gains a stored
+> non-null `event_date = coalesce(announced_at, published_at)` column (the SAME basis as the §2026-W25
+> facts — consistent by construction), and the R2 keyset index + the `(source, …)` composite repoint from
+> `(published_at DESC, recall_event_id)` → `(event_date DESC, recall_event_id)` / `(source, event_date)`.
+> The recalls-api keyset cursor, `ORDER BY`, and seek `WHERE` retarget `event_date` (cursor kind `p`→`e`);
+> the site relabels its date filters to announce semantics (the existing `announced_after`/`announced_before`
+> API params). **Why coalesce, not `announced_at` directly:** keyset pagination needs a non-null, totally
+> ordered sort key; `announced_at` is nullable (~20 FDA), so a raw-`announced_at` keyset would mis-order the
+> NULLs and break the seek. `coalesce(announced_at, published_at)` is non-null by construction (the ~20 fall
+> back to `published_at`, landing where they sort today) → **no quarantine, no data loss.** Quarantining the
+> ~20 to force `announced_at NOT NULL` stays **rejected** (per §2026-W25: deletes real recalls, reverses the
+> `recover-rejected fda` recovery and the ≥1940 precision guard). **Wire/contract change:** additive column,
+> but the *default-sort meaning* changes ("newest first" = newest announced) → `gold_meta.schema_version`
+> bumped **1 → 2** (default floor changed in `gold_meta.sql`); `published_at`/`announced_at` both stay
+> exposed, and the `published_after`/`published_before` filters are retained. Cross-repo: recalls-api
+> `0.1.1 → 0.2.0` + `openapi.json` regen; site date-filter relabel + `schema.d.ts` regen.
 
 ## Context
 
@@ -80,9 +102,10 @@ The original Phase-6 plan also listed "silver/gold Alembic migrations" — that 
 > **Amended 2026-06-13 (ADR 0042):** the claim "no post-hooks" in §6 is superseded on the
 > serving-layer branch. Three classes of `post_hook` are now in use:
 >
-> 1. **Expression KEYSET index** — `mart_recall_summary` declares a `post_hook` to create
->    `(published_at DESC, recall_event_id)` via raw DDL (`mart_recall_summary.sql:9-13`), because
->    `config(indexes=[…])` cannot express descending-column index specifications.
+> 1. **Expression KEYSET index** — `mart_recall_summary` declares a `post_hook` to create the
+>    `(<sort> DESC, recall_event_id)` keyset index via raw DDL (`mart_recall_summary.sql` config), because
+>    `config(indexes=[…])` cannot express descending-column index specifications. (`<sort>` was
+>    `published_at` here; **repointed to `event_date` in §2026-W26** — see the amendment above.)
 > 2. **ANALYZE** — all three serving marts (`mart_recall_summary`, `mart_product_search`,
 >    `mart_firm_profile`) run `analyze {{ this }}` as a `post_hook` after each table rebuild so
 >    the planner has current statistics immediately.
