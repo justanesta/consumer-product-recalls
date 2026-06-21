@@ -1,8 +1,8 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['recall_event_id'], 'unique': True},
-    ]
+    meta={'index_specs': [
+      {'suffix': 'recall_event_id', 'cols': 'recall_event_id', 'unique': True},
+    ]}
 ) }}
 
 -- USDA recall -> FSIS establishment disambiguation (Phase 6b PR 6b.2).

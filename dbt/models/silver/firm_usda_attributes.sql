@@ -1,9 +1,9 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['establishment_id'], 'unique': True},
-      {'columns': ['state']},
-    ],
+    meta={'index_specs': [
+      {'suffix': 'establishment_id', 'cols': 'establishment_id', 'unique': True},
+      {'suffix': 'state', 'cols': 'state'},
+    ]},
     post_hook="analyze {{ this }}"
 ) }}
 

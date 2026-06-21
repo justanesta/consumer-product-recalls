@@ -123,20 +123,26 @@ The full stability obligations (column contract, key recipes, source enum) are r
   per-recall magnitudes — a recall-**magnitude** measure, not unique items.
   **CPSC stays free-text-only** (no parse); the value/unit parse for it remains in the
   units-enrichment backlog.
-- **Indexing** (ADR 0038): silver/gold indexes are declared in dbt `config(indexes=[...])` so they
-  re-create on each table rebuild. Two load-bearing specials: a **functional index on
-  `firm_fda_attributes((firm_fei_num::text))`** (the firm→sidecar join casts FEI to text), and
+- **Indexing** (ADR 0038): **every `table` model (silver + gold) declares its indexes in
+  `config(meta={'index_specs': […]})`, built by a single folder-level `+post-hook: "{{ rebuild_indexes() }}"`
+  on the silver + gold folders (2026-W26)** — NOT `config(indexes=[...])`, which oscillates indexes out
+  every other build under dbt 1.11.x (it creates them on `__dbt_tmp` with a stable-name `if not exists`
+  before the swap → collides with the old table → no-ops → dropped with the backup; this supersedes the
+  2026-06-15 "config indexes are oscillation-immune" note). The macro's DROP-THEN-CREATE on the final
+  relation is immune, and the design is DRY/extensible (new index = add to `meta.index_specs`; new model =
+  auto-covered). `config(indexes)` is no longer used anywhere; the `firm_fda_attributes((firm_fei_num::text))`
+  functional index (firm→sidecar FEI::text join) is now a `meta.index_specs` spec too. Plus
   **`ANALYZE` post_hooks** on the firm-join-chain tables so a freshly-rebuilt table has fresh planner
   stats immediately (without them, an incremental rebuild fell back to seq-scans — `fct_recalls_by_geography`
   went 3s → 130s until ANALYZE was added). Two additional gold serving-mart indexes added for the
-  Phase 8 API (ADR 0042): **(1) `mart_recall_summary`** — an expression index on
-  `(event_date DESC, recall_event_id)`, the R2 keyset-pagination anchor for `GET /recalls` cursor
-  queries; declared via `post_hook` because column-list `config(indexes=[...])` cannot express
-  expression indexes. **Repointed from `(published_at DESC, …)` to `event_date` (= coalesce(announced_at,
-  published_at)) in 2026-W26 (ADR 0038 §2026-W26)** so the feed sorts by announce-recency, not last-publish;
-  the paired `(source, event_date)` column-list composite backs the `?source=` filtered sort. **(2) `mart_product_search`** — a GIN index on `recall_product_upcs`, serving
-  the R3 recall-level UPC containment query (`@> :upc`); declared via `config(indexes=[{columns:
-  [recall_product_upcs], type: gin}])` (column-list config, not a post_hook). The per-product `upc`
+  Phase 8 API (ADR 0042): **(1) `mart_recall_summary`** — the R2 keyset-pagination anchor for `GET /recalls`,
+  `(event_date DESC, recall_event_id)`. **Repointed from `(published_at DESC, …)` to `event_date`
+  (= coalesce(announced_at, published_at)) in 2026-W26 (ADR 0038 §2026-W26)** so the feed sorts by
+  announce-recency, not last-publish; the paired `(source, event_date)` composite backs the `?source=`
+  filtered sort. **(2) `mart_product_search`** — a GIN index on `recall_product_upcs`, serving
+  the R3 recall-level UPC containment query (`@> :upc`). **Both — and every other serving-mart index — are
+  now built via the `rebuild_indexes()` post_hook (2026-W26), not `config(indexes)` (oscillation; see the
+  Indexing bullet above).** The per-product `upc`
   btree was **dropped (gold-audit G5, 2026-06-15)** — `upc` is 0% populated, so the btree was an empty index
 rebuilt nightly for no benefit; the `upc` *column* stays as a placeholder. **Gold-audit G1 (2026-06-15)**
 added two GIN indexes on `mart_recall_summary`'s `distribution_state_codes` / `distribution_country_codes`

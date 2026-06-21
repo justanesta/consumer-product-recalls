@@ -1,17 +1,22 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['recall_product_id'], 'unique': True},
-      {'columns': ['recall_event_id']},
-      {'columns': ['hin']},
-      {'columns': ['model']},
-      {'columns': ['search_vector'], 'type': 'gin'},
-      {'columns': ['recall_product_upcs'], 'type': 'gin'},
-    ],
+    meta={'index_specs': [
+      {'suffix': 'recall_product_id',       'cols': 'recall_product_id', 'unique': True},
+      {'suffix': 'recall_event_id',         'cols': 'recall_event_id'},
+      {'suffix': 'hin',                     'cols': 'hin'},
+      {'suffix': 'model',                   'cols': 'model'},
+      {'suffix': 'search_vector_gin',       'cols': 'search_vector',       'method': 'gin'},
+      {'suffix': 'recall_product_upcs_gin', 'cols': 'recall_product_upcs', 'method': 'gin'},
+    ]},
     post_hook="analyze {{ this }}"
 ) }}
 
--- R3: the `recall_product_upcs` GIN above serves recall-level UPC containment (`@> :upc`) — the real
+-- Indexes are declared in config(meta.index_specs) and built by the folder-level rebuild_indexes() post_hook
+-- (DROP-THEN-CREATE on the final {{ this }}), NOT config(indexes=[...]) — which oscillates indexes out
+-- every other build under dbt 1.11.x (gold-audit 2026-W26 — see macros/rebuild_indexes.sql). The R3 GIN
+-- (recall_product_upcs) is the headline example that surfaced it.
+--
+-- R3: the `recall_product_upcs` GIN serves recall-level UPC containment (`@> :upc`) — the real
 -- UPC search path (the per-product `upc` column is NULL for every row today). O2/G5: the all-NULL `upc`
 -- btree was DROPPED 2026-06-15 (gold-audit confirmed `upc` 0% populated — an empty index rebuilt nightly
 -- for no benefit); the `upc` COLUMN stays as a forward-looking placeholder for structured per-product UPCs.

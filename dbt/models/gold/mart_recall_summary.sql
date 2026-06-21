@@ -1,28 +1,25 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['recall_event_id'], 'unique': True},
-      {'columns': ['source', 'event_date']},
-      {'columns': ['is_active']},
-      {'columns': ['classification']},
-      {'columns': ['distribution_state_codes'], 'type': 'gin'},
-      {'columns': ['distribution_country_codes'], 'type': 'gin'},
-      {'columns': ['search_vector'], 'type': 'gin'},
-      {'columns': ['firms'], 'type': 'gin'},
-    ],
-    post_hook=[
-      "drop index if exists {{ this.schema }}.{{ this.name }}_event_date_desc_evt",
-      "create index {{ this.name }}_event_date_desc_evt
-       on {{ this }} (event_date desc, recall_event_id)",
-      "analyze {{ this }}",
-    ]
+    meta={'index_specs': [
+      {'suffix': 'recall_event_id',     'cols': 'recall_event_id', 'unique': True},
+      {'suffix': 'source_event_date',   'cols': 'source, event_date'},
+      {'suffix': 'is_active',           'cols': 'is_active'},
+      {'suffix': 'classification',      'cols': 'classification'},
+      {'suffix': 'dist_state_gin',      'cols': 'distribution_state_codes',   'method': 'gin'},
+      {'suffix': 'dist_country_gin',    'cols': 'distribution_country_codes', 'method': 'gin'},
+      {'suffix': 'search_vector_gin',   'cols': 'search_vector', 'method': 'gin'},
+      {'suffix': 'firms_gin',           'cols': 'firms',         'method': 'gin'},
+      {'suffix': 'event_date_desc_evt', 'cols': 'event_date desc, recall_event_id'},
+    ]},
+    post_hook="analyze {{ this }}"
 ) }}
 
--- R2 keyset index post_hook uses DROP-THEN-CREATE (not `create index if not exists`): Postgres index
--- names are unique per SCHEMA, so a fixed-name `if not exists` collides with the same-named index still
--- attached to dbt's `__dbt_backup` table mid-rebuild, no-ops, and is then dropped with the backup — so the
--- index OSCILLATED out every other build (gold-audit G0, root-caused 2026-06-15). drop-if-exists frees the
--- stale backup name first, so the index rebuilds deterministically every run.
+-- ALL indexes are declared in config(meta.index_specs) and built by the folder-level rebuild_indexes()
+-- post_hook (DROP-THEN-CREATE on the final {{ this }} after the table swap — dbt_project.yml gold
+-- +post-hook), NOT config(indexes=[...]). dbt 1.11.x builds config(indexes) on `__dbt_tmp` via
+-- `create index if not exists "<stable-hash>"` BEFORE the swap, which collides with the old table's
+-- same-named index and OSCILLATES the index out every other build (gold-audit 2026-W26 — see
+-- macros/rebuild_indexes.sql; this supersedes the 2026-06-15 "config indexes are immune" note).
 --
 -- The keyset index (and the (source, event_date) composite for the ?source= path) is built on EVENT_DATE
 -- = coalesce(announced_at, published_at), the announce-recency feed sort key (ADR 0038 §2026-W26). It was
@@ -124,10 +121,10 @@ select
     -- firm rollup
     fr.primary_firm_name,
     coalesce(fr.firm_count, 0)        as firm_count,
-    -- `firms` is GIN-indexed via config(indexes) above (hash-named, oscillation-immune) so the recalls-api's
-    -- GET /recalls?firm_id={id} filter resolves as an index-backed jsonb containment match
-    -- (`firms @> '[{"firm_id": :id}]'`) instead of a seq-scan of the corpus. jsonb_ops serves `@>`; a tighter
-    -- jsonb_path_ops opclass is a Phase-7 re-profile option (needs a post_hook — config(indexes) can't set one).
+    -- `firms` is GIN-indexed via the firms_gin entry in config(meta.index_specs) (built by the folder
+    -- rebuild_indexes() post_hook) so the recalls-api's GET /recalls?firm_id={id} filter resolves as an
+    -- index-backed jsonb containment match (`firms @> '[{"firm_id": :id}]'`) instead of a corpus seq-scan.
+    -- jsonb_ops serves `@>`; a tighter jsonb_path_ops opclass is a Phase-7 re-profile option.
     coalesce(fr.firms, '[]'::jsonb)   as firms,
     -- product rollup (O1: coalesce the array rollups to '[]' for serving-layer consistency with `firms`)
     coalesce(pr.product_count, 0)     as product_count,
@@ -148,7 +145,7 @@ select
     -- time via ts_rank_cd (no rebuild). 4 buckets, 1:1, so a real brand/product match can outrank a
     -- narrative-only mention: A=title; B=what/who (product names + primary firm); C=why (recall_reason);
     -- D=harm tail (consequence_of_defect). corrective_action + hazards excluded (boilerplate / opaque jsonb).
-    -- GIN via config(indexes) above (hash-named, immune to the post_hook oscillation noted at the top).
+    -- GIN via the search_vector_gin entry in config(meta.index_specs) (folder rebuild_indexes() post_hook).
     (
         setweight(to_tsvector('english', coalesce(re.title, '')), 'A')
         || setweight(to_tsvector('english',

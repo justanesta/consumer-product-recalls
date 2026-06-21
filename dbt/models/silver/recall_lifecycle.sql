@@ -1,8 +1,8 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['recall_event_id'], 'unique': True},
-    ]
+    meta={'index_specs': [
+      {'suffix': 'recall_event_id', 'cols': 'recall_event_id', 'unique': True},
+    ]}
 ) }}
 
 -- recall_lifecycle — per-recall lifecycle summary (ADR 0026 / Phase 6c.2). One row per

@@ -1,11 +1,16 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['firm_id'], 'unique': True},
-      {'columns': ['normalized_name']},
-    ],
+    meta={'index_specs': [
+      {'suffix': 'firm_id',         'cols': 'firm_id', 'unique': True},
+      {'suffix': 'normalized_name', 'cols': 'normalized_name'},
+    ]},
     post_hook="analyze {{ this }}"
 ) }}
+
+-- Indexes declared in config(meta.index_specs), built by the folder-level rebuild_indexes() post_hook
+-- (DROP-THEN-CREATE on the final {{ this }}), NOT config(indexes=[...]) — which oscillates indexes out
+-- every other build under dbt 1.11.x (gold-audit 2026-W26; see macros/rebuild_indexes.sql). firm_id
+-- (unique) backs GET /firms/{id}.
 
 -- mart_firm_profile — one row per canonical firm (Phase 6e, ADR 0038). Because firm.firm_id
 -- is already the 6b cross-source cluster id, this IS the cross-source rollup (a Honda or Tyson

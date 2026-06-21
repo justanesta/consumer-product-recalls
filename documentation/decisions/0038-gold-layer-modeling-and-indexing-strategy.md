@@ -1,6 +1,6 @@
 # 0038 — Gold-layer modeling and indexing strategy
 
-**Status:** Accepted (ratified at the Phase 6e merge, #62) | Amended 2026-06-13 (serving-layer branch, ADR 0042) | Amended 2026-W25 (announce-date facts) | Amended 2026-W26 (announce-recency feed sort)
+**Status:** Accepted (ratified at the Phase 6e merge, #62) | Amended 2026-06-13 (serving-layer branch, ADR 0042) | Amended 2026-W25 (announce-date facts) | Amended 2026-W26 (announce-recency feed sort + config-index oscillation fix)
 **Date:** 2026-06-07
 
 > **Amended 2026-06-08 (Phase 6f.1):** a first concrete gold consumer is now on the horizon — the
@@ -113,6 +113,28 @@ The original Phase-6 plan also listed "silver/gold Alembic migrations" — that 
 >    `+post-hook: "{{ grant_gold_readonly() }}"` to every gold model (`dbt_project.yml:30`,
 >    `macros/grant_gold_readonly.sql`), re-granting `SELECT` to the public read-only API role
 >    after each nightly drop+recreate. See ADR 0042 for the full serving-layer read contract.
+
+> **Amended 2026-W26 (`fix/announced-index-sort-site`) — `config(indexes)` OSCILLATES under dbt 1.11.x;
+> ALL silver + gold table indexes moved to `config(meta.index_specs)` + a folder-level `rebuild_indexes()`
+> post_hook.** §6's mechanism ("silver/gold indexes declared in `config(indexes=[…])`") and the 2026-06-15
+> belief that hash-named `config(indexes)` GINs are *oscillation-immune* are **superseded repo-wide**. Root
+> cause: dbt 1.11.x creates `config(indexes)` indexes on the `__dbt_tmp` relation via `create index if not
+> exists "<hash>"` BEFORE the table swap; the hash (md5 of cols+relation+unique+type, with the stably-named
+> `__dbt_tmp` relation) is identical across builds, so it collides with the old table's same-named index,
+> the `IF NOT EXISTS` no-ops, and the index is dropped with the backup — it vanishes every other build.
+> (The earlier "immune" claim held only while older dbt created indexes on the *final* relation post-swap.)
+> **Fix (DRY, repo-wide):** every `table` model (3 serving marts + `dim_date` + `fct_recalls_by_geography`
+> + 12 silver models incl. the firm sidecars) declares its indexes in
+> `config(meta={'index_specs': [{suffix, cols, method?, unique?}]})`, and a single folder-level
+> `+post-hook: "{{ rebuild_indexes() }}"` on the `silver` + `gold` folders (`dbt_project.yml`) reads that
+> meta and DROP-THEN-CREATEs each index on the final `{{ this }}` (immune; `macros/rebuild_indexes.sql`).
+> `config(indexes=[...])` is removed everywhere; `mart_recall_summary`'s keyset and
+> `firm_fda_attributes`'s functional `(firm_fei_num::text)` index are now `meta.index_specs` specs too. New
+> index = add to `meta.index_specs`; new model = auto-covered. `assert_gold_serving_indexes_present` gained
+> `depends_on` refs (it had none — it ran ~node 9, before the marts rebuilt, validating the *previous*
+> build's catalog → the false failure that surfaced this) and was widened to guard every load-bearing
+> serving index. **A silver index-presence guard is not yet added (the gold guard covers the API surface);
+> noted for a later hardening pass.**
 
 7. **A companion index audit deliverable** (`documentation/index_audit.md`) records the bronze confirmation pass and the silver/gold additions in one table (layer → object → index → query pattern → verdict).
 

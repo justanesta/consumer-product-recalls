@@ -22,12 +22,20 @@ models:
       +materialized: view
     silver:
       +materialized: table
+      # Oscillation-safe index builder (gold-audit 2026-W26): reads each model's config(meta.index_specs)
+      # and DROP-THEN-CREATEs them on the FINAL relation post-swap. Replaces config(indexes=[...]), which
+      # dbt 1.11.x oscillates out every other build (see macros/rebuild_indexes.sql / ADR 0038 §2026-W26).
+      # Index-less models render to nothing (dbt skips the empty hook), so it is safe folder-wide.
+      +post-hook: "{{ rebuild_indexes() }}"
     gold:
       +materialized: view
-      # Re-grant SELECT to the public read-only API role (recalls_readonly) after every gold model
-      # build, so it survives the nightly drop+recreate. Gold-only by folder scope; tolerant of the
-      # role being absent (dev/CI). Role provisioned by migration 0034 (serving-layer R1).
-      +post-hook: "{{ grant_gold_readonly() }}"
+      # 1) rebuild_indexes() — same oscillation-safe index builder as silver (reads config(meta.index_specs)).
+      # 2) grant_gold_readonly() — re-grant SELECT to the public read-only API role (recalls_readonly)
+      #    after every gold build so it survives the nightly drop+recreate. Gold-only by folder scope;
+      #    tolerant of the role being absent (dev/CI). Role provisioned by migration 0034 (serving R1).
+      +post-hook:
+        - "{{ rebuild_indexes() }}"
+        - "{{ grant_gold_readonly() }}"
 
 # Singular tests under tests/source_assumptions/ check load-bearing source-API
 # assumptions (CPSC products[] append-only, FDA PRODUCTID stable, USDA bilingual

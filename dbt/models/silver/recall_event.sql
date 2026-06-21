@@ -1,11 +1,11 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['recall_event_id'], 'unique': True},
-      {'columns': ['source', 'source_recall_id']},
-      {'columns': ['source', 'published_at']},
-      {'columns': ['classification']},
-    ]
+    meta={'index_specs': [
+      {'suffix': 'recall_event_id', 'cols': 'recall_event_id', 'unique': True},
+      {'suffix': 'source_source_recall_id', 'cols': 'source, source_recall_id'},
+      {'suffix': 'source_published_at', 'cols': 'source, published_at'},
+      {'suffix': 'classification', 'cols': 'classification'},
+    ]}
 ) }}
 
 -- Header-level recall events (ADR 0002). One row per (source, source_recall_id).
