@@ -1,11 +1,11 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['recall_product_id'], 'unique': True},
-      {'columns': ['recall_event_id']},
-      {'columns': ['upc']},
-      {'columns': ['hin']},
-    ]
+    meta={'index_specs': [
+      {'suffix': 'recall_product_id', 'cols': 'recall_product_id', 'unique': True},
+      {'suffix': 'recall_event_id', 'cols': 'recall_event_id'},
+      {'suffix': 'upc', 'cols': 'upc'},
+      {'suffix': 'hin', 'cols': 'hin'},
+    ]}
 ) }}
 
 -- Line-level recall products (ADR 0002). One row per affected product instance.

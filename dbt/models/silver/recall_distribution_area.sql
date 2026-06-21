@@ -1,10 +1,10 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['recall_event_id'], 'unique': True},
-      {'columns': ['distribution_state_codes'], 'type': 'gin'},
-      {'columns': ['distribution_country_codes'], 'type': 'gin'},
-    ]
+    meta={'index_specs': [
+      {'suffix': 'recall_event_id', 'cols': 'recall_event_id', 'unique': True},
+      {'suffix': 'dist_state_gin', 'cols': 'distribution_state_codes', 'method': 'gin'},
+      {'suffix': 'dist_country_gin', 'cols': 'distribution_country_codes', 'method': 'gin'},
+    ]}
 ) }}
 
 -- recall_distribution_area — Tier-2 structured distribution geography (Phase 6e geography

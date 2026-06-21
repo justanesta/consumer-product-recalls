@@ -114,7 +114,7 @@ from public.firm_fda_attributes;
 -- ----------------------------------------------------------------------------------
 -- firm_fda_fei_functional_index_present   [other]   target: public.firm_fda_attributes
 -- purpose : Confirm the load-bearing functional (firm_fei_num::text) index exists post-build (the drop-then-create oscillation footgun) and the declared btree on firm_state_cd / unique on firm_fei_num are present.
--- CONFORMS: Includes idx_firm_fda_attributes_fei_text on ((firm_fei_num::text)), a unique index on firm_fei_num, and a btree on firm_state_cd. The functional FEI::text index MUST be present (its absence = the oscillation bug recurred).
+-- CONFORMS: Includes firm_fda_attributes_fei_text on ((firm_fei_num::text)) (renamed from idx_firm_fda_attributes_fei_text in 2026-W26 when it moved into config(meta.indexes) — ADR 0038 §2026-W26), a unique index on firm_fei_num, and a btree on firm_state_cd. The functional FEI::text index MUST be present (its absence = the oscillation bug recurred).
 -- ----------------------------------------------------------------------------------
 select indexname, indexdef
 from pg_indexes

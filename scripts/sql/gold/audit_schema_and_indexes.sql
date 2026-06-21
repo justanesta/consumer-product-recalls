@@ -72,7 +72,7 @@ ORDER BY table_name, ordinal_position;
 
 \echo ''
 \echo '=== C. Index inventory — what the last dbt build actually created (pg_indexes) ==='
-\echo '    Confirms the LANDED items: R2 keyset (mart_recall_summary published_at DESC, recall_event_id),'
+\echo '    Confirms the LANDED items: R2 keyset (mart_recall_summary event_date DESC, recall_event_id),'
 \echo '    R3 GIN (mart_product_search recall_product_upcs), search_vector GIN, the sidecar (state)/(fei::text).'
 \echo '    GAP CHECK: look for any GIN on mart_recall_summary.distribution_state_codes / _country_codes (the'
 \echo '    confirmed array filters) — absence here = the headline BLOCKED-ON-GOLD finding.'

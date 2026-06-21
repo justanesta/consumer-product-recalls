@@ -8,18 +8,32 @@ so the Phase-7 follow-up (below) re-profiles against real traffic.
 
 ## Mechanism
 
+> **⚠️ 2026-W26 — `config(indexes)` OSCILLATES under dbt 1.11.x; ALL silver + gold table indexes moved to
+> `config(meta.index_specs)` + a folder-level `rebuild_indexes()` post_hook.** dbt 1.11.x builds
+> `config(indexes=[...])` on the `__dbt_tmp` relation via `create index if not exists "<stable-hash>"`
+> BEFORE the table swap; the hash collides with the old table's same-named index, the `IF NOT EXISTS`
+> no-ops, and the index is dropped with the backup — so it vanishes every other build. **This supersedes
+> the "config(indexes) hash-named GINs are oscillation-immune" claim** (it held only while older dbt
+> created indexes on the final relation post-swap). **Fix (DRY, repo-wide):** every `table` model declares
+> its indexes in `config(meta={'index_specs': [{suffix, cols, method?, unique?}]})`, and a single folder-level
+> `+post-hook: "{{ rebuild_indexes() }}"` on the `silver` + `gold` folders (`dbt_project.yml`) reads that
+> meta and DROP-THEN-CREATEs each index on the final relation (immune; `macros/rebuild_indexes.sql`).
+> `config(indexes=[...])` is no longer used anywhere. New index = add to `meta.index_specs`; new model =
+> auto-covered by the folder hook. `assert_gold_serving_indexes_present` was widened + given `depends_on`
+> refs (it had none → it ran before the marts rebuilt, validating the *previous* build — the false failure
+> that surfaced this) so it runs after the marts and guards every load-bearing serving index.
+
 - **Bronze** — Alembic-managed (`migrations/versions/`); indexes persist with the append-only tables.
-- **Silver / gold** — declared in each model's `config(indexes=[...])`, so dbt drops + recreates them
-  on every `dbt build` (the tables are rebuilt each run). Gold indexes are co-located in each
-  `mart_` model. `post_hook` serves three distinct purposes here:
-  (1) **Expression / keyset indexes** the column-list `config(indexes=[...])` cannot express —
-  `firm_fda_attributes`'s functional `(firm_fei_num::text)` index (see silver below) and
-  `mart_recall_summary`'s `(published_at DESC, recall_event_id)` keyset-pagination index (R2);
-  (2) **`grant_gold_readonly` macro** — applied to every gold model via the gold-folder
-  `+post-hook` in `dbt_project.yml`, re-granting `SELECT` to `recalls_readonly` after each
-  nightly drop+recreate (migration 0034 / R1);
-  (3) **`ANALYZE`** — several gold marts call `analyze {{ this }}` post-build to update planner
-  statistics immediately (separate from the index classes above).
+- **Silver / gold** — declared in each `table` model's `config(meta.index_specs)` and built by the folder-level
+  `rebuild_indexes()` post_hook (see the W26 note above). `post_hook` now serves these purposes:
+  (1) **`rebuild_indexes()`** — the single oscillation-safe index builder (folder-level, silver + gold),
+  covering all btree/GIN/unique/expression indexes incl. `firm_fda_attributes`'s functional
+  `(firm_fei_num::text)` index and `mart_recall_summary`'s `(event_date DESC, recall_event_id)` keyset
+  (R2, repointed from `published_at DESC` to the announce-recency `event_date` in 2026-W26, ADR 0038 §2026-W26);
+  (2) **`grant_gold_readonly` macro** — gold-folder `+post-hook` re-granting `SELECT` to `recalls_readonly`
+  after each nightly drop+recreate (migration 0034 / R1);
+  (3) **`ANALYZE`** — several gold/silver marts call `analyze {{ this }}` post-build to update planner
+  statistics immediately (separate per-model post_hook).
 
 ## Bronze — confirmed appropriate (no change)
 
@@ -65,16 +79,18 @@ and `mart_firm_profile` is `firm_fda_attributes.firm_fei_num::text = company_id`
 
 | Model | Indexes |
 |---|---|
-| `mart_recall_summary` | unique `recall_event_id`; `(source, published_at)`; `is_active`; `classification`; expression `(published_at DESC, recall_event_id)` (post_hook, keyset-pagination — R2); **GIN** `distribution_state_codes`, **GIN** `distribution_country_codes` (array `@>`/`&&` containment — G1); **GIN** `search_vector` (recall-grain FTS for `/recalls/search` — G3); **GIN** `firms` (jsonb `@>` containment for the firm-profile `GET /recalls?firm_id` filter — added 2026-06-19, website-frontend-plan §5.4); all four GINs via `config(indexes=[...])` (hash-named → oscillation-immune); post_hook ANALYZE |
-| `mart_firm_profile` | unique `firm_id`; `normalized_name`; post_hook ANALYZE |
-| `mart_product_search` | unique `recall_product_id`; `recall_event_id`; `hin`; `model`; `upc`; **GIN** `search_vector` (FTS); **GIN** `recall_product_upcs` (recall-level UPC containment `@> :upc`, declared via column-list `config(indexes=[...])`, NOT a post_hook — R3); post_hook ANALYZE |
+| `mart_recall_summary` | unique `recall_event_id`; `(source, event_date)`; `is_active`; `classification`; keyset `(event_date DESC, recall_event_id)` (R2, repointed from `published_at` to announce-recency `event_date` 2026-W26); **GIN** `distribution_state_codes`, **GIN** `distribution_country_codes` (array `@>`/`&&` containment — G1); **GIN** `search_vector` (recall-grain FTS for `/recalls/search` — G3); **GIN** `firms` (jsonb `@>` for `GET /recalls?firm_id`). **All built via the `rebuild_indexes()` post_hook (2026-W26 — config(indexes) oscillates, see Mechanism note); post_hook ANALYZE** |
+| `mart_firm_profile` | unique `firm_id`; `normalized_name` — via `rebuild_indexes()` post_hook (2026-W26); post_hook ANALYZE |
+| `mart_product_search` | unique `recall_product_id`; `recall_event_id`; `hin`; `model`; `upc`; **GIN** `search_vector` (FTS); **GIN** `recall_product_upcs` (recall-level UPC containment `@> :upc` — R3). **All built via the `rebuild_indexes()` post_hook (2026-W26); post_hook ANALYZE** |
 | `fct_recalls_by_geography` | `(geography_basis, source, state_code)`; `state_code` |
 | `fct_recalls_by_*` (aggregates) | none — materialized as views (small, recomputed) |
 | `gold_meta` | no content indexes (single-row table); `recalls_readonly` SELECT grant applied via folder-level `grant_gold_readonly` post_hook (`dbt_project.yml:30`) |
 
 > **As-built reconciliation (2026-06-16):** the Gold table above was verified against the live catalog (`scripts/sql/gold/audit_schema_and_indexes.sql` §C; gold rebuilt 04:32 UTC). The three `mart_recall_summary` GINs added since the original Phase-6e pass — the two geo arrays (workstream **G1**) and `search_vector` (**G3**) — landed via `config(indexes)` and are present + stable. This file is the authoritative index inventory; `project_scope/gold-audit-workstream.md` points here rather than restating it.
 
-> **Addendum (2026-06-19):** a fourth `mart_recall_summary` GIN — on the `firms` jsonb rollup — was added via `config(indexes)` to make the website firm-profile's `GET /recalls?firm_id={id}` containment filter (`firms @> '[{"firm_id": :id}]'`) index-backed instead of a corpus seq-scan (website-frontend-plan §5.4). **Verified present** against the live catalog after the 21:16 UTC gold rebuild (`scripts/sql/gold/audit_schema_and_indexes.sql` §C — `GIN (firms)` on the 93,444-row table; `last_analyze` fresh). Planner-pick confirmed via `scripts/sql/gold/verify_firms_gin_plan.sql` — Bitmap Index Scan on the GIN runs ~1.2 ms vs ~139 ms for the forced seq-scan baseline (~114×; 173 vs 17,478 buffers; measured 2026-06-19). The `assert_gold_serving_indexes_present.sql` guard is intentionally **not** extended to it yet — consistent with the G1 geo GINs (config(indexes) GINs are oscillation-immune, and `?firm_id` is not a *live* API filter until the API ships the param); add the guard row alongside that API change.
+> **Addendum (2026-06-19):** a fourth `mart_recall_summary` GIN — on the `firms` jsonb rollup — was added via `config(indexes)` to make the website firm-profile's `GET /recalls?firm_id={id}` containment filter (`firms @> '[{"firm_id": :id}]'`) index-backed instead of a corpus seq-scan (website-frontend-plan §5.4). **Verified present** against the live catalog after the 21:16 UTC gold rebuild (`scripts/sql/gold/audit_schema_and_indexes.sql` §C — `GIN (firms)` on the 93,444-row table; `last_analyze` fresh). Planner-pick confirmed via `scripts/sql/gold/verify_firms_gin_plan.sql` — Bitmap Index Scan on the GIN runs ~1.2 ms vs ~139 ms for the forced seq-scan baseline (~114×; 173 vs 17,478 buffers; measured 2026-06-19).
+
+> **Correction (2026-W26):** the addendum above said the `firms`/geo GINs were *oscillation-immune* under `config(indexes)` and so the guard was deliberately left un-widened. **That was wrong** — under dbt 1.11.x `config(indexes)` oscillates (see the Mechanism note). The build that surfaced this had `mart_product_search`'s `recall_product_upcs` GIN absent from the prior catalog; the failure also exposed a second bug — `assert_gold_serving_indexes_present` ran ~75s *before* the marts rebuilt (no `ref` deps → it validated the previous build). Both are now fixed: all three serving marts build their indexes via the `rebuild_indexes()` post_hook, and the guard has `depends_on` refs + asserts every load-bearing serving index (firms/geo/search_vector GINs, the keyset, the composites, the unique keys).
 
 ## Phase-7 follow-up (recorded per ADR 0038)
 

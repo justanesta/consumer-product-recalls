@@ -189,22 +189,35 @@ models:
                 values: ['CPSC', 'FDA', 'USDA', 'NHTSA', 'USCG']
       - name: published_at
         description: >
-          Non-null recency FLOOR, used as the keyset sort/pagination key (newest-first feed) — NOT
-          uniformly "last edited". Per source it is the best available recency timestamp, coalesced to
-          the announce date when absent: CPSC last_publish_date, FDA event_lmd (last-modified, bulk-stamped
-          ~2018-09 for the openFDA archive migration), USDA last_modified_date, and USCG last_date are
-          genuine last-modified signals, but NHTSA's is coalesce(DATEA, RCDATE) where DATEA is a
-          RECORD-CREATION date (the NHTSA flat file carries no last-modified field). It must stay non-null
-          because it is the sort key. Contrast announced_at (truthful event date, nullable). Time-series
-          facts bucket on announced_at, NOT this column (ADR 0038 §2026-W25).
+          Non-null recency FLOOR — NOT uniformly "last edited". Per source it is the best available recency
+          timestamp, coalesced to the announce date when absent: CPSC last_publish_date, FDA event_lmd
+          (last-modified, bulk-stamped ~2018-09 for the openFDA archive migration), USDA last_modified_date,
+          and USCG last_date are genuine last-modified signals, but NHTSA's is coalesce(DATEA, RCDATE) where
+          DATEA is a RECORD-CREATION date (the NHTSA flat file carries no last-modified field). Still exposed
+          and filterable (published_after/published_before) and remains the non-null fallback inside
+          event_date, but is NO LONGER the default feed sort key as of ADR 0038 §2026-W26 — using a
+          last-published key surfaced long-dormant recalls that got one minor edit at the top of the feed.
+          The feed now sorts on event_date (announce-recency); time-series facts already bucket on
+          announced_at (ADR 0038 §2026-W25). Must stay non-null because event_date falls back to it.
         tests:
           - not_null
       - name: announced_at
         description: >
           The TRUE recall-initiation/announce date, conformed across sources and backfill-immune — the
-          correct basis for the time-series facts + firm first/last_recall_at. NULLABLE by design (~20 FDA
-          events with no trustworthy initiation date; see recall_event.sql). Use published_at when a
-          guaranteed non-null date is required (e.g. sort/pagination).
+          correct basis for the time-series facts + firm first/last_recall_at + the event_date feed sort.
+          NULLABLE by design (~20 FDA events with no trustworthy initiation date; see recall_event.sql). Use
+          event_date (or published_at) when a guaranteed non-null date is required (e.g. sort/pagination).
+      - name: event_date
+        description: >
+          Non-null announce-recency feed sort key = coalesce(announced_at, published_at) (ADR 0038 §2026-W26).
+          The TRUE event date where known, falling back to the NOT-NULL published_at for the ~20 FDA with no
+          trustworthy announce date — so it is total-ordered and safe for keyset pagination (raw announced_at
+          is nullable and would break the seek WHERE). Mirrors the fct_* time-series basis exactly. Backs the
+          (event_date desc, recall_event_id) keyset index + the (source, event_date) composite; the
+          recalls-api paginates GET /recalls on it. The not_null below is the contract guard the task calls
+          for (non-null by construction, but tested so an upstream regression fails loudly).
+        tests:
+          - not_null
       - name: distribution_scope
         description: >
           Distribution breadth — 100% NOT NULL, 4-value enum across all sources (gold-audit 2026-06-14:

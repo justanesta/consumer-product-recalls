@@ -1,8 +1,8 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['mic'], 'unique': True},
-    ]
+    meta={'index_specs': [
+      {'suffix': 'mic', 'cols': 'mic', 'unique': True},
+    ]}
 ) }}
 
 -- USCG MIC reassignment years — the source-native reassignment boundary per MIC, parsed from the

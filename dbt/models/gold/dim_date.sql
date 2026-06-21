@@ -15,9 +15,11 @@
 {{
   config(
     materialized='table',
-    indexes=[{'columns': ['date_day'], 'unique': True}]
+    meta={'index_specs': [{'suffix': 'date_day', 'cols': 'date_day', 'unique': True}]}
   )
 }}
+{#- date_day index declared in meta.index_specs, built by the folder rebuild_indexes() post_hook (NOT
+    config(indexes), which oscillates under dbt 1.11.x — gold-audit 2026-W26, macros/rebuild_indexes.sql). -#}
 
 with spine as (
     {{ dbt_utils.date_spine(

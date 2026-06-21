@@ -114,11 +114,13 @@ narrative = [`gold_design_notes.md`](gold_design_notes.md); per-model contracts 
 | `mart_recall_summary` | one row per recall_event | `GET /recalls` (list + detail) |
 | `mart_firm_profile` | one row per canonical firm | `GET /firms/{id}` (cross-source rollup) |
 | `mart_product_search` | one row per recall_product (+ FTS `search_vector`) | `GET /products/search` |
-| `gold_meta` | one row (gold build stamp) | ETag / Last-Modified signal for the API; part of the ADR 0042 published contract. Columns: `rebuilt_at` (timestamptz) — dbt `run_started_at` UTC, identical across one `dbt build`; `schema_version` (text) — manually bumped contract version (default `"1"`), bump via `--vars`; breaking column / key / enum changes require a bump (ADR 0042). |
+| `gold_meta` | one row (gold build stamp) | ETag / Last-Modified signal for the API; part of the ADR 0042 published contract. Columns: `rebuilt_at` (timestamptz) — dbt `run_started_at` UTC, identical across one `dbt build`; `schema_version` (text) — manually bumped contract version (default `"2"` as of 2026-W26's `event_date` add), bump via `--vars`; breaking column / key / enum changes require a bump (ADR 0042). |
 
 `mart_firm_profile` per-source sidecar attribute outputs: `firm_usda_attributes` (JSONB array of USDA establishment records), `firm_uscg_attributes` (JSONB array of USCG MIC records), `firm_fda_attributes` (JSONB array of FDA FEI records). Renamed R5 (from `establishment_attributes` / `manufacturer_attributes` / `fda_attributes`) on this branch. These names are part of the ADR 0042 published read contract.
 
 `mart_recall_summary` array rollup columns: `product_names`, `models`, `hins`, and `firms` are coalesced to `'[]'::jsonb` so they are **never NULL** in the serving mart (`mart_recall_summary.sql` O1 coalesce). This is a load-bearing API contract (ADR 0042) — the API may rely on these columns always being a valid JSONB array, never NULL.
+
+`mart_recall_summary.event_date` (added 2026-W26, ADR 0038 §2026-W26) is the **non-null announce-recency feed sort key** = `coalesce(announced_at, published_at)` — the same basis as the `fct_*` time-series, exposed as a stored column so it can back a keyset index. It is **NOT NULL by construction** (the ~20 FDA with no announce date fall back to the always-present `published_at`), which is what makes it safe for keyset pagination — raw `announced_at` is nullable and would break the seek `WHERE`. `GET /recalls` now paginates `(event_date DESC, recall_event_id)` (R2 keyset index) instead of `(published_at DESC, …)`; `published_at` and `announced_at` both remain exposed, and `published_after`/`published_before` + `announced_after`/`announced_before` remain as filters.
 
 **Aggregate marts** (`fct_`, materialized `view` — feed dashboards):
 

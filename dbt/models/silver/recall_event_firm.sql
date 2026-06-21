@@ -1,10 +1,10 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['recall_event_id', 'firm_id', 'role'], 'unique': True},
-      {'columns': ['recall_event_id']},
-      {'columns': ['firm_id']},
-    ],
+    meta={'index_specs': [
+      {'suffix': 'event_firm_role', 'cols': 'recall_event_id, firm_id, role', 'unique': True},
+      {'suffix': 'recall_event_id', 'cols': 'recall_event_id'},
+      {'suffix': 'firm_id', 'cols': 'firm_id'},
+    ]},
     post_hook="analyze {{ this }}"
 ) }}
 

@@ -12,8 +12,10 @@
 -- `astimezone(modules.pytz.UTC)`: dbt exposes `modules.pytz` as a curated dict of `pytz.__all__`, which
 -- contains lowercase `utc` but not `UTC`, so `modules.pytz.UTC` is Undefined (the original snippet's bug)
 -- — and the conversion would be redundant anyway. `gold_schema_version` is a manual bump via
--- `--vars '{gold_schema_version: "2"}'`.
+-- `--vars '{gold_schema_version: "3"}'`; the default below is the floor and is bumped per contract change.
+-- v2 (2026-W26): mart_recall_summary gained the non-null `event_date` column and the default feed sort
+-- repointed from published_at -> event_date = coalesce(announced_at, published_at) (ADR 0038 §2026-W26).
 
 select
     '{{ run_started_at }}'::timestamptz            as rebuilt_at,
-    '{{ var("gold_schema_version", "1") }}'::text as schema_version
+    '{{ var("gold_schema_version", "2") }}'::text as schema_version

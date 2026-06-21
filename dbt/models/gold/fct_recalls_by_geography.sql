@@ -1,10 +1,12 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['geography_basis', 'source', 'state_code']},
-      {'columns': ['state_code']},
-    ]
+    meta={'index_specs': [
+      {'suffix': 'geo_basis_source_state', 'cols': 'geography_basis, source, state_code'},
+      {'suffix': 'state_code',             'cols': 'state_code'},
+    ]}
 ) }}
+{#- Indexes declared in meta.index_specs, built by the folder rebuild_indexes() post_hook (NOT
+    config(indexes), which oscillates under dbt 1.11.x — gold-audit 2026-W26, macros/rebuild_indexes.sql). -#}
 
 -- fct_recalls_by_geography — recalls per US state, two complementary lenses (Phase 6e, ADR 0038):
 --   * 'distribution'      — where the recalled product went (recall_distribution_area, FDA + USDA).

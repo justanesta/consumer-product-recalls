@@ -1,9 +1,9 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['recall_event_press_release_id'], 'unique': True},
-      {'columns': ['recall_event_id']},
-    ]
+    meta={'index_specs': [
+      {'suffix': 'recall_event_press_release_id', 'cols': 'recall_event_press_release_id', 'unique': True},
+      {'suffix': 'recall_event_id', 'cols': 'recall_event_id'},
+    ]}
 ) }}
 
 -- FDA press releases — event-grain child of recall_event, M:1 (an event can carry

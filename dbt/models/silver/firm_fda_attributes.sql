@@ -1,20 +1,18 @@
 {{ config(
     materialized='table',
-    indexes=[
-      {'columns': ['firm_fei_num'], 'unique': True},
-      {'columns': ['firm_state_cd']},
-    ],
-    post_hook=[
-      "drop index if exists {{ this.schema }}.idx_firm_fda_attributes_fei_text",
-      "create index idx_firm_fda_attributes_fei_text on {{ this }} ((firm_fei_num::text))",
-      "analyze {{ this }}",
-    ]
+    meta={'index_specs': [
+      {'suffix': 'firm_fei_num', 'cols': 'firm_fei_num', 'unique': True},
+      {'suffix': 'firm_state_cd', 'cols': 'firm_state_cd'},
+      {'suffix': 'fei_text', 'cols': '(firm_fei_num::text)'},
+    ]},
+    post_hook="analyze {{ this }}"
 ) }}
 
--- The functional FEI index uses DROP-THEN-CREATE (not `create index if not exists`): a fixed index name
--- collides with the same-named index still on dbt's `__dbt_backup` table mid-rebuild and oscillates out
--- every other build (same Postgres schema-unique-name gotcha as mart_recall_summary's R2 keyset index;
--- gold-audit G0, root-caused 2026-06-15). This index is load-bearing for the firm->sidecar FEI::text join.
+-- All indexes (incl. the functional `(firm_fei_num::text)` index — load-bearing for the firm->sidecar
+-- FEI::text join) are declared in config(meta.index_specs) and built by the folder-level rebuild_indexes()
+-- post_hook (DROP-THEN-CREATE on the final {{ this }}), NOT config(indexes=[...]) — which oscillates out
+-- every other build under dbt 1.11.x (gold-audit 2026-W26; see macros/rebuild_indexes.sql). The fei_text
+-- index is now named firm_fda_attributes_fei_text (was idx_firm_fda_attributes_fei_text).
 --
 -- FDA-registered establishment (firm) attributes — address + firm-continuity
 -- metadata that doesn't fit on firm.sql (which is keyed on normalized name and
