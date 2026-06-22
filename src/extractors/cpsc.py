@@ -106,6 +106,30 @@ _MAX_INCREMENTAL_RECORDS = 5_000
 # 2026-05-31 against saferproducts.gov: LastPublishDateStart=1970-01-01 → 9,828 rows.
 _HISTORICAL_SEED_FLOOR = date(1970, 1, 1)
 
+# CPSC signals a backend-database outage with an HTTP 200 whose body is a
+# single-element list holding an *error envelope* rather than a recall, e.g.:
+#   {"Title": "Error retrieving Recalls: The underlying provider failed on Open.",
+#    "RecallID": 0, "RecallNumber": null, "RecallDate": null, ...}
+# "Error retrieving Recalls" is the constant prefix; the suffix is the underlying
+# .NET/ADO error and varies ("...failed on Open.", "Timeout expired.", ...). We
+# detect it at the HTTP boundary and raise TransientExtractionError so it routes
+# through the retry policy as the upstream outage it is, instead of failing
+# validation as a fake RecallID=0 record and aborting the run on a 100% rejection
+# rate (production incident 2026-06-22, run f55c7e92).
+_CPSC_ERROR_TITLE_PREFIX = "Error retrieving Recalls"
+
+
+def _is_cpsc_error_sentinel(record: dict[str, Any]) -> bool:
+    """True iff ``record`` is CPSC's HTTP-200 error envelope, not a real recall.
+
+    Keyed on the ``Title`` prefix, which is unique to the error envelope — a real
+    recall always carries a populated ``RecallNumber`` and a human title. Kept
+    deliberately narrow: broadening to "any null RecallNumber" would swallow
+    genuine schema drift, which the strict bronze schema exists to surface loudly.
+    """
+    title = record.get("Title")
+    return isinstance(title, str) and title.startswith(_CPSC_ERROR_TITLE_PREFIX)
+
 
 class CpscExtractor(RestApiExtractor[CpscRecord]):
     """
@@ -239,9 +263,23 @@ class CpscExtractor(RestApiExtractor[CpscRecord]):
             raise TransientExtractionError(f"CPSC network error: {exc}") from exc
 
         if response.status_code == 200:
-            self._capture_response(response)
             data = response.json()
-            return data if isinstance(data, list) else []
+            records = data if isinstance(data, list) else []
+            sentinel = next(
+                (r for r in records if isinstance(r, dict) and _is_cpsc_error_sentinel(r)),
+                None,
+            )
+            if sentinel is not None:
+                # CPSC mislabels a backend-database outage as HTTP 200 with an
+                # error envelope instead of a 5xx. Route it through the
+                # transient-retry policy like the 5xx it semantically is.
+                self._capture_error_response(url, response)
+                raise TransientExtractionError(
+                    f"CPSC API returned HTTP 200 with an error envelope "
+                    f"({sentinel.get('Title')!r}); treating as a transient upstream outage"
+                )
+            self._capture_response(response)
+            return records
         if response.status_code == 429:
             retry_after = float(response.headers.get("Retry-After", 60))
             self._capture_error_response(url, response)
