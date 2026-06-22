@@ -16,7 +16,11 @@ from src.extractors._base import (
     RateLimitError,
     TransientExtractionError,
 )
-from src.extractors.cpsc import CpscDeepRescanLoader, CpscExtractor
+from src.extractors.cpsc import (
+    CpscDeepRescanLoader,
+    CpscExtractor,
+    _is_cpsc_error_sentinel,
+)
 from src.schemas.cpsc import CpscRecord
 
 # ---------------------------------------------------------------------------
@@ -126,6 +130,56 @@ class TestFetch:
                 pytest.raises(TransientExtractionError),
             ):
                 extractor.extract()
+
+    def test_200_error_envelope_raises_transient_extraction_error(
+        self, extractor: CpscExtractor
+    ) -> None:
+        """CPSC returns HTTP 200 carrying an error envelope (RecallID 0, null
+        RecallNumber) when its backend DB is unavailable. It must be treated as a
+        transient upstream outage — routed through the retry policy — not a schema
+        rejection that quarantines a fake record and aborts on a 100% rejection
+        rate. Regression for the 2026-06-22 production abort (run f55c7e92)."""
+        envelope = {
+            "Title": "Error retrieving Recalls: The underlying provider failed on Open.",
+            "RecallID": 0,
+            "RecallNumber": None,
+            "RecallDate": None,
+            "LastPublishDate": None,
+            "Products": [],
+        }
+        with respx.mock:
+            respx.get(_BASE_URL).mock(return_value=httpx.Response(200, json=[envelope]))
+            with (
+                patch.object(extractor, "_get_watermark", return_value=_FAKE_WATERMARK),
+                pytest.raises(TransientExtractionError, match="error envelope"),
+            ):
+                extractor.extract()
+
+
+class TestErrorSentinelDetection:
+    """Pure-logic coverage for the HTTP-200 error-envelope discriminator."""
+
+    def test_detects_error_envelope(self) -> None:
+        assert _is_cpsc_error_sentinel(
+            {
+                "Title": "Error retrieving Recalls: The underlying provider failed on Open.",
+                "RecallID": 0,
+                "RecallNumber": None,
+            }
+        )
+
+    def test_detects_envelope_with_other_db_error_suffix(self) -> None:
+        # The suffix after the prefix varies with the underlying .NET/ADO error.
+        assert _is_cpsc_error_sentinel({"Title": "Error retrieving Recalls: Timeout expired."})
+
+    def test_real_record_is_not_a_sentinel(self) -> None:
+        assert not _is_cpsc_error_sentinel(_VALID_RAW)
+
+    def test_missing_title_is_not_a_sentinel(self) -> None:
+        assert not _is_cpsc_error_sentinel({"RecallNumber": "24-001"})
+
+    def test_null_title_is_not_a_sentinel(self) -> None:
+        assert not _is_cpsc_error_sentinel({"Title": None})
 
     def test_401_raises_authentication_error(self, extractor: CpscExtractor) -> None:
         with respx.mock:
