@@ -45,6 +45,81 @@ Non-ADR-captured action items for this project. ADRs handle design decisions; th
   - **Fix — USDA scalar fields that went jsonb-array.** In `dbt/models/silver/firm_usda_attributes.sql`, the establishment directory now delivers `dbas` and `activities` (selected ~`:36–37`) — and possibly `geolocation` (~`:29`) — as jsonb arrays after the 2026-06 USDA API change. Wrap those array-valued scalar fields in `jsonb_array_to_csv()`, mirroring exactly what `dbt/models/staging/stg_usda_fsis_recalls.sql:59–80` already does for the recall fields (`establishment`, `recall_reason`, `processing`, `states`, …) under migration 0028 / "Finding S". After a gold rebuild the sidecar is scalar again and the API serves it unchanged. **Audit** the establishment staging against migration 0028 the way the recall staging was — this is the establishment-side echo of the same change, so other establishment fields may have gone jsonb-array too; and confirm `geolocation` is a scalar string and not a `{lat,lon}`/`[lat,lon]` object (it would 500 the same way).
   - **Blast radius / contract.** Output becomes string-typed identifiers, scalar string fields, and always-array list fields — exactly what the API already coerces to — so no API code change and the committed `openapi.json` is unaffected (the website's typed client is unchanged). Add type / `not_null` / "is scalar (not array)" assertions on the sidecar fields so a numeric, null, or array can't regress silently. If the gold serving shape is treated as contract, add a `gold_meta.schema_version` note.
   - **Not data-side (recorded for completeness, no action here).** The other two follow-ups from the API fix are API-side: the "which field actually fires in prod" diagnostic is moot (the coercion covers every numeric field), and a machine-readable `uscg_classification_unconfirmed` flag was declined as over-engineering (a description caveat suffices).
+- [ ] USDA recalls typically exposes parts of a URL to a PDF of recall product images in two ways: 1. A filename is present in the `field_labels` node, in what looks like a list/array object in the JSON returned (for example `Recall-007-2026-Labels.pdf`). In the `field_summary` free text node embedded in an `href=` tag by the "view labels" text which has the full non-scheme & domain-name page: (for example `[\u003Ca href=\"/sites/default/files/food_label_pdf/2026-05/Recall-007-2026-Labels.pdf\"\u003Eview labels\u003C/a\u003E]:`). The scheme and domain name for these files is `https://www.fsis.usda.gov/`. Let's use this to create a new data field "recall_label_url" that will get carried through the pipeline and exposed in the "/recalls/USDA/<source_recall_id>" endpoint.
+
+## Recall-detail enrichment & source-id lookup (cross-repo — added 2026-06-23)
+
+Scoped from a 3-repo trace of the `/recalls/{source}/{source_recall_id}` detail + `/recalls` list
+endpoints. Companion entries live in **API** `consumer-product-recalls-api` (TODO `## Features` →
+"Surface recall-detail enrichment fields …") and **site** `consumer-product-recalls-site` (TODO
+"Recall detail enrichment" + "Recall-ID search"). These complete **in tandem, mart-first**: pipeline
+projects the column → API adds the field → site `gen:api` + renders. The mart is the bottleneck —
+every field below already exists in bronze/silver and only stops because `mart_recall_summary` never
+projects it.
+
+- [ ] **Surface three detail fields the mart currently drops / doesn't join.** All three are
+  single-source and fit the existing "shown only where present" contract (parity with CPSC-only
+  `hazards`/`product_upcs`, NHTSA-only `corrective_action`).
+  - **`images` (CPSC, jsonb).** Already on silver `recall_event` (`recall_event.sql:76`, CPSC branch;
+    `cast(null as jsonb)` for the others). Add `re.images` to the `mart_recall_summary.sql` final
+    SELECT — no new join. Document in `_gold.yml`.
+  - **`injuries` (CPSC, jsonb).** Same shape (`recall_event.sql:75`). Add `re.injuries` to the mart
+    SELECT. (An earlier API-side trace mis-guessed `injuries` wasn't a real column — it is; it's a
+    CPSC jsonb field on `recall_event`, just unprojected.)
+  - **`press_release_url` (FDA).** Lives in silver `recall_event_press_release` (aliased `url`; bronze
+    `fda_press_releases_bronze.press_release_url`, migration 0022), **not joined to the mart**. Add
+    `LEFT JOIN recall_event_press_release pr ON pr.recall_event_id = re.recall_event_id` (the PR model
+    already carries the md5 `recall_event_id` = `md5('FDA'|source_recall_id)`) and project it.
+    **Grain:** press releases are M:1 to the event (one event can carry several) — pick a contract:
+    aggregate to a jsonb array `[{url, type, issued_dt}]` (preferred, lossless) or pick one
+    representative URL. **Extra value:** FDA recalls currently have a NULL `url` (no external link on
+    the FDA detail page at all) — the press-release URL is the only official link FDA can offer.
+
+- [ ] **Index `(source, source_recall_id)` on `mart_recall_summary`.** The API already exposes a
+  single-value `?source_recall_id=` exact filter, but the mart has **no index** on that column → a
+  sequential scan. Add `create index on mart_recall_summary (source, source_recall_id)` (composite —
+  the id is unique only *with* source). Backs the site's new Recall-ID search input and the planned
+  multi-value batch lookup (API TODO → "Bulk identifier lookup").
+
+- [ ] **Make FDA recalls findable by their public recall number (`F-####-####`).** The "FDA wrinkle":
+  for FDA, `mart_recall_summary.source_recall_id` is `RECALLEVENTID::text` (the internal event id),
+  NOT the human-facing recall number — so a user pasting `F-1234-2024` finds nothing today. The public
+  number IS captured: bronze `recall_num` (RECALLNUM, `src/schemas/fda.py:114`) →
+  `stg_fda_recalls.sql:34` → silver `recall_event` at event grain (`recall_event.sql:188`, the value
+  picked by the `DISTINCT ON` event header). Fold FDA `recall_num` into
+  `mart_recall_summary.search_vector` (cheapest — makes `/recalls/search?q=F-1234-2024` work with no
+  new filter/index) and/or expose a dedicated `source_recall_number` column. **Orthogonal to the
+  rename note below** — a bronze rename changes neither what feeds `source_recall_id` nor whether
+  `recall_num` is exposed.
+
+**Decisions recorded (no code change — captured so they aren't re-litigated):**
+
+- **Declined: rename FDA bronze `source_recall_id` → `source_product_id`.** The intent (make the FDA
+  grain explicit — the value is PRODUCTID, *product*-grain, not the recall id) is valid, but two facts
+  block a clean rename:
+  1. **It's a shared cross-source bronze contract, not an FDA-specific name.** The generic framework
+     references the column by name for all five sources — `migrations/_columns.py:16`
+     (`rejected_table_columns()`), `src/bronze/loader.py`, `dedup_contracts.py`, `invariants.py`,
+     `manifest.py` (~190 refs repo-wide). Renaming only FDA forks it out of the uniform contract
+     (every generic dedup/quarantine/invariant path would need an FDA special-case); renaming all five
+     is wrong for the four sources where the value genuinely *is* the recall id.
+  2. **It's the load-bearing dedup/identity anchor each source's bronze is wired to** — the natural
+     business key the framework partitions on. Note it is *not* a unique key in bronze: bronze is
+     append-only and intentionally keeps multiple content-versions per `source_recall_id`
+     (`_sources.yml`: "multiple rows per source_recall_id are expected"; FDA index is
+     `(source_recall_id, extraction_timestamp DESC)`). `(source, source_recall_id)` only becomes
+     unique at silver `recall_event` after the `DISTINCT ON` dedup.
+
+  The real problem is the **undocumented grain**, not the name → fix with docs: the
+  `0004_fda_bronze.py:31` column comment + the `_sources.yml:38–47` note already say "PRODUCTID =
+  product-level key"; make that unmissable. Re-open only if a future refactor unifies the bronze
+  identity layer.
+- **Verified, no change: the `(source, source_recall_id)` uniqueness guard fails the build.** The
+  silver test (`_silver.yml:6–11`, `dbt_utils.unique_combination_of_columns`) runs at **`error`**
+  severity — the project-level `+severity: warn` (`dbt_project.yml:50–53`) is scoped to
+  `source_assumptions:` only, so a duplicate hard-fails CI. This (plus the mart PK `recall_event_id =
+  md5(source|source_recall_id)`) is what guarantees the `/recalls/{source}/{id}` detail endpoint can't
+  return a wrong/ambiguous row.
 
 ## Documentation
 
