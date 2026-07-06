@@ -40,12 +40,12 @@ dev = [
     "pytest-vcr>=1.0,<2",
     "pytest-cov>=7.1.0,<8",
     "respx>=0.21,<1",
-    "vcrpy>=8.2.1,<9",
+    "vcrpy>=8.3.0,<9",
     "pyyaml>=6.0,<7",
-    "ruff>=0.15.18,<1",
-    "pyright>=1.1.410,<2",
+    "ruff>=0.15.20,<1",
+    "pyright>=1.1.411,<2",
     "pre-commit>=4.6.0,<5",
-    "hypothesis>=6.155.7,<7",
+    "hypothesis>=6.156.1,<7",
 ]
 dq = [
     "soda-core-postgres>=3.5.6",
