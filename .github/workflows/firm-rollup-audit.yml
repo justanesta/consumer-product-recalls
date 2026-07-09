@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Validate required secrets
         run: |
@@ -43,7 +43,7 @@ jobs:
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
 
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: astral-sh/setup-uv@v8.3.2
       - run: uv python install
       - run: uv sync --frozen
 
@@ -56,7 +56,7 @@ jobs:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
 
       - name: Upload review CSV
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: firm-rollup-review
           path: ${{ runner.temp }}/firm_rollup_review.csv
@@ -64,7 +64,7 @@ jobs:
 
       - name: Open / refresh review-backlog issue on a spike
         if: ${{ fromJSON(steps.audit.outputs.high_risk_count || '0') > fromJSON(env.ALERT_THRESHOLD) }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           HIGH_RISK: ${{ steps.audit.outputs.high_risk_count }}
           ROLLUPS: ${{ steps.audit.outputs.rollup_clusters }}

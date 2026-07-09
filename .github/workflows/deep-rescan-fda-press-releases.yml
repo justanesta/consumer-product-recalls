@@ -44,7 +44,7 @@ jobs:
     timeout-minutes: 350
     if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Validate required secrets
         run: |
@@ -64,7 +64,7 @@ jobs:
           FDA_AUTHORIZATION_USER: ${{ secrets.FDA_AUTHORIZATION_USER }}
           FDA_AUTHORIZATION_KEY: ${{ secrets.FDA_AUTHORIZATION_KEY }}
 
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: astral-sh/setup-uv@v8.3.2
       - run: uv python install
       - run: uv sync --frozen
 
