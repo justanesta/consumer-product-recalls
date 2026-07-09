@@ -65,8 +65,11 @@ class UsdaFsisEstablishment(BaseModel):
       inactive (Finding G), so it is required.
     - `status_regulated_est` is a two-value enum ('' = active MPI,
       'Inactive' = inactive); declared as plain ``str`` rather than
-      ``Literal[...]`` so a future third value lands in quarantine instead of
-      crashing validation.
+      ``Literal[...]`` so an unexpected third value is NOT rejected at ingest —
+      it flows to bronze verbatim (ADR 0027) and is caught downstream by the
+      silver ``accepted_values`` gate, instead of quarantining an otherwise-valid
+      establishment over one bad field. (Observed 2026-07-08: FSIS served the
+      literal 'est_status' for one establishment; staging normalizes it to NULL.)
     - strict=True + extra='forbid' catches schema drift at ingest (ADR 0014).
 
     The source's API field names map via ``validation_alias`` to snake_case

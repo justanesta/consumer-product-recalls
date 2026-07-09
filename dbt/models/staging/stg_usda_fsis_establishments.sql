@@ -43,7 +43,14 @@ select
     nullif(size, '')                 as size,
     nullif(district, '')             as district,
     nullif(circuit, '')              as circuit,
-    status_regulated_est,
+    -- 2026-07-08 upstream single-record glitch: FSIS served status_regulated_est='est_status'
+    -- (the field name echoed as its value) for establishment M21734+P21734 (id 8537, Joseph
+    -- Epstein Foods) — a real ACTIVE establishment (prior value '', LatestMPIActiveDate 2026-07-06,
+    -- neighbours ''). Domain is the exhaustive two-value enum {'', 'Inactive'} (Finding C/G), so
+    -- normalize the garbage token to NULL ("untrusted") rather than fabricate a status. NULL passes
+    -- accepted_values (it ignores nulls); the guard stays live for any genuinely-new future value.
+    -- See scripts/sql/usda_establishments/bronze/inspect_est_status_anomaly.sql.
+    nullif(status_regulated_est, 'est_status') as status_regulated_est,
     latest_mpi_active_date::timestamptz as latest_mpi_active_date,
     grant_date::timestamptz             as grant_date,
     case
