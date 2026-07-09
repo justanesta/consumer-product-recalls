@@ -34,7 +34,7 @@ jobs:
     if: ${{ github.event_name != 'schedule' || vars.CRON_ENABLED == 'true' }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Validate required secrets
         # No R2 here: the transform job never lands raw bytes. dbt connects via the NEON_* split
@@ -54,7 +54,7 @@ jobs:
           NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
           NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
 
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: astral-sh/setup-uv@v8.3.2
       - run: uv python install
       - run: uv sync --frozen
 
