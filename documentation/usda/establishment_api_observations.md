@@ -204,7 +204,7 @@ Confirmed 2026-04-29 via cardinality probe.
 
 **`status_regulated_est` observed values (confirmed exhaustive across all 7,945 records):**
 - `""` (empty string) — active MPI establishment (7,168 records)
-- `"Inactive"` — inactive establishment (777 records); no third value observed
+- `"Inactive"` — inactive establishment (777 records). No third value at survey (2026-04-29); a single upstream glitch value (`est_status`) later appeared 2026-07-08 — see the Finding G addendum (2026-07-08) below.
 
 ---
 
@@ -351,6 +351,33 @@ and re-runs on every `dbt build`, so the 13 establishments will appear with thei
 (2026-05-15) catches a future third-value surprise but does not address the as-of-date
 question. Cross-source dim SCD-2 strategy is the right home for that — tracked as a Phase 6
 deliverable in `project_scope/implementation_plan.md`.
+
+### Finding G addendum (2026-07-08) — a third `status_regulated_est` value (`est_status`): upstream glitch, not a domain change
+
+The nightly transform's `accepted_values(['', 'Inactive'])` gate (on both `stg_usda_fsis_establishments`
+and silver `firm_usda_attributes`) failed on a **third value**: `status_regulated_est = 'est_status'` —
+the field's own name echoed as its value. Triangulated as a single-record **upstream data glitch**, not
+a domain expansion:
+
+- **Isolated to one establishment.** `M21734+P21734` (id 8537, *Joseph Epstein Foods Inc.*, East
+  Rutherford NJ). The 2026-07-08 dump inserted 55 changed records — 54 `''`, 1 `est_status`; every
+  other establishment carried the normal `''` / `'Inactive'`.
+- **The establishment is active.** Prior bronze value was `''` (2026-05-31); `LatestMPIActiveDate` =
+  2026-07-06; the record is otherwise fully populated. The value flipped `'' → 'est_status'` on the
+  2026-07-08 pull.
+- **Still live upstream.** A browser call to the live API on 2026-07-09 still returns `est_status` for
+  this one establishment (neighbours `''`). It will NOT self-heal in bronze — content-hash dedup makes
+  a re-pull of the same value a no-op — so the fix is required, not optional.
+
+**Handling (branch `fix/usda-est-status-glitch`):** `stg_usda_fsis_establishments` normalizes the
+garbage token to NULL via `nullif(status_regulated_est, 'est_status')` — the honest "untrusted"
+representation (we do not fabricate a status the source didn't cleanly provide). `accepted_values`
+ignores NULLs, so both tests pass, and the guard stays live for any *genuinely* new future value. The
+SCD-2 snapshot `firm_usda_attributes_snapshot` banks the correction as a new current version
+(`'est_status' → NULL`), leaving the `est_status` row in non-current history (invisible to the tests,
+which read only `dbt_valid_to is null`). Diagnostic:
+`scripts/sql/usda_establishments/bronze/inspect_est_status_anomaly.sql`. The documented domain remains
+the two-value enum `{'', 'Inactive'}`; `est_status` is upstream corruption, not a new status.
 
 ---
 
