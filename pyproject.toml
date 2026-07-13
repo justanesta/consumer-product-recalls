@@ -20,7 +20,7 @@ dependencies = [
     "typer>=0.26.8,<1",
     "dbt-core>=1.11.12,<2",
     "dbt-postgres>=1.10.2,<2",
-    "boto3>=1.43.40,<2",
+    "boto3>=1.43.46,<2",
     # Phase 5d Step 2 — first HTML-scraping source (USCG). lxml is the
     # BeautifulSoup parser backend; both are required at runtime.
     "beautifulsoup4>=4.15.0,<5",
