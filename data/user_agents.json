@@ -2,12 +2,12 @@
   "sources": {
     "chrome": {
       "url": "https://chromiumdash.appspot.com/fetch_releases?platform=Linux&num=1&channel=Stable",
-      "version": "150.0.7871.46",
+      "version": "150.0.7871.114",
       "version_key": "version"
     },
     "firefox": {
       "url": "https://product-details.mozilla.org/1.0/firefox_versions.json",
-      "version": "152.0.4",
+      "version": "152.0.5",
       "version_key": "LATEST_FIREFOX_VERSION"
     }
   },
