@@ -42,10 +42,10 @@ dev = [
     "respx>=0.21,<1",
     "vcrpy>=8.3.0,<9",
     "pyyaml>=6.0,<7",
-    "ruff>=0.15.20,<1",
+    "ruff>=0.15.22,<1",
     "pyright>=1.1.411,<2",
     "pre-commit>=4.6.0,<5",
-    "hypothesis>=6.156.1,<7",
+    "hypothesis>=6.156.7,<7",
 ]
 dq = [
     "soda-core-postgres>=3.5.6",
