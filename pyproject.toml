@@ -45,7 +45,7 @@ dev = [
     "ruff>=0.15.22,<1",
     "pyright>=1.1.411,<2",
     "pre-commit>=4.6.0,<5",
-    "hypothesis>=6.156.7,<7",
+    "hypothesis>=6.157.1,<7",
 ]
 dq = [
     "soda-core-postgres>=3.5.6",
