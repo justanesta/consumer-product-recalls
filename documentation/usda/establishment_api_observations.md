@@ -217,7 +217,7 @@ Confirmed 2026-04-29 via cardinality probe (n=7,945). Empty counts include both 
 | Field | Empty/false count | Rate | Notes |
 |---|---|---|---|
 | `establishment_name` | 0 | 0.0% | Always present — safe `str` required field |
-| `address` | 0 | 0.0% | Always present |
+| `address` | 0 | 0.0% | 0% empty on the 2026-04-29 **active** corpus, but NOT an invariant — blank on some Inactive establishments (see Finding D addendum 2026-08-25); `Optional[str]` |
 | `state` | 0 | 0.0% | Always present — 2-letter abbreviation |
 | `zip` | 0 | 0.0% | Always present |
 | `phone` | 311 | 3.9% | `Optional[str]` |
@@ -379,6 +379,33 @@ which read only `dbt_valid_to is null`). Diagnostic:
 `scripts/sql/usda_establishments/bronze/inspect_est_status_anomaly.sql`. The documented domain remains
 the two-value enum `{'', 'Inactive'}`; `est_status` is upstream corruption, not a new status.
 
+### Finding D addendum (2026-08-25) — `address` is NOT an invariant: Inactive establishments can be blank
+
+The nightly transform's `not_null` gate on silver `firm_usda_attributes.address` (error severity,
+resting on Finding D's "address 100% populated") failed with 2 results. Triangulated as **genuine
+absent source data on inactive establishments** — not corruption, and not an `est_status`-style glitch:
+
+- **Two Inactive establishments, blank on first sighting.** est 13460 (`M19879A`, *Golden Valley
+  Industries*, "No City" / AL / zip `00000`) and est 9305 (`M31544+P31544`, *Roma Meat Specialties &
+  Delivery*, Hialeah FL). Both `status_regulated_est = 'Inactive'`.
+- **No real → blank flip.** Each has a SINGLE bronze version (first landed 2026-07-29, unchanged since —
+  content-hash dedup). Unlike `est_status`, there is no prior non-blank value: the source served `''`
+  from the first pull. So there is nothing to carry forward and no garbage token to `nullif` — the
+  address is simply absent.
+- **Otherwise fully populated.** name / city / state / zip all present (only `duns_number` missing,
+  itself 85.5% empty). Real, characterizable establishments, not placeholder rows.
+
+**Revises Finding D.** "address 100% populated" (2026-04-29, n=7,945) was an observation of the then-
+**active** corpus, NOT an invariant: `address` is empty on some Inactive establishments — the same way
+`size` / `district` / `circuit` already are (see Field Types). `stg_usda_fsis_establishments` already
+`nullif('')`s address, so a blank flows through as NULL.
+
+**Handling (branch `fix/usda-blank-address-not-null`):** silver `firm_usda_attributes.address`
+`not_null` downgraded to `severity: warn` — a watch-list, not a pipeline-breaker (address is not a join
+key; we do not fabricate an address the source didn't provide). `state` / `zip` are present on both rows
+and stay at error, but share the same survey basis — if they ever break the same way, downgrade them
+too. Diagnostic: `scripts/sql/usda_establishments/bronze/inspect_blank_address_anomaly.sql`.
+
 ---
 
 ## Extraction Strategy
@@ -423,7 +450,8 @@ name=%22{url_encoded_field_establishment}%22  -- quotes required; comma triggers
 - `circuit`: `Optional[str]` — 4-digit FSIS or 2-digit+2-letter Talmage-Aiken; `""` on inactive
 - `status_regulated_est`: `str` — `""` = active MPI; `"Inactive"` = inactive (other values may exist)
 - `LatestMPIActiveDate`: `str` — 100% populated on all records; YYYY-MM-DD format
-- `address`, `state`, `zip`: `str` — always present (0% empty)
+- `state`, `zip`: `str` — always present (0% empty) at survey
+- `address`: `Optional[str]` — 0% empty on the 2026-04-29 active corpus, but blank on some Inactive establishments (Finding D addendum 2026-08-25); `nullif('')` in staging
 - `phone`: `Optional[str]` — 3.9% empty
 - `duns_number`: `Optional[str]` — 85.5% empty
 - `fips_code`: `Optional[str]` — 4.3% empty; 5-digit county FIPS when present
@@ -435,7 +463,7 @@ name=%22{url_encoded_field_establishment}%22  -- quotes required; comma triggers
 - [x] Confirm pagination behavior (Finding A) — confirmed 2026-04-29: flat array, no pagination; no ETag (contrast with recall API); no CDN caching; chunked transfer
 - [x] Confirm total cardinality and active MPI count (Finding B) — confirmed 2026-04-29: 7,945 total, 7,168 active MPI (90.2%), 777 inactive (9.8%)
 - [x] Confirm `activities` and `dbas` serialization format (Finding C) — confirmed 2026-04-29: true JSON arrays; leading spaces on non-first elements; `geolocation` and `county` use boolean `false` as missing sentinel
-- [x] Confirm field nullability rates (Finding D) — confirmed 2026-04-29: `establishment_name`/`address`/`state`/`zip` 100% populated; `duns_number` 85.5% empty; `LatestMPIActiveDate` 100% populated
+- [x] Confirm field nullability rates (Finding D) — confirmed 2026-04-29: `establishment_name`/`address`/`state`/`zip` 100% populated on the active corpus; `duns_number` 85.5% empty; `LatestMPIActiveDate` 100% populated. **Revised 2026-08-25:** `address` is NOT an invariant — blank on some Inactive establishments (Finding D addendum 2026-08-25)
 - [x] Confirm `name` filter behavior: contain vs exact, quote effect (Finding E) — confirmed 2026-04-29: comma triggers OR token split (2,481+ results without quotes); URL-encoded quotes enforce phrase match (1 result); quotes REQUIRED for joins
 - [x] Validate recall-establishment join fidelity (Finding F) — confirmed 2026-04-29: `field_establishment="CS Beef Packers, LLC"` → 1:1 match via `establishment_name`, `establishment_id=6163082`, status ACTIVE MPI
 - [x] Confirm `LatestMPIActiveDate` population pattern (Finding G) — confirmed 2026-04-29: 100% populated on ALL 7,945 records including inactive

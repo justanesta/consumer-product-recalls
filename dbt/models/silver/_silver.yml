@@ -347,8 +347,20 @@ models:
         tests:
           - not_null
       - name: address
+        description: >
+          FSIS establishment street address. NULLABLE in practice — Inactive/defunct
+          establishments can carry a blank address, NOT the invariant the 2026-04-29 survey
+          implied (Finding D, "100% populated"). Confirmed 2026-08-25: est 13460 (Golden Valley
+          Industries, "No City" / zip 00000, Inactive) and est 9305 (Roma Meat Specialties,
+          Inactive) — both blank on FIRST sighting (single bronze version, no real->blank flip),
+          so neither an est_status-style glitch nor carry-forward-able (no prior address exists).
+          staging nullif('') maps the source empty-string to NULL. severity=warn: a watch-list,
+          not a pipeline-breaker — address is not a join key. If the count climbs materially, run
+          scripts/sql/usda_establishments/bronze/inspect_blank_address_anomaly.sql to recharacterize.
         tests:
-          - not_null
+          - not_null:
+              config:
+                severity: warn
       - name: state
         tests:
           - not_null
