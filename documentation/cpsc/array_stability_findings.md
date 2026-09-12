@@ -15,10 +15,17 @@ md5('CPSC' || '|' || source_recall_id || '|' || product_ordinal)
 
 This splits the two assumptions' stakes:
 
-- **C2 (append-only) is now an identity *invariant*.** With name/model out of the
-  key, the ordinal alone carries product identity, so a reorder / mid-array insert
-  no longer *fragments* (loud) — it *conflates* (silent): a later product inherits an
-  earlier slot's id. `assert_products_array_append_only` is the guard.
+- **C2 (append-only) is FALSIFIED — see the 2026-09-12 section at the foot of this
+  document.** With name/model out of the key, the ordinal alone carries product
+  identity, so a reorder / mid-array insert no longer *fragments* (loud) — it
+  *conflates* (silent): a later product inherits an earlier slot's id. That stake is
+  unchanged; what changed is that CPSC turned out **not** to honour append-only. It is
+  collapsing enumerated per-model product rows into a single summary row across the
+  archive (64 recalls / 107 product rows absent from silver as of 2026-09-12), and the
+  original assertion was structurally incapable of detecting it. The guard is now split
+  in two: `assert_cpsc_products_array_append_only` **meters** shrinkage
+  (`warn_if '>0'` / `error_if '>64'`), and `assert_cpsc_product_ordinal_stable`
+  **gates** slot movement (`severity=error`, baseline 0).
 - **C3 (name/model normalization) no longer touches the key.** A post-publication
   name/model edit re-versions a Type-1 latest-wins *attribute* (the current view
   shows the latest via `stg_cpsc_recalls`); it does **not** change the surrogate or
@@ -242,3 +249,99 @@ After running the scripts, update the ADR row with:
 - If Q1 (C2 append-only) ever returns >0: **identity conflation, not fragmentation** (since the 2026-06-13 ordinal-only key). Treat as a correctness incident — a later product has inherited an earlier slot's `recall_product_id`. Remediate with a deterministic in-slot tiebreaker or a re-key, rebuilding silver from bronze (the immutable all-versions source of truth, ADR 0007), and escalate the `assert_products_array_append_only` wrapper to a hard gate. This **supersedes** the old "switch to a content-based surrogate" fix — the project deliberately moved the *other* way (content out of the key) for id durability.
 - If Q1 (C3, either field) ever returns >0: **informational** since the 2026-06-13 migration — name/model are out of the key, so drift re-versions a latest-wins attribute, not the surrogate. No Phase 6 reconciliation trigger. These rows are the input to the deferred CPSC product-grain history (TODO "Move 2"); product-level fuzzy resolution remains a separate Phase 6 firm-parallel item (`implementation_plan.md:606-610`).
 - ~~If Q3 shows the corpus is starting to accumulate multi-product recalls (max > 1)~~ **FIRED 2026-06-02** (8.3% multi-product, max 57). ~~Next trigger: the first recall with **both** >1 product **and** >1 content-hash version~~ **FIRED 2026-06-13** — both assertions now run on real cross-version data: C2 holds at 0 across the multi-product corpus (validating the new key), C3 surfaced its first 9 name-drift cases (see the "First genuine C2/C3 test — 2026-06-13" section).
+
+---
+
+## C2 FALSIFIED — product-array consolidation wave (2026-09-12)
+
+Everything above this line predates the falsification and is kept as provenance. In
+particular, the 2026-06-13 "C2 holds at 0 across the multi-product corpus" reading was
+an artifact of an unsound predicate, **not** evidence of a clean corpus.
+
+### What CPSC is doing
+
+Collapsing enumerated per-model product rows into a single summary row, walking forward
+through the historical archive roughly daily since 2026-06-10:
+
+| Recall | Before | After |
+|---|---|---|
+| `00176` | 8 named Empire ride-on models | `"Power Drivers" and "Buddy L"` |
+| `00119` | Aegean / b kids / Baby Monarch / Charter Club / Club Room / Jr. By Monarch robes | `Children's robes` |
+| `00105` | Answer / Answer BMX Carbo Pro / Answer BMX Mag Pro / Manitou / Manitou Mars / Manitou X-Vert Super | `Answer and Manitou brand bicycle forks` |
+| `00163` | Coyote / Fox / Manco / Phoenix / Rattler go-karts | `Go-karts sold under the Manco, …` |
+| `00177` | five named Tek Nek ride-on models | `Tek Nek children's riding vehicles` |
+| `00160` | Minoura / Performance / Schwinn / Univega training stands | `Bicycle Indoor Training Stands` |
+
+Genuine information loss at the source — the prior entries were distinctly-named
+per-model products, not blank placeholders. **Upstream, not an extraction artifact:**
+the 2026-09-06 deep rescan independently re-fetched the collapsed arrays through a
+different query and a different landing file and got the same result.
+
+### Baseline
+
+Source: `scripts/sql/cpsc/bronze/diagnose_products_array_append_only_violations.sql`
+(Q6–Q9), run against prod 2026-09-12.
+
+| Measure | Value |
+|---|---|
+| LENGTH_REGRESSION events | **64** |
+| Recalls exposing fewer products than bronze has observed | **64** of 10,005 |
+| Product rows absent from silver today | **107** |
+| ORDINAL_MOVED violations | **0** |
+| Largest single drop | `00176`, 8 → 1 |
+
+`recall_product` reads only the latest snapshot (`stg_cpsc_recalls` keeps
+`row_number() over (partition by source_recall_id order by extraction_timestamp desc)
+= 1`), so those 107 `recall_product_id` values no longer exist in the serving layer.
+Bronze retains every version (ADR 0007), so nothing is unrecoverable.
+
+### Why the original assertion missed all 64 — and fired on 12 non-events
+
+The predicate grouped by `(source_recall_id, product_name, product_model)` and required
+`count(distinct product_ordinal) > 1` **and** `count(distinct raw_landing_path) > 1`.
+Those two conditions are evaluated independently, which is unsound in both directions
+once the 2026-06-13 amendment made `name`/`model` mutable Type-1 attributes:
+
+- **False negative (all 64).** A consolidation renames slot 1 as it truncates, so the
+  pre-consolidation `(name, model)` group and the post-consolidation one each hold
+  exactly one landing path. Both are filtered out. Three months, 64 violations, silent.
+- **False positive (12).** Legacy recalls carrying several blank-name/blank-model
+  products span multiple ordinals by construction. They tripped the second condition the
+  moment the 2026-09-06 deep rescan gave them a second snapshot — `90004`, `91086`,
+  `91113`, `92072`, `94110`, `95037`, `95047`, `95064`, `95094`, `95098`, `95124`,
+  `98005`. Verified non-events: identical per-snapshot ordinal sets, unchanged array
+  length. This held `transform.yml` red 2026-09-07 → 2026-09-12 and is what prompted the
+  investigation.
+
+### Replacement predicates
+
+- **LENGTH_REGRESSION** — `products[]` is shorter than the previous snapshot of the same
+  recall. Sound (length cannot decrease under append-only), survives renames completely,
+  and is the only class that can see a consolidation. Detects shrinkage only.
+- **ORDINAL_MOVED** — for each `(name, model)` that occupies exactly one slot in *every*
+  snapshot it appears in, the slot number differs across snapshots. The singleton
+  restriction is what removes the duplicate-pair false positives; reorder, mid-array
+  insert and mid-array delete are still caught whenever the moved element keeps its name.
+
+**Residual blind spot:** a product that is both duplicated and moved, or moved in the
+same snapshot in which it is renamed. `CpscProduct` (`src/schemas/cpsc.py`) carries no
+stable per-product identifier — `name`, `description`, `model`, `type`, `category_id`,
+`number_of_units`, all mutable free text — so array position is the only anchor CPSC
+provides and this is not detectable from the payload.
+
+### Open decision
+
+What silver should do about the 107 orphaned `recall_product_id` values is **not**
+settled here. Filed as **TODO → Data Shape/Quality → "CPSC product-array
+consolidation"**; it interacts with the deferred CPSC product-grain SCD-2 history
+("Move 2") above.
+
+### Follow-up triggers (supersede the C2 bullet above)
+
+- **LENGTH_REGRESSION count rises above the reviewed baseline** → the dbt wrapper errors.
+  Re-run the diagnostic Q6/Q8/Q9, confirm the new rows are the same consolidation pattern
+  and not a new failure mode, update the baselines here and in ADR 0031, then raise
+  `error_if` in the same commit.
+- **ORDINAL_MOVED returns > 0** → correctness incident, unchanged from the original C2
+  trigger: a later product has inherited an earlier slot's `recall_product_id`. Remediate
+  with a deterministic in-slot tiebreaker or a re-key, rebuilding silver from bronze.
