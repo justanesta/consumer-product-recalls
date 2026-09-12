@@ -1,6 +1,6 @@
 # 0031 — Silver-row fragmentation strategy: per-source surrogate keys, drift detection, and reconciliation tiers
 
-- **Status:** Accepted (amended 2026-05-12 — Tier 2 per-path-value-set refactor; amended 2026-05-13 — silver-grain migration evaluation tracking added; amended 2026-05-15 — tracking cadence revised from monthly/6-month-window to daily/few-week-window; amended 2026-05-15 (later same day) — migration tracking subsection sunset after Pierce 26V217000 mfr_comp_desc population event triggered Stop criterion #1; baselines refreshed and "What to do now" cadence corrected; amended 2026-06-03 — Phase 6b PR 6b.3 lands the deterministic `maketxt` anchor-canonicalization (`normalize_maketxt` macro at the staging identity partition + the `recall_product_id` md5) plus a forward drift monitor for the AC DELCO Normalization class; substance in ADR 0033's 2026-06-03 amendment; amended 2026-06-06 — the NHTSA per-source recipe is **migrated** to `md5(7-tuple)` from the v1.5 snapshot per ADR 0034 / Phase 6c.7, see the NHTSA row; amended 2026-06-13 — the CPSC per-source recipe is **migrated** to the stable `md5('CPSC'|source_recall_id|product_ordinal)` anchor (name/model demoted out of the key to Type-1 latest-wins attributes) so a post-publication name edit re-versions an attribute instead of churning the surrogate, and the `products[]` append-only assertion is now **load-bearing for CPSC product identity** (a violation conflates rather than fragments) — the lightweight CPSC analog of the NHTSA v1.5 demotion, needing no SCD-2 snapshot; see the CPSC row)
+- **Status:** Accepted (amended 2026-05-12 — Tier 2 per-path-value-set refactor; amended 2026-05-13 — silver-grain migration evaluation tracking added; amended 2026-05-15 — tracking cadence revised from monthly/6-month-window to daily/few-week-window; amended 2026-05-15 (later same day) — migration tracking subsection sunset after Pierce 26V217000 mfr_comp_desc population event triggered Stop criterion #1; baselines refreshed and "What to do now" cadence corrected; amended 2026-06-03 — Phase 6b PR 6b.3 lands the deterministic `maketxt` anchor-canonicalization (`normalize_maketxt` macro at the staging identity partition + the `recall_product_id` md5) plus a forward drift monitor for the AC DELCO Normalization class; substance in ADR 0033's 2026-06-03 amendment; amended 2026-06-06 — the NHTSA per-source recipe is **migrated** to `md5(7-tuple)` from the v1.5 snapshot per ADR 0034 / Phase 6c.7, see the NHTSA row; amended 2026-06-13 — the CPSC per-source recipe is **migrated** to the stable `md5('CPSC'|source_recall_id|product_ordinal)` anchor (name/model demoted out of the key to Type-1 latest-wins attributes) so a post-publication name edit re-versions an attribute instead of churning the surrogate, and the `products[]` append-only assertion is now **load-bearing for CPSC product identity** (a violation conflates rather than fragments) — the lightweight CPSC analog of the NHTSA v1.5 demotion, needing no SCD-2 snapshot; see the CPSC row); amended 2026-09-12 — **assumption C2 (`products[]` is append-only) is FALSIFIED**. CPSC is collapsing enumerated per-model product rows into a single summary row across the historical archive (64 recalls / 107 product rows absent from silver). The detection predicate specified below was unsound in both directions and caught none of it; it is replaced by two metered classes — see the 2026-09-12 subsection under Empirical evidence)
 - **Date:** 2026-05-08
 - **Supersedes:** —
 - **Superseded by:** —
@@ -62,7 +62,7 @@ Per-source assertion scripts that quantify fragmentation rates over time. NHTSA 
 
 Other sources need parity scripts as **future work**, sequenced opportunistically:
 
-- **CPSC** — ordinality-shift detection: count cases where `(recall_event_id, product_name, model)` appears with multiple distinct ordinals across `extraction_timestamp` snapshots
+- **CPSC** — ~~ordinality-shift detection: count cases where `(recall_event_id, product_name, model)` appears with multiple distinct ordinals across `extraction_timestamp` snapshots~~ **Superseded 2026-09-12** — this predicate evaluates "spans > 1 ordinal" and "spans > 1 snapshot" *independently*, which is unsound once the 2026-06-13 amendment made `name`/`model` mutable Type-1 attributes: it fires on a legitimate within-snapshot duplicate pair and is blind to any movement that coincides with a rename. Replaced by two separately-metered classes — **LENGTH_REGRESSION** (`products[]` shrank; baseline 64 and rising, C2 falsified) and **ORDINAL_MOVED** (a singleton `(name, model)` changed slot; baseline 0, hard gate). See the 2026-09-12 subsection under Empirical evidence.
 - **FDA** — `PRODUCTID` stability assertion across `extraction_timestamp` snapshots; expected to be 0 (FDA documents PRODUCTID as stable) but worth verifying
 - **USDA** — `field_recall_number` stability assertion; trivially 0 expected (single-row-per-recall grain)
 - **USCG** — apply the framework when Phase 5d lands
@@ -78,7 +78,7 @@ Two reconciliation surfaces, both ultimately Phase 6 work, with different scopes
 
 | Source | `recall_event.source_recall_id` | `recall_product_id` recipe | Known fragmentation modes | Tier 2 detection status | Phase 6 revisit threshold |
 |---|---|---|---|---|---|
-| **CPSC** | `RecallNumber` (stable upstream) | **`md5('CPSC'\|source_recall_id\|product_ordinal)`** (`cpsc_products` CTE, `recall_product.sql`) — **migrated 2026-06-13** from the all-fields `md5(event_id\|name\|model\|product_ordinal)` recipe. Name/model are demoted out of the key to Type-1 latest-wins attributes; no SCD-2 snapshot is needed (`stg_cpsc_recalls` latest-per-recall already collapses them, full-rebuild + the append-only invariant keep the current view one-row-per-product), so the id is now **durable** across CPSC post-publication name edits. | **(a) `products[]` reorder / mid-array insert → identity *conflation*** (under the ordinal-only key a later product silently inherits an earlier slot's id — what was *loud-fragment* under the old name-in-key recipe is *silent-conflate* under this one, which is why (a) is now load-bearing). **(b) name/model character normalization no longer fragments or re-keys** — it re-versions a latest-wins attribute; now an informational editorial signal (input to the deferred CPSC product-grain history, see TODO "Move 2"). | `scripts/sql/cpsc/bronze/assert_products_array_append_only.sql` — now an **identity invariant** (green on the multi-product corpus 2026-06-13: 0 violations across recalls of length up to 57) — + `assert_name_model_normalization_stable.sql`, now an **editorial monitor** (9 name cases as of 2026-06-13). dbt wrappers under `dbt/tests/source_assumptions/`: the name/model monitor keeps the group default `severity=warn`; **the append-only wrapper is escalated to `severity=error`** (in-file `config()` override, decided 2026-06-13) because it now guards identity — a violation is a silent conflation (correctness incident), not a known-baseline drift. The group's warn→error deferral to the Phase-7 Soda/GE migration still governs the threshold-based monitors; this invariant is the deliberate exception. Empirical baselines in `documentation/cpsc/array_stability_findings.md`. | Append-only (a): **any non-zero** (identity invariant, not a rate). Name/model (b): **N/A** — no longer a fragmentation mode. |
+| **CPSC** | `RecallNumber` (stable upstream) | **`md5('CPSC'\|source_recall_id\|product_ordinal)`** (`cpsc_products` CTE, `recall_product.sql`) — **migrated 2026-06-13** from the all-fields `md5(event_id\|name\|model\|product_ordinal)` recipe. Name/model are demoted out of the key to Type-1 latest-wins attributes; no SCD-2 snapshot is needed (`stg_cpsc_recalls` latest-per-recall already collapses them, full-rebuild + the append-only invariant keep the current view one-row-per-product), so the id is now **durable** across CPSC post-publication name edits. | **(a) `products[]` reorder / mid-array insert → identity *conflation*** (under the ordinal-only key a later product silently inherits an earlier slot's id — what was *loud-fragment* under the old name-in-key recipe is *silent-conflate* under this one, which is why (a) is now load-bearing). **(b) name/model character normalization no longer fragments or re-keys** — it re-versions a latest-wins attribute; now an informational editorial signal (input to the deferred CPSC product-grain history, see TODO "Move 2"). | `scripts/sql/cpsc/bronze/assert_products_array_append_only.sql` — ~~now an **identity invariant** (green on the multi-product corpus 2026-06-13: 0 violations across recalls of length up to 57)~~ **C2 FALSIFIED 2026-09-12** (64 regressions; the 2026-06-13 green reading was an artifact of an unsound predicate, not a clean corpus). Split into **LENGTH_REGRESSION** (metered, `warn_if '>0'` / `error_if '>64'`) and **ORDINAL_MOVED** (`assert_cpsc_product_ordinal_stable`, `severity=error`, baseline 0) — + `assert_name_model_normalization_stable.sql`, now an **editorial monitor** (9 name cases as of 2026-06-13). dbt wrappers under `dbt/tests/source_assumptions/`: the name/model monitor keeps the group default `severity=warn`; **the append-only wrapper is escalated to `severity=error`** (in-file `config()` override, decided 2026-06-13) because it now guards identity — a violation is a silent conflation (correctness incident), not a known-baseline drift. The group's warn→error deferral to the Phase-7 Soda/GE migration still governs the threshold-based monitors; this invariant is the deliberate exception. Empirical baselines in `documentation/cpsc/array_stability_findings.md`. | Append-only (a): **any non-zero** (identity invariant, not a rate). Name/model (b): **N/A** — no longer a fragmentation mode. |
 | **FDA** | `RECALLEVENTID::text` (stable upstream) | `md5('FDA'\|PRODUCTID)` per `recall_product.sql:51` | PRODUCTID renumber if FDA changes its internal ID scheme | `scripts/sql/fda/bronze/assert_productid_stable.sql`. dbt singular wrapper at `severity=warn` under `dbt/tests/source_assumptions/`. Empirical baselines in `documentation/fda/productid_stability_findings.md`. (EVENTLMD reliability — a noise-quantification rather than fragmentation assumption — also tracked there via `assert_eventlmd_correlates_with_content_change.sql`.) | Any non-zero rate (FDA stability is contractual) |
 | **USDA** | `field_recall_number` (stable upstream) | `recall_product_id = recall_event_id` (1:1 — one product row per recall, ADR 0002 defers structured parsing of free-text `product_items`) | None at product level — single-row-per-recall grain. Free-text `product_items` lives in `source_specific_attrs`. | N/A for fragmentation. **History-correctness assertions** (bilingual atomicity, `last_modified_date` reliability) live at `scripts/sql/usda_recalls/bronze/assert_bilingual_atomic_update.sql` + `assert_field_last_modified_date_advances_on_edit.sql`, with dbt wrappers and baselines in `documentation/usda/bilingual_and_lmd_findings.md`. They feed Phase 6's `recall_event_history` design (ADR 0022), not this ADR's fragmentation framework. | N/A |
 | **NHTSA** | `campno` (stable upstream — verified across both archives) | **`md5('NHTSA'\|campno\|maketxt\|modeltxt\|yeartxt\|compname\|rcl_cmpt_id\|mfr_comp_ptno\|mfr_comp_desc\|mfr_comp_name\|bgman\|endman)`** (11-tuple matching ADR 0030 bronze identity) — **MIGRATED 2026-06-06 to `md5(7-tuple)` from the v1.5 snapshot current view per [ADR 0034](0034-nhtsa-silver-v15-migration.md) (Phase 6c.7). The 11-tuple shown is the pre-migration record; the 7-tuple drops `mfr_comp_desc`/`mfr_comp_name`/`bgman`/`endman` from the key (now snapshot Type-2 attributes) and keeps `mfr_comp_ptno` (structural part identity, per ADR 0033's 7-tuple amendment).** | Cross-run drift on any of 11 identity fields. Baselines (two substrates): **TSV-substrate** 2026-05-08 — 1 case/day (AC DELCO `maketxt` normalization, via `cross_corpus_stability.py`). **Bronze-substrate** 2026-05-12 (refactored Tier 2 — per-path-value-set semantics, see `dbt/tests/source_assumptions/assert_nhtsa_eleven_tuple_identity_stable.sql` and the "Re-baseline 2026-05-12" section below): 9 real-drift groups across ~250k bronze rows (~0.0036% cumulative): 6 on `bgman` + 3 on `endman` (e.g., Chrysler Pacifica `26V189000` airbag `bgman: 2022-05-10 → 2022-05-17` synced across 4 ptno variants; Western Star 47X `26V079000` `endman: 2026-02-03 → 2026-04-10` — the trade-off this ADR's "Why option 3b" section anticipated). 95 `mfr_comp_ptno` cases that the prior boolean filter flagged (including the Ferrari 12Cilindri `000788416 ↔ 000788418` pair previously classified as a typo correction on 2026-05-09) are now classified as structural multi-batch — silver-correct, value-sets identical across archives — and suppressed at the assertion layer per `scripts/sql/nhtsa/bronze/decompose_eleven_tuple_drift.sql`. **Updated 2026-05-15 (Pierce population event):** 11-tuple real_drift surged from 9 → 107 (+96) after the Pierce 26V217000 `mfr_comp_desc` empty→`'Software'` event (run_id `07af8eb4`, 2026-05-15 later run, byte-confirmed H1). The population class is structurally new and lives in `mfr_comp_desc`, NOT the batch-window fields — see `documentation/nhtsa/incremental_delta_findings.md` Section K and the "Re-baseline 2026-05-15" subsection below. Cumulative rate 107/~250k = 0.043% (vs prior 0.0036%; 11-fold increase from a single editorial event) | Implemented — `assert_*_identity_stable.sql` + `cross_corpus_stability.py`; dbt singular wrapper at `dbt/tests/source_assumptions/assert_nhtsa_eleven_tuple_identity_stable.sql` (severity=warn) | >0.01% silver row count fragmented per month, OR systematic drift on a previously-stable field |
@@ -239,6 +239,81 @@ Decision between (a) and (b) deferred to migration time. (a) matches ADR 0030's 
 - **Nothing in code.** v1 stands; `md5(11-tuple)` is the silver canonical key.
 - ~~**Re-run the 9-tuple assertion daily**, append a row to the Snapshots table above.~~ **Superseded 2026-05-15** — migration tracking is sunset, no further snapshots needed (see banner above). The 9-tuple assertion script itself (`assert_nine_tuple_identity_stable.sql`) stays in place as a Tier 2 monitoring signal independent of the migration decision; runs alongside the 11-tuple assertion as part of routine bronze-quality checks.
 - **When a new H1 cluster surfaces** (`bgman`/`endman` populated → NULL, or any other class — population, depopulation, boundary edit, normalization), confirm via `diagnose_null_regression.sql` + `inspect_archive_row.py` and note in `documentation/nhtsa/incremental_delta_findings.md` alongside the existing Mack / Nissan / Pierce write-ups. The byte-confirmation pattern established in the Nissan I (2026-05-15) and Pierce K (2026-05-15) sections is the standing precedent.
+
+### C2 falsified — CPSC product-array consolidation (2026-09-12)
+
+**Assumption C2 (`products[]` is append-only) is falsified.** Not weakened, not
+unverified — falsified, with 64 counterexamples accumulated over three months that
+the specified detection predicate was structurally incapable of seeing.
+
+**What CPSC is doing.** Collapsing enumerated per-model product rows into a single
+summary row, walking forward through the historical archive roughly daily since
+2026-06-10:
+
+| Recall | Before | After | Detail |
+|---|---|---|---|
+| `00176` | 8 | 1 | eight named Empire ride-on models → `"Power Drivers" and "Buddy L"` |
+| `00119` | 7 | 1 | Aegean / b kids / Baby Monarch / Charter Club / Club Room / Jr. By Monarch → `Children's robes` |
+| `00105` | 6 | 1 | six named Answer/Manitou fork models → `Answer and Manitou brand bicycle forks` |
+| `00163` | 5 | 1 | Coyote / Fox / Manco / Phoenix / Rattler → `Go-karts sold under the Manco, …` |
+| `00177` | 5 | 1 | five named Tek Nek models → `Tek Nek children's riding vehicles` |
+| `00160` | 4 | 1 | Minoura / Performance / Schwinn / Univega → `Bicycle Indoor Training Stands` |
+
+This is genuine information loss at the source, not placeholder tidying: the prior
+entries were distinctly-named per-model products. It is **upstream, not an
+extraction artifact** — the 2026-09-06 deep rescan independently re-fetched the
+collapsed arrays through a different query and a different landing file and got the
+same result.
+
+**Baseline 2026-09-12** (`scripts/sql/cpsc/bronze/diagnose_products_array_append_only_violations.sql`):
+
+| Measure | Value |
+|---|---|
+| LENGTH_REGRESSION events | **64** |
+| Recalls exposing fewer products than bronze has observed | **64** of 10,005 |
+| Product rows absent from silver today | **107** |
+| ORDINAL_MOVED violations | **0** |
+
+**Why the old predicate missed all 64.** The Tier 2 specification above groups by
+`(source_recall_id, product_name, product_model)` and requires `count(distinct
+ordinal) > 1` **and** `count(distinct raw_landing_path) > 1`. Because a
+consolidation renames slot 1 as it truncates, the pre-consolidation `(name, model)`
+group and the post-consolidation one each hold exactly one landing path, so both are
+filtered out. Meanwhile the same predicate fired on **12 legacy recalls where
+nothing had moved** — recalls carrying several blank-name/blank-model products, which
+span multiple ordinals by construction and tripped the second condition the moment
+the 2026-09-06 deep rescan gave them a second snapshot. That false positive held
+`transform.yml` red from 2026-09-07 through 2026-09-12 and is what prompted this
+investigation. The 2026-06-13 "green on the multi-product corpus" reading recorded in
+the per-source table was therefore an artifact of the predicate, not evidence of a
+clean corpus.
+
+**Response.** Two separately-metered classes, because they now have different
+baselines and a single test cannot carry two thresholds:
+
+- `assert_cpsc_products_array_append_only` — LENGTH_REGRESSION, `config(severity='error',
+  warn_if='>0', error_if='>64')`. A meter on a falsified assumption, not a gate: it keeps
+  the count in every run's output and hard-fails only if the rate accelerates past the
+  reviewed baseline. Raising `error_if` is a deliberate act requiring a fresh diagnostic
+  run and a doc update in the same commit.
+- `assert_cpsc_product_ordinal_stable` — ORDINAL_MOVED, `severity='error'`, baseline 0.
+  The identity guard: restricted to `(name, model)` pairs that are a singleton in every
+  snapshot they appear in, so the duplicate-pair false positives cannot recur, while
+  reorder / mid-array insert / mid-array delete are still caught whenever the moved
+  element keeps its name.
+
+**Residual blind spot.** A product that is both duplicated and moved, or moved in the
+same snapshot in which it is renamed, remains undetectable — `CpscProduct`
+(`src/schemas/cpsc.py`) carries no stable per-product identifier, so array position is
+the only anchor CPSC provides. This is a real reduction in coverage against what the
+2026-06-13 amendment believed it had.
+
+**Open decision (not taken here).** What silver should do about the 107 orphaned
+`recall_product_id` values — `recall_product` reads only the latest snapshot via
+`stg_cpsc_recalls`, so consolidated-away products simply cease to exist in the serving
+layer while bronze retains every version (ADR 0007). Filed as **TODO → Data
+Shape/Quality → "CPSC product-array consolidation"**; it interacts with the deferred
+CPSC product-grain SCD-2 history ("Move 2").
 
 ## Implementation
 

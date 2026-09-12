@@ -59,10 +59,18 @@ cpsc_products as (
         -- post-publication, e.g. recall 00079) and stg_cpsc_recalls already collapses
         -- to the latest snapshot, so they ride as Type-1 latest-wins attributes;
         -- keeping them in the surrogate only churned recall_product_id on every edit.
-        -- Load-bearing dependency: the products[] append-only invariant
-        -- (assert_cpsc_products_array_append_only, green on the multi-product corpus)
-        -- — under an ordinal-only key a reorder would CONFLATE identity, so that
-        -- assertion is now an identity invariant, not a soft fragmentation monitor.
+        -- Load-bearing dependency: the ordinal must denote the same product over
+        -- time — under an ordinal-only key a slot change CONFLATES identity (a later
+        -- product inherits an earlier slot's id) rather than fragmenting it. Guarded
+        -- by assert_cpsc_product_ordinal_stable (severity=error, baseline 0).
+        -- CAVEAT (2026-09-12, ADR 0031 amendment): the companion append-only
+        -- assumption C2 is FALSIFIED. CPSC is collapsing enumerated per-model product
+        -- rows into a single summary row across the archive (64 recalls / 107 product
+        -- rows absent from silver as of 2026-09-12, metered by
+        -- assert_cpsc_products_array_append_only). Because this model reads only the
+        -- latest snapshot via stg_cpsc_recalls, those recall_product_id values simply
+        -- stop existing here — see TODO "Data Shape/Quality" → CPSC product-array
+        -- consolidation for the open modelling decision.
         md5('CPSC' || '|' || source_recall_id || '|' || product_ordinal::text) as recall_product_id,
         recall_event_id,
         'CPSC'                 as source,
