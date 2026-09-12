@@ -410,9 +410,13 @@ class UscgManufacturerRecord(BaseModel):
 
     # Listing fields (all nullable post-Step 3 corpus confirmation)
     company_name: str | None = Field(default=None, validation_alias="company")
-    address: str | None = Field(default=None)  # ~30-char truncated; may have embedded \n; may be "UNK" / "-"
+    address: str | None = Field(
+        default=None
+    )  # ~30-char truncated; may have embedded \n; may be "UNK" / "-"
     city: str | None = Field(default=None)  # may be "UNK" / "-"
-    state: str | None = Field(default=None)  # 2-letter; may be "" (Canadian rows in search dropdown gap)
+    state: str | None = Field(
+        default=None
+    )  # 2-letter; may be "" (Canadian rows in search dropdown gap)
 
     # Secondary identifier — USCG's internal sequential row PK from the detail URL
     # Page-offset-deterministic so likely unstable across re-crawls; capture for forensics only.

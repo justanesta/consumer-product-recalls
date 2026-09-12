@@ -44,16 +44,17 @@ Bronze tables are snapshot stores, not "current state" stores. A unified `recall
 ```python
 import hashlib, json
 
+
 def content_hash(record: dict) -> str:
     canonical = {k: v for k, v in record.items() if v is not None}
     serialized = json.dumps(
         canonical,
         sort_keys=True,
-        separators=(',', ':'),   # no whitespace
-        ensure_ascii=False,      # preserve UTF-8 characters literally
-        default=str,             # datetime, Decimal, UUID → canonical str
+        separators=(",", ":"),  # no whitespace
+        ensure_ascii=False,  # preserve UTF-8 characters literally
+        default=str,  # datetime, Decimal, UUID → canonical str
     )
-    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 ```
 
 Field-level rules:

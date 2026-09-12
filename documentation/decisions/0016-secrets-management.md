@@ -47,22 +47,24 @@ Candidate local-dev storage patterns considered:
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file='.env',
-        env_file_encoding='utf-8',
-        extra='forbid',
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="forbid",
     )
-    
+
     neon_database_url: SecretStr
-    r2_account_id: str                  # not secret
+    r2_account_id: str  # not secret
     r2_access_key_id: SecretStr
     r2_secret_access_key: SecretStr
-    r2_bucket_name: str                 # not secret
+    r2_bucket_name: str  # not secret
     fda_authorization_user: SecretStr | None = None  # optional; only the FDA extractor reads them
     fda_authorization_key: SecretStr | None = None
     dbt_project_dir: str = "dbt"
     dbt_profiles_dir: str = "dbt"
+
 
 # No module-level instance: each CLI command constructs Settings() at call time,
 # so env vars are read lazily — raises ValidationError at CLI-command invocation
