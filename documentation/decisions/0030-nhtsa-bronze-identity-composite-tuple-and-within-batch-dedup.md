@@ -58,18 +58,18 @@ What `identity_fields`, `hash_exclude_fields`, and within-batch dedup behavior s
 
 ```python
 # src/extractors/nhtsa.py BronzeLoader configuration
-identity_fields=(
-    "campno",          # NHTSA recall ID (e.g., 24V930000) — public, stable
-    "maketxt",         # Vehicle/equipment make
-    "modeltxt",        # Vehicle/equipment model
-    "yeartxt",         # Vehicle model year (or "9999" unknown/N/A)
-    "compname",        # NHTSA component taxonomy node
-    "rcl_cmpt_id",     # NHTSA per-(COMPNAME, recall) component ID
-    "mfr_comp_ptno",   # Manufacturer-supplied part number
-    "mfr_comp_desc",   # Manufacturer-supplied component description
-    "mfr_comp_name",   # Manufacturer-supplied component name
-    "endman",          # End of manufacturing date range (TIMESTAMPTZ)
-    "bgman",           # Begin of manufacturing date range (TIMESTAMPTZ)
+identity_fields = (
+    "campno",  # NHTSA recall ID (e.g., 24V930000) — public, stable
+    "maketxt",  # Vehicle/equipment make
+    "modeltxt",  # Vehicle/equipment model
+    "yeartxt",  # Vehicle model year (or "9999" unknown/N/A)
+    "compname",  # NHTSA component taxonomy node
+    "rcl_cmpt_id",  # NHTSA per-(COMPNAME, recall) component ID
+    "mfr_comp_ptno",  # Manufacturer-supplied part number
+    "mfr_comp_desc",  # Manufacturer-supplied component description
+    "mfr_comp_name",  # Manufacturer-supplied component name
+    "endman",  # End of manufacturing date range (TIMESTAMPTZ)
+    "bgman",  # Begin of manufacturing date range (TIMESTAMPTZ)
 )
 ```
 
@@ -93,7 +93,7 @@ Null-rate caveat:
 
 ```python
 # src/extractors/nhtsa.py BronzeLoader configuration
-hash_exclude_fields=frozenset({"source_recall_id"})
+hash_exclude_fields = frozenset({"source_recall_id"})
 ```
 
 Excluding `source_recall_id` (= `RECORD_ID`) from the content hash means:
@@ -106,7 +106,7 @@ Excluding `source_recall_id` (= `RECORD_ID`) from the content hash means:
 ### Within-batch dedup
 
 ```python
-within_batch_dedup=True
+within_batch_dedup = True
 ```
 
 `BronzeLoader._dedup_within_batch()` (a new method, ADR-0030-introduced) deduplicates on `(identity_tuple, content_hash)` before the loader's existing-hash check against bronze. Without this, the loader's check is against bronze only, not within-batch — so 4 NISSAN-style byte-duplicate rows would all land on first extract.
@@ -116,7 +116,7 @@ Implementation: after Pydantic validation and identity/hash computation, group r
 ### Allow-null-identity (added 2026-05-08)
 
 ```python
-allow_null_identity=True
+allow_null_identity = True
 ```
 
 Four of the eleven identity fields (`bgman`, `endman`, `mfr_comp_desc`, `mfr_comp_name`) are legitimately empty for many rows. `BronzeLoader`'s default behavior raises `ValueError` when an identity-component value is `None` or `""` — useful safety check for sources where every identity field is always populated (CPSC, FDA, USDA), but wrong for NHTSA. The flag relaxes the check: empty strings and `None` both normalize to `""` and contribute that "" sentinel as a valid identity-bucket component. Two rows with `bgman=None` deduplicate together; a row with `bgman=None` and a row with `bgman=2024-01-01` have distinct identities.

@@ -26,13 +26,14 @@ Two classes of drift that require different detection machinery:
 ```python
 from pydantic import BaseModel, ConfigDict
 
+
 class CpscRecallRecord(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',   # unknown fields → ValidationError
-        strict=True,      # reject type coercions
+        extra="forbid",  # unknown fields → ValidationError
+        strict=True,  # reject type coercions
     )
-    RecallID: int                            # required — no Optional, no default
-    RecallNumber: str                        # required
+    RecallID: int  # required — no Optional, no default
+    RecallNumber: str  # required
     LastPublishDate: datetime | None = None  # Optional — source documents nullable
     ...
 ```

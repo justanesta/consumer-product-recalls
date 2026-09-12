@@ -208,13 +208,17 @@ no-filter seed lands every row instead of silently quarantining nulls:
 _TABLE = "fda_recalls_bronze"
 _COLS = ("event_lmd", "center_cd", "product_type_short", "firm_legal_nam")
 
+
 def upgrade():
     for c in _COLS:
         op.alter_column(_TABLE, c, nullable=True)
 
+
 def downgrade():
     for c in _COLS:
-        op.alter_column(_TABLE, c, nullable=False)   # fails if nulls exist — acceptable for a rare downgrade
+        op.alter_column(
+            _TABLE, c, nullable=False
+        )  # fails if nulls exist — acceptable for a rare downgrade
 ```
 
 The `event_lmd` index (`ix_fda_recalls_bronze_event_lmd`, `0004:74`) is unaffected — a nullable
@@ -258,12 +262,14 @@ Keep the `len(page) < _PAGE_SIZE` terminator (Probe 3 confirmed page A returns a
 **(c) `FdaDeepRescanLoader` full-corpus mode (fda.py:535).** Add:
 ```python
 _full_corpus: bool = PrivateAttr(default=False)
-inter_page_sleep_seconds: float = 5.0          # Probe 4 floor
+inter_page_sleep_seconds: float = 5.0  # Probe 4 floor
+
 
 def set_full_corpus(self) -> None:
     self._full_corpus = True
 
-def extract(self):                              # replaces fda.py:562
+
+def extract(self):  # replaces fda.py:562
     if self._full_corpus:
         return self._paginate("[]", sort="recalleventid", sortorder="asc")
     # else: existing eventlmdfrom/eventlmdto window (unchanged)
