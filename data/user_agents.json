@@ -2,17 +2,17 @@
   "sources": {
     "chrome": {
       "url": "https://chromiumdash.appspot.com/fetch_releases?platform=Linux&num=1&channel=Stable",
-      "version": "152.0.7977.82",
+      "version": "153.0.8010.52",
       "version_key": "version"
     },
     "firefox": {
       "url": "https://product-details.mozilla.org/1.0/firefox_versions.json",
-      "version": "155.0.1",
+      "version": "156.0",
       "version_key": "LATEST_FIREFOX_VERSION"
     }
   },
   "user_agents": {
-    "chrome_linux": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
-    "firefox_linux": "Mozilla/5.0 (X11; Linux x86_64; rv:155.0) Gecko/20100101 Firefox/155.0"
+    "chrome_linux": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+    "firefox_linux": "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0"
   }
 }
