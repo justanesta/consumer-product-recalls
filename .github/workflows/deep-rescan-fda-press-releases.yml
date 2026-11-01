@@ -64,7 +64,7 @@ jobs:
           FDA_AUTHORIZATION_USER: ${{ secrets.FDA_AUTHORIZATION_USER }}
           FDA_AUTHORIZATION_KEY: ${{ secrets.FDA_AUTHORIZATION_KEY }}
 
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.3
       - run: uv python install
       - run: uv sync --frozen
 
