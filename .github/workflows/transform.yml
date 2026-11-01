@@ -54,7 +54,7 @@ jobs:
           NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
           NEON_DBNAME: ${{ secrets.NEON_DBNAME }}
 
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.3
       - run: uv python install
       - run: uv sync --frozen
 
